@@ -1,5 +1,5 @@
 import "dotenv/config";
-import express, { type Request, type Response } from "express";
+import express, { type Request, type Response, type NextFunction } from "express";
 import { registerRoutes } from "./routes.js";
 import { setupAuth } from "./auth.js";
 import { setupVite, serveStatic } from "./vite.js";
@@ -12,7 +12,7 @@ app.use(express.urlencoded({ extended: false }));
 setupAuth(app);
 const server = await registerRoutes(app);
 
-app.use((err: any, _req: Request, res: Response) => {
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   res.status(err.status || 500).json({ message: err.message || "Internal Server Error" });
 });
 
