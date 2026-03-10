@@ -216,7 +216,7 @@ export const expenseCategoriesRelations = relations(expenseCategories, ({ many }
   expenses: many(expenses),
 }));
 
-export const expensesRelations = relations(expenses, ({ one }) => ({
+export const expensesRelations = relations(expenses, ({ one, many }) => ({
   campus: one(campuses, { fields: [expenses.campusId], references: [campuses.id] }),
   category: one(expenseCategories, { fields: [expenses.categoryId], references: [expenseCategories.id] }),
   submittedBy: one(users, { fields: [expenses.submittedById], references: [users.id] }),
