@@ -1,6 +1,6 @@
 import { db } from "./db.js";
 import { finJoeConversations } from "../../shared/schema.js";
-import { eq, desc } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 
@@ -9,11 +9,11 @@ const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
  * The window is open if the last message (in either direction) was within 24 hours.
  * Used to decide: free-form (within 24h) vs template (outside 24h).
  */
-export async function isWithin24hWindow(contactPhone: string): Promise<boolean> {
+export async function isWithin24hWindow(contactPhone: string, tenantId: string): Promise<boolean> {
   const [conv] = await db
     .select()
     .from(finJoeConversations)
-    .where(eq(finJoeConversations.contactPhone, contactPhone))
+    .where(and(eq(finJoeConversations.contactPhone, contactPhone), eq(finJoeConversations.tenantId, tenantId)))
     .orderBy(desc(finJoeConversations.lastMessageAt))
     .limit(1);
   if (!conv) return false;
@@ -25,6 +25,6 @@ export async function isWithin24hWindow(contactPhone: string): Promise<boolean> 
  * Check if the contact's last activity was outside the 24h window (before this incoming message).
  * Used to send re-engagement template when user messages after long silence.
  */
-export async function wasOutside24hBeforeMessage(contactPhone: string): Promise<boolean> {
-  return !(await isWithin24hWindow(contactPhone));
+export async function wasOutside24hBeforeMessage(contactPhone: string, tenantId: string): Promise<boolean> {
+  return !(await isWithin24hWindow(contactPhone, tenantId));
 }

@@ -2,14 +2,16 @@ import express, { type Express } from "express";
 import passport from "passport";
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "./db.js";
-import { hashPassword } from "./auth.js";
-import { requireAdmin } from "./auth.js";
+import { hashPassword, requireAdmin, requireSuperAdmin, getTenantId } from "./auth.js";
 import { logger } from "./logger.js";
 import {
+  tenants,
+  tenantWabaProviders,
   campuses,
   users,
   finJoeContacts,
   finJoeRoleChangeRequests,
+  finjoeSettings,
 } from "../shared/schema.js";
 import { createFinJoeData } from "../lib/finjoe-data.js";
 
@@ -68,6 +70,8 @@ export async function registerRoutes(app: Express) {
       if (!email || !password) return res.status(400).json({ error: "email and password required" });
       const [existing] = await db.select().from(users).where(eq(users.role, "admin")).limit(1);
       if (existing) return res.status(400).json({ error: "Admin already exists" });
+      const [defaultTenant] = await db.select().from(tenants).where(eq(tenants.slug, "default")).limit(1);
+      const tenantId = defaultTenant?.id ?? null;
       const [created] = await db
         .insert(users)
         .values({
@@ -75,6 +79,7 @@ export async function registerRoutes(app: Express) {
           passwordHash: await hashPassword(password),
           name: name || "Admin",
           role: "admin",
+          tenantId,
           isActive: true,
         })
         .returning();
@@ -90,7 +95,14 @@ export async function registerRoutes(app: Express) {
 
   app.get("/api/campuses", async (req, res) => {
     try {
-      const rows = await db.select().from(campuses).where(eq(campuses.isActive, true)).orderBy(campuses.name);
+      const q = req.query?.tenantId;
+      const tenantId = getTenantId(req) ?? (typeof q === "string" ? q : null);
+      if (!tenantId) return res.status(400).json({ error: "tenantId required (login or pass ?tenantId=)" });
+      const rows = await db
+        .select()
+        .from(campuses)
+        .where(and(eq(campuses.isActive, true), eq(campuses.tenantId, tenantId)))
+        .orderBy(campuses.name);
       res.json(rows);
     } catch (e) {
       logger.error("Campuses error", { requestId: req.requestId, err: String(e) });
@@ -100,10 +112,14 @@ export async function registerRoutes(app: Express) {
 
   app.get("/api/admin/users", requireAdmin, async (req, res) => {
     try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      const conditions = [eq(users.isActive, true)];
+      if (user.role !== "super_admin" && tenantId) conditions.push(eq(users.tenantId, tenantId));
       const rows = await db
         .select({ id: users.id, name: users.name, email: users.email })
         .from(users)
-        .where(eq(users.isActive, true))
+        .where(and(...conditions))
         .orderBy(users.name);
       res.json(rows);
     } catch (e) {
@@ -114,7 +130,12 @@ export async function registerRoutes(app: Express) {
 
   app.get("/api/admin/finjoe/contacts", requireAdmin, async (req, res) => {
     try {
-      const rows = await db.select().from(finJoeContacts).orderBy(finJoeContacts.createdAt);
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const rows = tenantId
+        ? await db.select().from(finJoeContacts).where(eq(finJoeContacts.tenantId, tenantId)).orderBy(finJoeContacts.createdAt)
+        : await db.select().from(finJoeContacts).orderBy(finJoeContacts.createdAt);
       res.json(rows);
     } catch (e) {
       logger.error("FinJoe contacts error", { requestId: req.requestId, err: String(e) });
@@ -124,6 +145,11 @@ export async function registerRoutes(app: Express) {
 
   app.post("/api/admin/finjoe/contacts", requireAdmin, async (req, res) => {
     try {
+      const tenantId = getTenantId(req) ?? req.body.tenantId;
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(400).json({ error: "tenantId required" });
+      if (!tenantId) return res.status(400).json({ error: "tenantId required (pass in body for super_admin)" });
+
       const { phone, role, name, campusId, studentId } = req.body;
       if (!phone || !role) return res.status(400).json({ error: "phone and role required" });
       const digits = phone.replace(/\D/g, "");
@@ -133,8 +159,8 @@ export async function registerRoutes(app: Express) {
 
       let resolvedUserId = studentId || null;
       if ((role === "admin" || role === "finance") && !resolvedUserId) {
-        const finjoeEmail = `finjoe-${normalized}@finjoe.internal`;
-        const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, finjoeEmail)).limit(1);
+        const finjoeEmail = `finjoe-${tenantId}-${normalized}@finjoe.internal`;
+        const [existing] = await db.select({ id: users.id }).from(users).where(and(eq(users.email, finjoeEmail), eq(users.tenantId, tenantId))).limit(1);
         if (existing) resolvedUserId = existing.id;
         else {
           const [newUser] = await db
@@ -144,6 +170,7 @@ export async function registerRoutes(app: Express) {
               passwordHash: await hashPassword(crypto.randomUUID()),
               name: name || "FinJoe Admin",
               role,
+              tenantId,
               campusId: campusId || null,
               isActive: true,
             })
@@ -155,6 +182,7 @@ export async function registerRoutes(app: Express) {
       const [created] = await db
         .insert(finJoeContacts)
         .values({
+          tenantId,
           phone: normalized.length > 10 ? normalized : `91${normalized}`,
           role,
           name: name || null,
@@ -165,7 +193,7 @@ export async function registerRoutes(app: Express) {
         .returning();
       res.status(201).json(created);
     } catch (e: any) {
-      if (e?.code === "23505") return res.status(400).json({ error: "Contact with this phone already exists" });
+      if (e?.code === "23505") return res.status(400).json({ error: "Contact with this phone already exists in this tenant" });
       logger.error("FinJoe contact create error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to create contact" });
     }
@@ -173,6 +201,10 @@ export async function registerRoutes(app: Express) {
 
   app.patch("/api/admin/finjoe/contacts/:id", requireAdmin, async (req, res) => {
     try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+
       const { role, name, campusId, studentId, isActive } = req.body;
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (role !== undefined) updates.role = role;
@@ -181,12 +213,13 @@ export async function registerRoutes(app: Express) {
       if (studentId !== undefined) updates.studentId = studentId;
       if (isActive !== undefined) updates.isActive = isActive;
 
-      const [existing] = await db.select().from(finJoeContacts).where(eq(finJoeContacts.id, req.params.id)).limit(1);
+      const whereClause = tenantId ? and(eq(finJoeContacts.id, req.params.id), eq(finJoeContacts.tenantId, tenantId)) : eq(finJoeContacts.id, req.params.id);
+      const [existing] = await db.select().from(finJoeContacts).where(whereClause).limit(1);
       const targetRole = role ?? existing?.role;
       const needsUser = (targetRole === "admin" || targetRole === "finance") && studentId === undefined && existing && !existing.studentId;
       if (needsUser && existing) {
-        const finjoeEmail = `finjoe-${existing.phone}@finjoe.internal`;
-        const [ex] = await db.select({ id: users.id }).from(users).where(eq(users.email, finjoeEmail)).limit(1);
+        const finjoeEmail = `finjoe-${existing.tenantId}-${existing.phone}@finjoe.internal`;
+        const [ex] = await db.select({ id: users.id }).from(users).where(and(eq(users.email, finjoeEmail), eq(users.tenantId, existing.tenantId))).limit(1);
         if (ex) updates.studentId = ex.id;
         else {
           const [nu] = await db
@@ -196,6 +229,7 @@ export async function registerRoutes(app: Express) {
               passwordHash: await hashPassword(crypto.randomUUID()),
               name: (name ?? existing.name) || "FinJoe Admin",
               role: targetRole,
+              tenantId: existing.tenantId,
               campusId: campusId ?? existing.campusId,
               isActive: true,
             })
@@ -204,7 +238,7 @@ export async function registerRoutes(app: Express) {
         }
       }
 
-      const [updated] = await db.update(finJoeContacts).set(updates as any).where(eq(finJoeContacts.id, req.params.id)).returning();
+      const [updated] = await db.update(finJoeContacts).set(updates as any).where(whereClause).returning();
       if (!updated) return res.status(404).json({ error: "Contact not found" });
       res.json(updated);
     } catch (e) {
@@ -215,7 +249,11 @@ export async function registerRoutes(app: Express) {
 
   app.delete("/api/admin/finjoe/contacts/:id", requireAdmin, async (req, res) => {
     try {
-      const [deleted] = await db.delete(finJoeContacts).where(eq(finJoeContacts.id, req.params.id)).returning();
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const whereClause = tenantId ? and(eq(finJoeContacts.id, req.params.id), eq(finJoeContacts.tenantId, tenantId)) : eq(finJoeContacts.id, req.params.id);
+      const [deleted] = await db.delete(finJoeContacts).where(whereClause).returning();
       if (!deleted) return res.status(404).json({ error: "Contact not found" });
       res.status(204).send();
     } catch (e) {
@@ -226,8 +264,13 @@ export async function registerRoutes(app: Express) {
 
   app.get("/api/admin/finjoe/role-requests", requireAdmin, async (req, res) => {
     try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+
       const { status } = req.query;
       const conditions = status && typeof status === "string" && status !== "all" ? [eq(finJoeRoleChangeRequests.status, status)] : [];
+      if (tenantId) conditions.push(eq(finJoeRoleChangeRequests.tenantId, tenantId));
       let query = db
         .select({
           id: finJoeRoleChangeRequests.id,
@@ -255,9 +298,11 @@ export async function registerRoutes(app: Express) {
 
   app.post("/api/admin/finjoe/role-requests/:id/approve", requireAdmin, async (req, res) => {
     try {
+      const tenantId = getTenantId(req);
       const user = req.user as Express.User;
       if (!user?.id) return res.status(401).json({ error: "Unauthorized" });
-      const finJoeData = createFinJoeData(db);
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const finJoeData = createFinJoeData(db, tenantId || "default");
       const result = await finJoeData.approveRoleRequest(req.params.id, user.id, "admin");
       if (!result) return res.status(404).json({ error: "Role request not found or not pending" });
       res.json({ id: result.id, approved: true });
@@ -269,16 +314,198 @@ export async function registerRoutes(app: Express) {
 
   app.post("/api/admin/finjoe/role-requests/:id/reject", requireAdmin, async (req, res) => {
     try {
+      const tenantId = getTenantId(req);
       const user = req.user as Express.User;
       if (!user?.id) return res.status(401).json({ error: "Unauthorized" });
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const { reason } = req.body;
-      const finJoeData = createFinJoeData(db);
+      const finJoeData = createFinJoeData(db, tenantId || "default");
       const result = await finJoeData.rejectRoleRequest(req.params.id, user.id, reason || "Rejected via admin", "admin");
       if (!result) return res.status(404).json({ error: "Role request not found or not pending" });
       res.json({ id: result.id, rejected: true, reason: reason || "Rejected via admin" });
     } catch (e) {
       logger.error("FinJoe reject error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to reject" });
+    }
+  });
+
+  // FinJoe settings (template SIDs)
+  app.get("/api/admin/finjoe/settings", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const [row] = await db.select().from(finjoeSettings).where(eq(finjoeSettings.tenantId, tid)).limit(1);
+      if (!row) return res.json(null);
+      res.json({
+        expenseApprovalTemplateSid: row.expenseApprovalTemplateSid,
+        expenseApprovedTemplateSid: row.expenseApprovedTemplateSid,
+        expenseRejectedTemplateSid: row.expenseRejectedTemplateSid,
+        reEngagementTemplateSid: row.reEngagementTemplateSid,
+      });
+    } catch (e) {
+      logger.error("FinJoe settings get error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch settings" });
+    }
+  });
+
+  app.patch("/api/admin/finjoe/settings", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { expenseApprovalTemplateSid, expenseApprovedTemplateSid, expenseRejectedTemplateSid, reEngagementTemplateSid } = req.body;
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (expenseApprovalTemplateSid !== undefined) updates.expenseApprovalTemplateSid = expenseApprovalTemplateSid || null;
+      if (expenseApprovedTemplateSid !== undefined) updates.expenseApprovedTemplateSid = expenseApprovedTemplateSid || null;
+      if (expenseRejectedTemplateSid !== undefined) updates.expenseRejectedTemplateSid = expenseRejectedTemplateSid || null;
+      if (reEngagementTemplateSid !== undefined) updates.reEngagementTemplateSid = reEngagementTemplateSid || null;
+      const [existing] = await db.select().from(finjoeSettings).where(eq(finjoeSettings.tenantId, tid)).limit(1);
+      let result;
+      if (existing) {
+        [result] = await db.update(finjoeSettings).set(updates as any).where(eq(finjoeSettings.tenantId, tid)).returning();
+      } else {
+        [result] = await db.insert(finjoeSettings).values({ tenantId: tid, ...updates } as any).returning();
+      }
+      res.json(result);
+    } catch (e) {
+      logger.error("FinJoe settings update error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to update settings" });
+    }
+  });
+
+  // WhatsApp provider credentials (Twilio)
+  app.get("/api/admin/finjoe/whatsapp-provider", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const [row] = await db
+        .select()
+        .from(tenantWabaProviders)
+        .where(and(eq(tenantWabaProviders.tenantId, tid), eq(tenantWabaProviders.provider, "twilio"), eq(tenantWabaProviders.isActive, true)))
+        .limit(1);
+      if (!row) return res.json(null);
+      const config = row.config as { accountSid?: string; authToken?: string };
+      res.json({
+        id: row.id,
+        whatsappFrom: row.whatsappFrom,
+        accountSid: config?.accountSid ?? "",
+        authTokenMasked: config?.authToken ? "••••••••" : "",
+        hasAuthToken: !!config?.authToken,
+      });
+    } catch (e) {
+      logger.error("WhatsApp provider get error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch provider" });
+    }
+  });
+
+  app.put("/api/admin/finjoe/whatsapp-provider", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { accountSid, authToken, whatsappFrom } = req.body;
+      if (!accountSid || !whatsappFrom) return res.status(400).json({ error: "accountSid and whatsappFrom required" });
+      const fromNorm = whatsappFrom.startsWith("whatsapp:") ? whatsappFrom : `whatsapp:${whatsappFrom}`;
+      const [existing] = await db
+        .select()
+        .from(tenantWabaProviders)
+        .where(and(eq(tenantWabaProviders.tenantId, tid), eq(tenantWabaProviders.provider, "twilio")))
+        .limit(1);
+      const existingConfig = existing?.config as { accountSid?: string; authToken?: string } | undefined;
+      const config = {
+        accountSid,
+        authToken: (typeof authToken === "string" && authToken.trim()) ? authToken : (existingConfig?.authToken ?? ""),
+      };
+      let result;
+      if (existing) {
+        [result] = await db
+          .update(tenantWabaProviders)
+          .set({ config, whatsappFrom: fromNorm, updatedAt: new Date() })
+          .where(eq(tenantWabaProviders.id, existing.id))
+          .returning();
+      } else {
+        if (!config.authToken) return res.status(400).json({ error: "authToken required for new provider" });
+        [result] = await db
+          .insert(tenantWabaProviders)
+          .values({ tenantId: tid, provider: "twilio", config, whatsappFrom: fromNorm, isActive: true })
+          .returning();
+      }
+      res.json({ id: result!.id, whatsappFrom: result!.whatsappFrom });
+    } catch (e: any) {
+      if (e?.code === "23505") return res.status(400).json({ error: "Provider already exists for this tenant" });
+      logger.error("WhatsApp provider put error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to save provider" });
+    }
+  });
+
+  // Super Admin: Tenants
+  app.get("/api/admin/tenants", requireSuperAdmin, async (req, res) => {
+    try {
+      const rows = await db.select().from(tenants).orderBy(tenants.name);
+      res.json(rows);
+    } catch (e) {
+      logger.error("Tenants list error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch tenants" });
+    }
+  });
+
+  app.post("/api/admin/tenants", requireSuperAdmin, async (req, res) => {
+    try {
+      const { name, slug } = req.body;
+      if (!name || !slug) return res.status(400).json({ error: "name and slug required" });
+      const slugNorm = slug.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+      if (!slugNorm) return res.status(400).json({ error: "Invalid slug" });
+      const [created] = await db.insert(tenants).values({ name, slug: slugNorm, isActive: true }).returning();
+      if (!created) return res.status(500).json({ error: "Failed to create tenant" });
+      res.status(201).json(created);
+    } catch (e: any) {
+      if (e?.code === "23505") return res.status(400).json({ error: "Tenant slug already exists" });
+      logger.error("Tenant create error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to create tenant" });
+    }
+  });
+
+  app.post("/api/admin/tenants/:id/create-admin", requireSuperAdmin, async (req, res) => {
+    try {
+      const { email, password, name } = req.body;
+      if (!email || !password) return res.status(400).json({ error: "email and password required" });
+      const tenantId = req.params.id;
+      const [tenant] = await db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
+      if (!tenant) return res.status(404).json({ error: "Tenant not found" });
+      const [existing] = await db
+        .select()
+        .from(users)
+        .where(and(eq(users.tenantId, tenantId), eq(users.role, "admin")))
+        .limit(1);
+      if (existing) return res.status(400).json({ error: "Tenant already has an admin" });
+      const [created] = await db
+        .insert(users)
+        .values({
+          email: email.toLowerCase(),
+          passwordHash: await hashPassword(password),
+          name: name || "Admin",
+          role: "admin",
+          tenantId,
+          isActive: true,
+        })
+        .returning();
+      if (!created) return res.status(500).json({ error: "Failed to create admin" });
+      const { passwordHash, ...u } = created;
+      res.status(201).json(u);
+    } catch (e: any) {
+      if (e?.code === "23505") return res.status(400).json({ error: "Email already in use" });
+      logger.error("Create tenant admin error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to create admin" });
     }
   });
 

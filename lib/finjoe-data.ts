@@ -2,7 +2,7 @@
  * FinJoe data layer - direct DB access for FinJoe service.
  */
 
-import { eq, and, desc, sql, or } from "drizzle-orm";
+import { eq, and, desc, sql, or, isNull } from "drizzle-orm";
 import {
   campuses,
   expenseCategories,
@@ -40,6 +40,7 @@ const AUDIT_REQUIREMENTS: AuditRequirements = {
 };
 
 export type CreateExpenseInput = {
+  tenantId: string;
   campusId: string | null;
   categoryId: string;
   amount: number;
@@ -54,6 +55,7 @@ export type CreateExpenseInput = {
 };
 
 export type CreateRoleChangeInput = {
+  tenantId: string;
   contactPhone: string;
   requestedRole: string;
   name: string;
@@ -61,13 +63,13 @@ export type CreateRoleChangeInput = {
   studentId?: string | null;
 };
 
-export function createFinJoeData(db: FinJoeDb) {
+export function createFinJoeData(db: FinJoeDb, tenantId: string) {
   return {
     async getCampuses(): Promise<CampusInfo[]> {
       const rows = await db
         .select({ id: campuses.id, name: campuses.name, slug: campuses.slug })
         .from(campuses)
-        .where(eq(campuses.isActive, true))
+        .where(and(eq(campuses.isActive, true), eq(campuses.tenantId, tenantId)))
         .orderBy(campuses.name);
       return rows;
     },
@@ -76,7 +78,7 @@ export function createFinJoeData(db: FinJoeDb) {
       const rows = await db
         .select({ id: expenseCategories.id, name: expenseCategories.name, slug: expenseCategories.slug })
         .from(expenseCategories)
-        .where(eq(expenseCategories.isActive, true))
+        .where(and(eq(expenseCategories.isActive, true), or(eq(expenseCategories.tenantId, tenantId), isNull(expenseCategories.tenantId))))
         .orderBy(expenseCategories.displayOrder, expenseCategories.name);
       return rows;
     },
@@ -86,7 +88,7 @@ export function createFinJoeData(db: FinJoeDb) {
     },
 
     async getFinJoeSettings(): Promise<FinJoeSettings | null> {
-      const [settings] = await db.select().from(finjoeSettings).limit(1);
+      const [settings] = await db.select().from(finjoeSettings).where(eq(finjoeSettings.tenantId, tenantId)).limit(1);
       if (!settings) return null;
       return {
         finjoeExpenseApprovalTemplateSid: settings.expenseApprovalTemplateSid ?? null,
@@ -101,6 +103,7 @@ export function createFinJoeData(db: FinJoeDb) {
       const [created] = await db
         .insert(expenses)
         .values({
+          tenantId: data.tenantId,
           campusId: campusIdForDb,
           categoryId: data.categoryId,
           amount: data.amount,
@@ -123,7 +126,7 @@ export function createFinJoeData(db: FinJoeDb) {
       const [row] = await db
         .select({ id: expenses.id, status: expenses.status })
         .from(expenses)
-        .where(eq(expenses.id, id))
+        .where(and(eq(expenses.id, id), eq(expenses.tenantId, tenantId)))
         .limit(1);
       return row ?? null;
     },
@@ -183,7 +186,7 @@ export function createFinJoeData(db: FinJoeDb) {
         .leftJoin(campuses, eq(expenses.campusId, campuses.id))
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
         .leftJoin(users, eq(expenses.submittedById, users.id))
-        .where(eq(expenses.id, id))
+        .where(and(eq(expenses.id, id), eq(expenses.tenantId, tenantId)))
         .limit(1);
       if (!row?.expenses) return null;
       return {
@@ -202,7 +205,7 @@ export function createFinJoeData(db: FinJoeDb) {
       endDate?: string;
       limit?: number;
     }): Promise<Array<Record<string, unknown>>> {
-      const conditions = [];
+      const conditions = [eq(expenses.tenantId, tenantId)];
       if (filters?.campusId !== undefined && filters.campusId !== null && filters.campusId !== "") {
         if (filters.campusId === "null" || filters.campusId === "__corporate__") {
           conditions.push(sql`${expenses.campusId} IS NULL`);
@@ -248,7 +251,7 @@ export function createFinJoeData(db: FinJoeDb) {
     },
 
     async listPendingApprovals(campusId?: string | null): Promise<Array<Record<string, unknown>>> {
-      const conditions = [eq(expenses.status, "pending_approval")];
+      const conditions = [eq(expenses.status, "pending_approval"), eq(expenses.tenantId, tenantId)];
       if (campusId && campusId !== "null" && campusId !== "__corporate__") {
         conditions.push(eq(expenses.campusId, campusId));
       } else if (campusId === "null" || campusId === "__corporate__") {
@@ -274,7 +277,8 @@ export function createFinJoeData(db: FinJoeDb) {
     },
 
     async listRoleChangeRequests(status?: string): Promise<Array<Record<string, unknown>>> {
-      const conditions = status ? [eq(finJoeRoleChangeRequests.status, status)] : [];
+      const conditions = [eq(finJoeRoleChangeRequests.tenantId, tenantId)];
+      if (status) conditions.push(eq(finJoeRoleChangeRequests.status, status));
       let query = db
         .select({
           id: finJoeRoleChangeRequests.id,
@@ -312,10 +316,13 @@ export function createFinJoeData(db: FinJoeDb) {
         .leftJoin(campuses, eq(expenses.campusId, campuses.id))
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
         .where(
-          or(
-            sql`${expenses.vendorName}::text ILIKE ${pattern}`,
-            sql`${expenses.invoiceNumber}::text ILIKE ${pattern}`,
-            sql`${expenses.description}::text ILIKE ${pattern}`
+          and(
+            eq(expenses.tenantId, tenantId),
+            or(
+              sql`${expenses.vendorName}::text ILIKE ${pattern}`,
+              sql`${expenses.invoiceNumber}::text ILIKE ${pattern}`,
+              sql`${expenses.description}::text ILIKE ${pattern}`
+            )
           )
         )
         .orderBy(desc(expenses.expenseDate))
@@ -329,7 +336,7 @@ export function createFinJoeData(db: FinJoeDb) {
       campusId?: string | null;
       groupBy?: "status" | "campus" | "category";
     }): Promise<Record<string, unknown>> {
-      const conditions = [];
+      const conditions = [eq(expenses.tenantId, tenantId)];
       if (filters?.startDate) conditions.push(sql`${expenses.expenseDate} >= ${filters.startDate}::date`);
       if (filters?.endDate) conditions.push(sql`${expenses.expenseDate} <= ${filters.endDate}::date`);
       if (filters?.campusId !== undefined && filters.campusId !== null && filters.campusId !== "" && filters.campusId !== "__corporate__") {
@@ -362,11 +369,11 @@ export function createFinJoeData(db: FinJoeDb) {
       const [approvals] = await db
         .select({ count: sql<number>`count(*)::int` })
         .from(expenses)
-        .where(eq(expenses.status, "pending_approval"));
+        .where(and(eq(expenses.status, "pending_approval"), eq(expenses.tenantId, tenantId)));
       const [roleReqs] = await db
         .select({ count: sql<number>`count(*)::int` })
         .from(finJoeRoleChangeRequests)
-        .where(eq(finJoeRoleChangeRequests.status, "pending"));
+        .where(and(eq(finJoeRoleChangeRequests.status, "pending"), eq(finJoeRoleChangeRequests.tenantId, tenantId)));
       return {
         pendingApprovals: approvals?.count ?? 0,
         pendingRoleRequests: roleReqs?.count ?? 0,
@@ -374,6 +381,8 @@ export function createFinJoeData(db: FinJoeDb) {
     },
 
     async getPettyCashSummary(campusId?: string | null): Promise<Array<Record<string, unknown>>> {
+      const conditions = [eq(pettyCashFunds.tenantId, tenantId)];
+      if (campusId && campusId !== "null" && campusId !== "__corporate__") conditions.push(eq(pettyCashFunds.campusId, campusId));
       let query = db
         .select({
           id: pettyCashFunds.id,
@@ -385,10 +394,7 @@ export function createFinJoeData(db: FinJoeDb) {
         .from(pettyCashFunds)
         .leftJoin(campuses, eq(pettyCashFunds.campusId, campuses.id))
         .leftJoin(users, eq(pettyCashFunds.custodianId, users.id))
-        .$dynamic();
-      if (campusId && campusId !== "null" && campusId !== "__corporate__") {
-        query = query.where(eq(pettyCashFunds.campusId, campusId));
-      }
+        .where(and(...conditions));
       return query;
     },
 
@@ -489,6 +495,7 @@ export function createFinJoeData(db: FinJoeDb) {
         const [created] = await db
           .insert(finJoeRoleChangeRequests)
           .values({
+            tenantId: data.tenantId,
             contactPhone: data.contactPhone,
             requestedRole: data.requestedRole,
             name: data.name,
@@ -534,7 +541,7 @@ export function createFinJoeData(db: FinJoeDb) {
           studentId: reqRow.studentId,
           updatedAt: new Date(),
         })
-        .where(eq(finJoeContacts.phone, reqRow.contactPhone));
+        .where(and(eq(finJoeContacts.tenantId, reqRow.tenantId), eq(finJoeContacts.phone, reqRow.contactPhone)));
 
       return { id };
     },

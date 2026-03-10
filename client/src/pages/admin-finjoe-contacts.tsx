@@ -34,7 +34,7 @@ import type { FinJoeContact, Campus } from "@shared/schema";
 
 const ROLES = ["campus_coordinator", "head_office", "finance", "admin", "vendor", "faculty", "student", "guest"] as const;
 
-export default function AdminFinJoeContacts() {
+export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | null }) {
   const { toast } = useToast();
   const [dialog, setDialog] = useState<{ mode: "add" | "edit"; contact?: FinJoeContact } | null>(null);
   const [form, setForm] = useState({
@@ -47,23 +47,30 @@ export default function AdminFinJoeContacts() {
   });
   const [deleteDialog, setDeleteDialog] = useState<FinJoeContact | null>(null);
 
+  const qs = tenantId ? `?tenantId=${tenantId}` : "";
   const { data: contacts = [], isLoading } = useQuery<FinJoeContact[]>({
-    queryKey: ["/api/admin/finjoe/contacts"],
+    queryKey: ["/api/admin/finjoe/contacts", tenantId],
     queryFn: async () => {
-      const res = await fetch("/api/admin/finjoe/contacts");
+      const res = await fetch(`/api/admin/finjoe/contacts${qs}`);
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+
+  const { data: campuses = [] } = useQuery<Campus[]>({
+    queryKey: ["/api/campuses", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/campuses${qs}`);
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
   });
 
-  const { data: campuses = [] } = useQuery<Campus[]>({
-    queryKey: ["/api/campuses"],
-  });
-
   const { data: users = [] } = useQuery<Array<{ id: string; name: string; email: string }>>({
-    queryKey: ["/api/admin/users"],
+    queryKey: ["/api/admin/users", tenantId],
     queryFn: async () => {
-      const res = await fetch("/api/admin/users");
+      const res = await fetch(`/api/admin/users${qs}`);
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
@@ -72,6 +79,7 @@ export default function AdminFinJoeContacts() {
   const createMutation = useMutation({
     mutationFn: async (data: typeof form) => {
       const res = await apiRequest("POST", "/api/admin/finjoe/contacts", {
+        ...(tenantId && { tenantId }),
         phone: data.phone,
         role: data.role,
         name: data.name || undefined,
@@ -167,6 +175,16 @@ export default function AdminFinJoeContacts() {
       });
     }
   };
+
+  if (!tenantId) {
+    return (
+      <Card>
+        <CardContent className="py-8 text-center text-muted-foreground">
+          Select a tenant to manage contacts.
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <>

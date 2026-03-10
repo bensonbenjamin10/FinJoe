@@ -78,6 +78,7 @@ declare global {
       email: string;
       name: string;
       role: string;
+      tenantId?: string | null;
       campusId?: string | null;
       isActive: boolean;
     }
@@ -86,6 +87,25 @@ declare global {
 
 export function requireAdmin(req: any, res: any, next: any) {
   if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
-  if ((req.user as Express.User).role !== "admin") return res.status(403).json({ message: "Forbidden" });
+  const user = req.user as Express.User;
+  if (user.role !== "admin" && user.role !== "super_admin") return res.status(403).json({ message: "Forbidden" });
   next();
+}
+
+export function requireSuperAdmin(req: any, res: any, next: any) {
+  if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
+  const user = req.user as Express.User;
+  if (user.role !== "super_admin") return res.status(403).json({ message: "Super admin only" });
+  next();
+}
+
+/** Returns tenantId for the request: from session, or from query when super_admin impersonates */
+export function getTenantId(req: any): string | null {
+  const user = req.user as Express.User;
+  if (!user) return null;
+  if (user.role === "super_admin") {
+    const q = req.query?.tenantId;
+    return typeof q === "string" ? q : null;
+  }
+  return user.tenantId ?? null;
 }

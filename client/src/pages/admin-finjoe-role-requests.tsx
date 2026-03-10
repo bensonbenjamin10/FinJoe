@@ -42,15 +42,17 @@ type RoleRequest = {
   campusName: string | null;
 };
 
-export default function AdminFinJoeRoleRequests() {
+export default function AdminFinJoeRoleRequests({ tenantId }: { tenantId?: string | null }) {
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState("pending");
   const [rejectDialog, setRejectDialog] = useState<{ request: RoleRequest; reason: string } | null>(null);
 
+  const qs = new URLSearchParams({ status: statusFilter });
+  if (tenantId) qs.set("tenantId", tenantId);
   const { data: requests = [], isLoading } = useQuery<RoleRequest[]>({
-    queryKey: ["/api/admin/finjoe/role-requests", statusFilter],
+    queryKey: ["/api/admin/finjoe/role-requests", statusFilter, tenantId],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/finjoe/role-requests?status=${statusFilter}`);
+      const res = await fetch(`/api/admin/finjoe/role-requests?${qs}`);
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
@@ -89,6 +91,16 @@ export default function AdminFinJoeRoleRequests() {
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
+
+  if (!tenantId) {
+    return (
+      <Card>
+        <CardContent className="py-8 text-center text-muted-foreground">
+          Select a tenant to view role requests.
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card>

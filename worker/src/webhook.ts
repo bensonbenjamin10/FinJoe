@@ -1,7 +1,4 @@
 import { Request, Response } from "express";
-import twilio from "twilio";
-
-const { validateIncomingRequest } = twilio;
 import { db } from "./db.js";
 import { logger } from "./logger.js";
 import {
@@ -10,13 +7,14 @@ import {
   finJoeMessages,
   finJoeMedia,
 } from "../../shared/schema.js";
-import { eq, sql } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { sendFinJoeWhatsApp, sendTypingIndicator, normalizePhone } from "./twilio.js";
-import { downloadTwilioMedia } from "./media.js";
 import { processWithAgent } from "./agent/agent.js";
 import { getOrCreateConversation } from "./conversation.js";
 import { wasOutside24hBeforeMessage } from "./window.js";
 import { sendReEngagementIfNeeded } from "./send.js";
+import { resolveTenantAndProvider } from "./providers/resolver.js";
+import { validateTwilioWebhook } from "./providers/twilio-provider.js";
 
 /** Per-conversation lock to serialize processing and preserve message order */
 const conversationLocks = new Map<string, Promise<void>>();
@@ -36,27 +34,36 @@ async function withConversationLock(conversationId: string, fn: () => Promise<vo
   }
 }
 
-/** Get or create contact by phone (creates guest if unknown) */
-async function getOrCreateContact(phone: string) {
+/** Get or create contact by phone within tenant (creates guest if unknown) */
+async function getOrCreateContact(phone: string, tenantId: string) {
   const normalized = normalizePhone(phone);
-  let contact = (await db.select().from(finJoeContacts).where(eq(finJoeContacts.phone, normalized)).limit(1))[0];
-  if (!contact && normalized.length >= 10) {
-    const last10 = normalized.slice(-10);
-    const fallback = (await db
+  let contact = (
+    await db
       .select()
       .from(finJoeContacts)
-      .where(sql`${finJoeContacts.phone} LIKE ${"%" + last10}`)
-      .limit(1))[0];
+      .where(and(eq(finJoeContacts.phone, normalized), eq(finJoeContacts.tenantId, tenantId)))
+      .limit(1)
+  )[0];
+  if (!contact && normalized.length >= 10) {
+    const last10 = normalized.slice(-10);
+    const fallback = (
+      await db
+        .select()
+        .from(finJoeContacts)
+        .where(and(eq(finJoeContacts.tenantId, tenantId), sql`${finJoeContacts.phone} LIKE ${"%" + last10}`))
+        .limit(1)
+    )[0];
     if (fallback) {
       contact = fallback;
       logger.info("Contact matched by fallback (last 10 digits)", { from: phone, normalized, matchedContact: contact.phone });
     }
   }
   if (!contact) {
-    logger.info("Creating guest contact (no match)", { from: phone, normalized });
+    logger.info("Creating guest contact (no match)", { from: phone, normalized, tenantId });
     const [inserted] = await db
       .insert(finJoeContacts)
       .values({
+        tenantId,
         phone: normalized,
         role: "guest",
         isActive: true,
@@ -69,31 +76,36 @@ async function getOrCreateContact(phone: string) {
 
 /** Process incoming webhook - store message, media, reply */
 export async function handleWebhook(req: Request, res: Response) {
-  // Log incoming request (before validation) for debugging
+  const params = (req.body || {}) as Record<string, string>;
+  const to = params.To || "";
+
   logger.info("Webhook request received", {
     hasBody: !!req.body,
-    from: req.body?.From,
-    messageSid: req.body?.MessageSid,
+    from: params.From,
+    messageSid: params.MessageSid,
   });
 
-  // Validate Twilio signature - use explicit URL when behind proxy (Railway) so protocol/host match
+  // Resolve tenant and credentials from To number (needed for validation)
+  const { tenantId, credentials } = await resolveTenantAndProvider(to);
+
   const webhookUrl =
     process.env.FINJOE_WEBHOOK_URL || "https://finjoe.medpg.online/webhook/finjoe";
-  const isValid =
-    process.env.TWILIO_AUTH_TOKEN &&
-    validateIncomingRequest(req, process.env.TWILIO_AUTH_TOKEN, { url: webhookUrl });
+
+  const isValid = credentials
+    ? validateTwilioWebhook(req, credentials.config.authToken, webhookUrl)
+    : false;
 
   if (!isValid) {
     logger.warn("Webhook signature validation failed", {
-      from: req.body?.From,
-      hasAuthToken: !!process.env.TWILIO_AUTH_TOKEN,
+      from: params.From,
+      tenantId,
+      hasCredentials: !!credentials,
       webhookUrl,
     });
     res.status(403).send("Forbidden");
     return;
   }
 
-  const params = req.body as Record<string, string>;
   const from = params.From || "";
   const body = params.Body || "";
   const messageSid = params.MessageSid || "";
@@ -121,11 +133,11 @@ export async function handleWebhook(req: Request, res: Response) {
   }
 
   try {
-    const contact = await getOrCreateContact(from);
-    if (await wasOutside24hBeforeMessage(contact.phone)) {
-      await sendReEngagementIfNeeded(contact.phone, traceId);
+    const contact = await getOrCreateContact(from, tenantId);
+    if (await wasOutside24hBeforeMessage(contact.phone, tenantId)) {
+      await sendReEngagementIfNeeded(contact.phone, tenantId, traceId);
     }
-    const conversation = await getOrCreateConversation(contact.phone);
+    const conversation = await getOrCreateConversation(contact.phone, tenantId);
     logger.info("Contact and conversation resolved", { traceId, contactId: contact.id, conversationId: conversation.id, role: contact.role });
 
     // Insert incoming message
@@ -141,19 +153,15 @@ export async function handleWebhook(req: Request, res: Response) {
 
     if (!msg) throw new Error("Failed to insert message");
 
-    // Download and store media
-    if (numMedia > 0 && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+    // Download and store media (using tenant credentials)
+    if (numMedia > 0 && credentials) {
+      const { downloadMedia } = await import("./providers/twilio-provider.js");
       for (let i = 0; i < numMedia; i++) {
         const mediaUrl = params[`MediaUrl${i}`];
         const contentType = params[`MediaContentType${i}`] || "application/octet-stream";
         if (mediaUrl) {
           try {
-            const { buffer, contentType: ct } = await downloadTwilioMedia(
-              mediaUrl,
-              contentType,
-              process.env.TWILIO_ACCOUNT_SID,
-              process.env.TWILIO_AUTH_TOKEN
-            );
+            const { buffer, contentType: ct } = await downloadMedia(credentials, mediaUrl, contentType);
             await db.insert(finJoeMedia).values({
               messageId: msg.id,
               contentType: ct,
@@ -168,7 +176,7 @@ export async function handleWebhook(req: Request, res: Response) {
     }
 
     // Phase 2: Use AI when configured (serialized per conversation to preserve message order)
-    sendTypingIndicator(messageSid, traceId);
+    sendTypingIndicator(messageSid, traceId, { credentials });
 
     await withConversationLock(conversation.id, async () => {
       let reply: string;
@@ -182,6 +190,7 @@ export async function handleWebhook(req: Request, res: Response) {
             body || "",
             msg.id,
             traceId,
+            tenantId,
             contact.name,
             contact.campusId ?? undefined
           );
@@ -192,7 +201,7 @@ export async function handleWebhook(req: Request, res: Response) {
       } else {
         reply = "Got it, processing... FinJoe will get back to you shortly.";
       }
-      const sendResult = await sendFinJoeWhatsApp(contact.phone, reply, traceId);
+      const sendResult = await sendFinJoeWhatsApp(contact.phone, reply, traceId, tenantId);
       if (!sendResult) {
         logger.error("WhatsApp send returned null - Twilio may not be configured", { traceId });
       }

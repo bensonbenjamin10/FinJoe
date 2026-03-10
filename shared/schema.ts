@@ -16,8 +16,8 @@ import {
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
-// Campuses - minimal for FinJoe
-export const campuses = pgTable("campuses", {
+// Tenants (organizations)
+export const tenants = pgTable("tenants", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
@@ -26,10 +26,38 @@ export const campuses = pgTable("campuses", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-// Users - FinJoe's equivalent of students (admin, finance, etc.)
+// Tenant WABA provider credentials (Twilio, 360dialog, MessageBird, etc.)
+export const tenantWabaProviders = pgTable("tenant_waba_providers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  provider: text("provider").notNull(),
+  config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
+  whatsappFrom: text("whatsapp_from").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Campuses - minimal for FinJoe (tenant_id, slug unique via migration)
+export const campuses = pgTable("campuses", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
+  name: text("name").notNull(),
+  slug: text("slug").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Users - FinJoe's equivalent of students (admin, finance, etc.). tenant_id null = super_admin
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  email: text("email").notNull().unique(),
+  tenantId: varchar("tenant_id").references(() => tenants.id),
+  email: text("email").notNull(),
   passwordHash: text("password_hash").notNull(),
   name: text("name").notNull(),
   role: text("role").notNull().default("admin"),
@@ -39,11 +67,12 @@ export const users = pgTable("users", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-// Expense categories
+// Expense categories (tenant_id null = global template)
 export const expenseCategories = pgTable("expense_categories", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").references(() => tenants.id),
   name: text("name").notNull(),
-  slug: text("slug").notNull().unique(),
+  slug: text("slug").notNull(),
   parentId: varchar("parent_id"),
   displayOrder: integer("display_order").notNull().default(0),
   cashflowLabel: text("cashflow_label").notNull(),
@@ -55,6 +84,9 @@ export const expenseCategories = pgTable("expense_categories", {
 // Petty cash funds
 export const pettyCashFunds = pgTable("petty_cash_funds", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
   campusId: varchar("campus_id").references(() => campuses.id).notNull(),
   custodianId: varchar("custodian_id").references(() => users.id).notNull(),
   imprestAmount: integer("imprest_amount").notNull(),
@@ -66,6 +98,9 @@ export const pettyCashFunds = pgTable("petty_cash_funds", {
 // Expenses
 export const expenses = pgTable("expenses", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
   campusId: varchar("campus_id").references(() => campuses.id),
   categoryId: varchar("category_id").references(() => expenseCategories.id).notNull(),
   amount: integer("amount").notNull(),
@@ -107,10 +142,13 @@ const bytea = customType<{ data: Buffer }>({
   },
 });
 
-// FinJoe contacts (studentId references users - kept for API compatibility)
+// FinJoe contacts (tenant_id, phone unique via migration)
 export const finJoeContacts = pgTable("fin_joe_contacts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  phone: varchar("phone").notNull().unique(),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
+  phone: varchar("phone").notNull(),
   role: text("role").notNull(),
   studentId: varchar("student_id").references(() => users.id),
   name: text("name"),
@@ -121,10 +159,13 @@ export const finJoeContacts = pgTable("fin_joe_contacts", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-// FinJoe conversations
+// FinJoe conversations (contact identified by tenant_id + contact_phone)
 export const finJoeConversations = pgTable("fin_joe_conversations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  contactPhone: varchar("contact_phone").notNull().references(() => finJoeContacts.phone),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
+  contactPhone: varchar("contact_phone").notNull(),
   lastMessageAt: timestamp("last_message_at").notNull(),
   status: text("status").notNull().default("active"),
   context: jsonb("context").$type<Record<string, unknown>>().default({}),
@@ -160,7 +201,10 @@ export const finJoeMedia = pgTable("fin_joe_media", {
 // FinJoe role change requests
 export const finJoeRoleChangeRequests = pgTable("fin_joe_role_change_requests", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  contactPhone: varchar("contact_phone").notNull().references(() => finJoeContacts.phone),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
+  contactPhone: varchar("contact_phone").notNull(),
   requestedRole: text("requested_role").notNull(),
   name: text("name"),
   campusId: varchar("campus_id").references(() => campuses.id),
@@ -176,6 +220,9 @@ export const finJoeRoleChangeRequests = pgTable("fin_joe_role_change_requests", 
 // FinJoe tasks
 export const finJoeTasks = pgTable("fin_joe_tasks", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
   conversationId: varchar("conversation_id")
     .notNull()
     .references(() => finJoeConversations.id, { onDelete: "cascade" }),
@@ -188,9 +235,12 @@ export const finJoeTasks = pgTable("fin_joe_tasks", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-// FinJoe settings - Twilio template SIDs only
+// FinJoe settings - Twilio template SIDs only (one per tenant)
 export const finjoeSettings = pgTable("finjoe_settings", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
   expenseApprovalTemplateSid: text("expense_approval_template_sid"),
   expenseApprovedTemplateSid: text("expense_approved_template_sid"),
   expenseRejectedTemplateSid: text("expense_rejected_template_sid"),
@@ -199,7 +249,20 @@ export const finjoeSettings = pgTable("finjoe_settings", {
 });
 
 // Relations
-export const campusesRelations = relations(campuses, ({ many }) => ({
+export const tenantsRelations = relations(tenants, ({ many }) => ({
+  campuses: many(campuses),
+  users: many(users),
+  finJoeContacts: many(finJoeContacts),
+  finjoeSettings: many(finjoeSettings),
+  wabaProviders: many(tenantWabaProviders),
+}));
+
+export const tenantWabaProvidersRelations = relations(tenantWabaProviders, ({ one }) => ({
+  tenant: one(tenants, { fields: [tenantWabaProviders.tenantId], references: [tenants.id] }),
+}));
+
+export const campusesRelations = relations(campuses, ({ one, many }) => ({
+  tenant: one(tenants, { fields: [campuses.tenantId], references: [tenants.id] }),
   users: many(users),
   expenseCategories: many(expenseCategories),
   pettyCashFunds: many(pettyCashFunds),
@@ -208,6 +271,7 @@ export const campusesRelations = relations(campuses, ({ many }) => ({
 }));
 
 export const usersRelations = relations(users, ({ one, many }) => ({
+  tenant: one(tenants, { fields: [users.tenantId], references: [tenants.id] }),
   campus: one(campuses, { fields: [users.campusId], references: [campuses.id] }),
   finJoeContacts: many(finJoeContacts),
 }));
@@ -225,6 +289,7 @@ export const expensesRelations = relations(expenses, ({ one, many }) => ({
 }));
 
 export const finJoeContactsRelations = relations(finJoeContacts, ({ one, many }) => ({
+  tenant: one(tenants, { fields: [finJoeContacts.tenantId], references: [tenants.id] }),
   user: one(users, { fields: [finJoeContacts.studentId], references: [users.id] }),
   campus: one(campuses, { fields: [finJoeContacts.campusId], references: [campuses.id] }),
   conversations: many(finJoeConversations),
@@ -232,7 +297,7 @@ export const finJoeContactsRelations = relations(finJoeContacts, ({ one, many })
 }));
 
 export const finJoeConversationsRelations = relations(finJoeConversations, ({ one, many }) => ({
-  contact: one(finJoeContacts, { fields: [finJoeConversations.contactPhone], references: [finJoeContacts.phone] }),
+  tenant: one(tenants, { fields: [finJoeConversations.tenantId], references: [tenants.id] }),
   messages: many(finJoeMessages),
   tasks: many(finJoeTasks),
 }));
@@ -247,7 +312,7 @@ export const finJoeMediaRelations = relations(finJoeMedia, ({ one }) => ({
 }));
 
 export const finJoeRoleChangeRequestsRelations = relations(finJoeRoleChangeRequests, ({ one }) => ({
-  contact: one(finJoeContacts, { fields: [finJoeRoleChangeRequests.contactPhone], references: [finJoeContacts.phone] }),
+  tenant: one(tenants, { fields: [finJoeRoleChangeRequests.tenantId], references: [tenants.id] }),
   campus: one(campuses, { fields: [finJoeRoleChangeRequests.campusId], references: [campuses.id] }),
   user: one(users, { fields: [finJoeRoleChangeRequests.studentId], references: [users.id] }),
   approvedByUser: one(users, { fields: [finJoeRoleChangeRequests.approvedBy], references: [users.id] }),
@@ -259,6 +324,10 @@ export const finJoeTasksRelations = relations(finJoeTasks, ({ one }) => ({
 }));
 
 // Types
+export type Tenant = typeof tenants.$inferSelect;
+export type InsertTenant = typeof tenants.$inferInsert;
+export type TenantWabaProvider = typeof tenantWabaProviders.$inferSelect;
+export type InsertTenantWabaProvider = typeof tenantWabaProviders.$inferInsert;
 export type Campus = typeof campuses.$inferSelect;
 export type InsertCampus = typeof campuses.$inferInsert;
 export type User = typeof users.$inferSelect;

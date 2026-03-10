@@ -1,15 +1,15 @@
 import { db } from "./db.js";
 import { finJoeConversations } from "../../shared/schema.js";
-import { eq, desc } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 
 /** Get or create conversation for contact. Updates lastMessageAt when conversation exists. */
-export async function getOrCreateConversation(contactPhone: string) {
+export async function getOrCreateConversation(contactPhone: string, tenantId: string) {
   const now = new Date();
   let conv = (
     await db
       .select()
       .from(finJoeConversations)
-      .where(eq(finJoeConversations.contactPhone, contactPhone))
+      .where(and(eq(finJoeConversations.contactPhone, contactPhone), eq(finJoeConversations.tenantId, tenantId)))
       .orderBy(desc(finJoeConversations.lastMessageAt))
       .limit(1)
   )[0];
@@ -17,6 +17,7 @@ export async function getOrCreateConversation(contactPhone: string) {
     const [inserted] = await db
       .insert(finJoeConversations)
       .values({
+        tenantId,
         contactPhone,
         lastMessageAt: now,
         status: "active",

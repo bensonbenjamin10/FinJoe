@@ -25,7 +25,7 @@ export function ProtectedRoute({ children, requireAdmin = false, requireRoles }:
     if (!isLoading && !isAuthenticated) {
       setLocation("/login");
     } else if (!isLoading && (requireAdmin || requireRoles) && !hasRequiredRole) {
-      setLocation("/login");
+      setLocation(isAuthenticated ? "/admin/finjoe" : "/login");
     }
   }, [isLoading, isAuthenticated, hasRequiredRole, requireAdmin, requireRoles, setLocation]);
 

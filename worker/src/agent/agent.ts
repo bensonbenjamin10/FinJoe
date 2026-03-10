@@ -22,8 +22,6 @@ import { fetchSystemContext, fetchSystemData, resolveCategoryFromMessage, resolv
 import { validateExpenseData, validateRoleChangeData } from "../validation.js";
 import { createFinJoeData } from "../../../lib/finjoe-data.js";
 
-const finJoeData = createFinJoeData(db);
-
 const HISTORY_LIMIT = 10;
 
 const USER_FACING_ERROR = "I couldn't save that right now. Please try again in a moment, or contact support if it persists.";
@@ -117,15 +115,16 @@ export async function processWithAgent(
   contactStudentId: string | null,
   messageBody: string,
   messageId: string,
-  traceId?: string,
+  traceId: string | undefined,
+  tenantId: string,
   contactName?: string | null,
   contactCampusId?: string | null
 ): Promise<string> {
   const body = (messageBody || "").trim();
   const ctx = { traceId, conversationId, messageId };
 
-  const systemContext = await fetchSystemContext();
-  const { campuses, categories } = await fetchSystemData();
+  const systemContext = await fetchSystemContext(tenantId);
+  const { campuses, categories } = await fetchSystemData(tenantId);
   const validCampusIds = campuses.map((c) => c.id);
   const validCategoryIds = categories.map((c) => c.id);
 
@@ -230,6 +229,7 @@ export async function processWithAgent(
           validCampusIds,
           categories,
           campuses,
+          tenantId,
         },
         traceId
       );
@@ -301,6 +301,7 @@ type ExecuteContext = {
   validCampusIds: string[];
   categories: Array<{ id: string; name: string; slug: string }>;
   campuses: Array<{ id: string; name: string; slug: string }>;
+  tenantId: string;
 };
 
 async function executeFunctionCall(
@@ -309,7 +310,8 @@ async function executeFunctionCall(
   execCtx: ExecuteContext,
   traceId?: string
 ): Promise<FunctionResult> {
-  const { validCategoryIds, validCampusIds, contactPhone, contactStudentId, convContext } = execCtx;
+  const { validCategoryIds, validCampusIds, contactPhone, contactStudentId, convContext, tenantId } = execCtx;
+  const finJoeData = createFinJoeData(db, tenantId);
 
   switch (name) {
     case "create_expense": {
@@ -355,6 +357,7 @@ async function executeFunctionCall(
       let expense: { id: string } | null = null;
       try {
         expense = await finJoeData.createExpense({
+          tenantId,
           campusId: expenseData.campusId,
           categoryId: expenseData.categoryId,
           amount: expenseData.amount,
@@ -376,6 +379,7 @@ async function executeFunctionCall(
       }
 
       await db.insert(finJoeTasks).values({
+        tenantId,
         conversationId: execCtx.conversationId,
         type: "expense_create",
         status: "completed",
@@ -384,7 +388,7 @@ async function executeFunctionCall(
       });
       await finJoeData.submitExpense(expense.id, contactStudentId);
       const categoryName = execCtx.categories.find((c) => c.id === expenseData.categoryId)?.name ?? null;
-      await notifyFinanceForApproval(expense.id, extracted, traceId, categoryName);
+      await notifyFinanceForApproval(expense.id, extracted, tenantId, traceId, categoryName);
 
       return { success: true, data: { expenseId: expense.id, extracted } };
     }
@@ -468,6 +472,7 @@ async function executeFunctionCall(
       for (const item of expenseItems) {
         try {
           const expense = await finJoeData.createExpense({
+            tenantId,
             campusId: item.campusId,
             categoryId: item.categoryId,
             amount: item.amount,
@@ -482,6 +487,7 @@ async function executeFunctionCall(
           });
           if (expense?.id) {
             await db.insert(finJoeTasks).values({
+              tenantId,
               conversationId: execCtx.conversationId,
               type: "expense_create",
               status: "completed",
@@ -490,7 +496,7 @@ async function executeFunctionCall(
             });
             await finJoeData.submitExpense(expense.id, contactStudentId);
             const categoryName = execCtx.categories.find((c) => c.id === item.categoryId)?.name ?? null;
-            await notifyFinanceForApproval(expense.id, item.extracted, traceId, categoryName);
+            await notifyFinanceForApproval(expense.id, item.extracted, tenantId, traceId, categoryName);
             expenseIds.push(expense.id);
           }
         } catch (err) {
@@ -527,6 +533,7 @@ async function executeFunctionCall(
       let created: { id: string } | null = null;
       try {
         created = await finJoeData.createRoleChangeRequest({
+          tenantId,
           contactPhone,
           requestedRole,
           name,
@@ -542,7 +549,7 @@ async function executeFunctionCall(
       }
 
       const campus = execCtx.campuses.find((c) => c.id === campusId);
-      await notifyAdminForRoleRequest(created.id, name, requestedRole, campus?.name ?? null, traceId);
+      await notifyAdminForRoleRequest(created.id, name, requestedRole, campus?.name ?? null, tenantId, traceId);
 
       return { success: true, data: { requestId: created.id, name, requestedRole } };
     }
@@ -716,7 +723,7 @@ async function executeFunctionCall(
       const result = await finJoeData.approveExpense(expenseId, contactStudentId);
       if (!result) return { success: false, error: `Could not approve expense #${expenseId}. It may not be pending.` };
       if (result.submittedByContactPhone) {
-        notifySubmitterForApprovalRejection(result.submittedByContactPhone, expenseId, "approved", undefined, traceId).catch((err) =>
+        notifySubmitterForApprovalRejection(result.submittedByContactPhone, expenseId, "approved", tenantId, undefined, traceId).catch((err) =>
           logger.error("Failed to notify submitter of approval", { traceId, expenseId, err: String(err) })
         );
       }
@@ -733,7 +740,7 @@ async function executeFunctionCall(
       const result = await finJoeData.rejectExpense(expenseId, contactStudentId, reason);
       if (!result) return { success: false, error: `Could not reject expense #${expenseId}. It may not be pending.` };
       if (result.submittedByContactPhone) {
-        notifySubmitterForApprovalRejection(result.submittedByContactPhone, expenseId, "rejected", reason, traceId).catch((err) =>
+        notifySubmitterForApprovalRejection(result.submittedByContactPhone, expenseId, "rejected", tenantId, reason, traceId).catch((err) =>
           logger.error("Failed to notify submitter of rejection", { traceId, expenseId, err: String(err) })
         );
       }
@@ -787,6 +794,7 @@ async function notifyAdminForRoleRequest(
   name: string,
   requestedRole: string,
   campusName: string | null,
+  tenantId: string,
   traceId?: string
 ) {
   const financeAndAdmin = await db
@@ -794,6 +802,7 @@ async function notifyAdminForRoleRequest(
     .from(finJoeContacts)
     .where(
       and(
+        eq(finJoeContacts.tenantId, tenantId),
         eq(finJoeContacts.isActive, true),
         or(eq(finJoeContacts.role, "admin"), eq(finJoeContacts.role, "finance"))
       )
@@ -801,7 +810,7 @@ async function notifyAdminForRoleRequest(
   const msg = `Role change request #${requestId}: ${name} wants to become ${requestedRole}${campusName ? ` (Campus: ${campusName})` : ""}. Reply APPROVE ROLE ${requestId} or REJECT ROLE ${requestId} to act.`;
   for (const c of financeAndAdmin) {
     try {
-      await sendWith24hRouting(c.phone, msg, null, traceId);
+      await sendWith24hRouting(c.phone, msg, null, traceId, tenantId);
     } catch (err) {
       logger.error("Failed to notify admin for role request", { traceId, phone: c.phone, err: String(err) });
     }
@@ -812,18 +821,20 @@ async function notifyAdminForRoleRequest(
 async function notifyFinanceForApproval(
   expenseId: string,
   extracted: ExtractedExpense,
+  tenantId: string,
   traceId?: string,
   categoryName?: string | null
 ) {
   const financeContacts = await db
     .select()
     .from(finJoeContacts)
-    .where(and(eq(finJoeContacts.role, "finance"), eq(finJoeContacts.isActive, true)));
+    .where(and(eq(finJoeContacts.tenantId, tenantId), eq(finJoeContacts.role, "finance"), eq(finJoeContacts.isActive, true)));
   const lineItem = extracted.description || categoryName || extracted.vendorName;
   const msg = `New expense #${expenseId} needs approval: ₹${extracted.amount?.toLocaleString("en-IN")}${lineItem ? ` - ${lineItem}` : ""}. Reply APPROVE ${expenseId} or REJECT ${expenseId} to act.`;
   const templateConfig = await getExpenseApprovalTemplateConfig(
     expenseId,
     extracted.amount ?? 0,
+    tenantId,
     extracted.vendorName,
     extracted.description,
     categoryName
@@ -831,7 +842,7 @@ async function notifyFinanceForApproval(
   logger.info("Notifying finance for approval", { traceId, expenseId, count: financeContacts.length });
   for (const c of financeContacts) {
     try {
-      await sendWith24hRouting(c.phone, msg, templateConfig, traceId);
+      await sendWith24hRouting(c.phone, msg, templateConfig, traceId, tenantId);
     } catch (err) {
       logger.error("Failed to notify finance", { traceId, phone: c.phone, err: String(err) });
     }

@@ -7,6 +7,7 @@ export interface User {
   email: string;
   name: string;
   role: string;
+  tenantId?: string | null;
   campusId?: string | null;
   isActive: boolean;
 }
