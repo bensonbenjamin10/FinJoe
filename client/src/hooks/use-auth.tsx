@@ -1,0 +1,57 @@
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import { useLocation } from "wouter";
+
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  campusId?: string | null;
+  isActive: boolean;
+}
+
+export function useAuth() {
+  const [, setLocation] = useLocation();
+
+  const { data: user, isLoading, error } = useQuery<User | null>({
+    queryKey: ["/api/auth/me"],
+    queryFn: async () => {
+      const response = await fetch("/api/auth/me");
+      if (!response.ok) {
+        if (response.status === 401) {
+          return null;
+        }
+        throw new Error("Failed to fetch user");
+      }
+      return response.json();
+    },
+    retry: false,
+  });
+
+  const logoutMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", "/api/auth/logout", {});
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.setQueryData(["/api/auth/me"], null);
+      setLocation("/login");
+    },
+  });
+
+  const EXPENSE_ROLES = ["admin", "finance", "campus_coordinator", "head_office"];
+  const APPROVE_ROLES = ["admin", "finance"];
+
+  return {
+    user,
+    isLoading,
+    isAuthenticated: !!user,
+    isAdmin: user?.role === "admin",
+    hasExpenseAccess: !!user && EXPENSE_ROLES.includes(user.role),
+    canApproveExpenses: !!user && APPROVE_ROLES.includes(user.role),
+    canImportExpenses: !!user && APPROVE_ROLES.includes(user.role),
+    logout: () => logoutMutation.mutate(),
+    isLoggingOut: logoutMutation.isPending,
+  };
+}

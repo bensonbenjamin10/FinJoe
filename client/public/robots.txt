@@ -1,0 +1,6 @@
+# Allow all search engine crawling
+User-agent: *
+Allow: /
+
+# Sitemap location
+Sitemap: https://medpg.in/sitemap.xml
