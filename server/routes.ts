@@ -4,6 +4,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { db } from "./db.js";
 import { hashPassword } from "./auth.js";
 import { requireAdmin } from "./auth.js";
+import { logger } from "./logger.js";
 import {
   campuses,
   users,
@@ -18,10 +19,20 @@ export async function registerRoutes(app: Express) {
 
   app.post("/api/auth/login", (req, res, next) => {
     passport.authenticate("local", (err: any, user: any, info: any) => {
-      if (err) return res.status(500).json({ error: "Authentication error" });
-      if (!user) return res.status(401).json({ error: info?.message || "Invalid credentials" });
+      if (err) {
+        logger.error("Login error", { requestId: req.requestId, err: String(err) });
+        return res.status(500).json({ error: "Authentication error" });
+      }
+      if (!user) {
+        logger.info("Login failed", { requestId: req.requestId, reason: info?.message || "Invalid credentials" });
+        return res.status(401).json({ error: info?.message || "Invalid credentials" });
+      }
       req.login(user, (loginErr) => {
-        if (loginErr) return res.status(500).json({ error: "Login failed" });
+        if (loginErr) {
+          logger.error("Login session error", { requestId: req.requestId, err: String(loginErr) });
+          return res.status(500).json({ error: "Login failed" });
+        }
+        logger.info("Login success", { requestId: req.requestId, userId: user.id, email: user.email });
         const { passwordHash, ...u } = user;
         res.json(u);
       });
@@ -29,7 +40,11 @@ export async function registerRoutes(app: Express) {
   });
 
   app.post("/api/auth/logout", (req, res) => {
-    req.logout(() => res.json({ message: "Logged out" }));
+    const userId = req.user ? (req.user as { id?: string }).id : undefined;
+    req.logout(() => {
+      logger.info("Logout", { requestId: req.requestId, userId });
+      res.json({ message: "Logged out" });
+    });
   });
 
   app.get("/api/auth/me", (req, res) => {
@@ -65,24 +80,25 @@ export async function registerRoutes(app: Express) {
         .returning();
       if (!created) return res.status(500).json({ error: "Failed to create admin" });
       const { passwordHash, ...u } = created;
+      logger.info("Setup completed", { requestId: req.requestId, adminId: created.id });
       res.status(201).json(u);
     } catch (e) {
-      console.error("Setup error:", e);
+      logger.error("Setup error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Setup failed" });
     }
   });
 
-  app.get("/api/campuses", async (_req, res) => {
+  app.get("/api/campuses", async (req, res) => {
     try {
       const rows = await db.select().from(campuses).where(eq(campuses.isActive, true)).orderBy(campuses.name);
       res.json(rows);
     } catch (e) {
-      console.error("Campuses error:", e);
+      logger.error("Campuses error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to fetch campuses" });
     }
   });
 
-  app.get("/api/admin/users", requireAdmin, async (_req, res) => {
+  app.get("/api/admin/users", requireAdmin, async (req, res) => {
     try {
       const rows = await db
         .select({ id: users.id, name: users.name, email: users.email })
@@ -91,17 +107,17 @@ export async function registerRoutes(app: Express) {
         .orderBy(users.name);
       res.json(rows);
     } catch (e) {
-      console.error("Admin users error:", e);
+      logger.error("Admin users error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to fetch users" });
     }
   });
 
-  app.get("/api/admin/finjoe/contacts", requireAdmin, async (_req, res) => {
+  app.get("/api/admin/finjoe/contacts", requireAdmin, async (req, res) => {
     try {
       const rows = await db.select().from(finJoeContacts).orderBy(finJoeContacts.createdAt);
       res.json(rows);
     } catch (e) {
-      console.error("FinJoe contacts error:", e);
+      logger.error("FinJoe contacts error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to fetch contacts" });
     }
   });
@@ -150,7 +166,7 @@ export async function registerRoutes(app: Express) {
       res.status(201).json(created);
     } catch (e: any) {
       if (e?.code === "23505") return res.status(400).json({ error: "Contact with this phone already exists" });
-      console.error("FinJoe contact create error:", e);
+      logger.error("FinJoe contact create error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to create contact" });
     }
   });
@@ -192,7 +208,7 @@ export async function registerRoutes(app: Express) {
       if (!updated) return res.status(404).json({ error: "Contact not found" });
       res.json(updated);
     } catch (e) {
-      console.error("FinJoe contact update error:", e);
+      logger.error("FinJoe contact update error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to update contact" });
     }
   });
@@ -203,7 +219,7 @@ export async function registerRoutes(app: Express) {
       if (!deleted) return res.status(404).json({ error: "Contact not found" });
       res.status(204).send();
     } catch (e) {
-      console.error("FinJoe contact delete error:", e);
+      logger.error("FinJoe contact delete error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to delete contact" });
     }
   });
@@ -232,7 +248,7 @@ export async function registerRoutes(app: Express) {
       const rows = await query;
       res.json(rows);
     } catch (e) {
-      console.error("FinJoe role requests error:", e);
+      logger.error("FinJoe role requests error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to fetch role requests" });
     }
   });
@@ -246,7 +262,7 @@ export async function registerRoutes(app: Express) {
       if (!result) return res.status(404).json({ error: "Role request not found or not pending" });
       res.json({ id: result.id, approved: true });
     } catch (e) {
-      console.error("FinJoe approve error:", e);
+      logger.error("FinJoe approve error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to approve" });
     }
   });
@@ -261,7 +277,7 @@ export async function registerRoutes(app: Express) {
       if (!result) return res.status(404).json({ error: "Role request not found or not pending" });
       res.json({ id: result.id, rejected: true, reason: reason || "Rejected via admin" });
     } catch (e) {
-      console.error("FinJoe reject error:", e);
+      logger.error("FinJoe reject error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to reject" });
     }
   });
