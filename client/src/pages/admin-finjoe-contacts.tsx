@@ -178,7 +178,7 @@ export default function AdminFinJoeContacts() {
               FinJoe Contacts
             </CardTitle>
             <CardDescription>
-              Manage WhatsApp contacts for FinJoe. Add coordinators, finance, vendors, etc. by phone number.
+              Manage who can use Finance Joe via WhatsApp. Add team members by phone number—they can post expenses, income receipts, and get financial insights.
             </CardDescription>
           </div>
           <Button onClick={openAdd}>
@@ -191,7 +191,7 @@ export default function AdminFinJoeContacts() {
             <div className="py-8 text-center text-muted-foreground">Loading...</div>
           ) : contacts.length === 0 ? (
             <div className="py-8 text-center text-muted-foreground">
-              No contacts yet. Add contacts to enable FinJoe for expense workflows via WhatsApp.
+              No contacts yet. Add team members to let them chat with Finance Joe on WhatsApp for expenses, income, and finance questions.
             </div>
           ) : (
             <Table>
@@ -256,7 +256,7 @@ export default function AdminFinJoeContacts() {
             <DialogTitle>{dialog?.mode === "add" ? "Add Contact" : "Edit Contact"}</DialogTitle>
             <DialogDescription>
               {dialog?.mode === "add"
-                ? "Add a phone number and assign a role for FinJoe WhatsApp."
+                ? "Add a phone number and role. They'll be able to use Finance Joe on WhatsApp."
                 : "Update contact details."}
             </DialogDescription>
           </DialogHeader>

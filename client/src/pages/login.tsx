@@ -78,10 +78,10 @@ export default function Login() {
       <Card className="w-full max-w-md" data-testid="card-login">
         <CardHeader className="space-y-1">
           <CardTitle className="text-2xl font-bold text-center">
-            Student Portal Login
+            FinJoe Admin
           </CardTitle>
           <CardDescription className="text-center">
-            Sign in to access your registration and support tickets
+            Sign in to manage your organization's FinJoe WhatsApp contacts and settings
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -102,7 +102,7 @@ export default function Login() {
                     <FormControl>
                       <Input
                         type="email"
-                        placeholder="student@example.com"
+                        placeholder="admin@yourorg.com"
                         {...field}
                         data-testid="input-email"
                       />
@@ -153,7 +153,7 @@ export default function Login() {
           </Form>
 
           <div className="mt-6 text-center text-sm text-muted-foreground">
-            New students receive login credentials automatically after registration payment.
+            Contact your admin if you need access.
           </div>
         </CardContent>
       </Card>

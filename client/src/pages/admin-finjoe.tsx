@@ -13,7 +13,7 @@ export default function AdminFinJoe() {
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b px-4 py-3 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">FinJoe Admin</h1>
+        <h1 className="text-xl font-semibold">FinJoe Admin — Manage your organization's Finance Joe</h1>
         <div className="flex items-center gap-4">
           {user && <span className="text-sm text-muted-foreground">{user.email}</span>}
           <Button variant="outline" size="sm" onClick={() => logout()}>

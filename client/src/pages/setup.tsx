@@ -15,7 +15,7 @@ export default function Setup() {
   const { toast } = useToast();
   const [formData, setFormData] = useState({
     name: "Admin User",
-    email: "benson@medpg.org",
+    email: "admin@yourorg.com",
     password: "",
     confirmPassword: "",
   });
@@ -151,9 +151,9 @@ export default function Setup() {
               <CheckCircle2 className="w-8 h-8 text-primary" />
             </div>
           </div>
-          <CardTitle className="text-3xl">Welcome to MedPG</CardTitle>
+          <CardTitle className="text-3xl">Welcome to FinJoe</CardTitle>
           <CardDescription className="text-base">
-            Complete this one-time setup to initialize your production database and create your admin account
+            Set up your FinJoe admin account. Create your organization's first admin to manage contacts and the WhatsApp AI.
           </CardDescription>
         </CardHeader>
 
@@ -181,7 +181,7 @@ export default function Setup() {
                 type="email"
                 value={formData.email}
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                placeholder="admin@medpg.org"
+                placeholder="admin@yourorg.com"
                 required
                 data-testid="input-admin-email"
               />
@@ -248,8 +248,8 @@ export default function Setup() {
                   <p className="font-medium">What happens next?</p>
                   <ul className="list-disc list-inside space-y-1 text-blue-800 dark:text-blue-200">
                     <li>Admin account will be created with your credentials</li>
-                    <li>Production database will be seeded with programs, campuses, and content</li>
-                    <li>You'll be automatically logged in to the admin dashboard</li>
+                    <li>Your organization's FinJoe database will be initialized</li>
+                    <li>You'll be automatically logged in to the FinJoe admin dashboard</li>
                     <li>This setup wizard will become inaccessible after completion</li>
                   </ul>
                 </div>

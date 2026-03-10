@@ -99,7 +99,7 @@ export default function AdminFinJoeRoleRequests() {
             Role Change Requests
           </CardTitle>
           <CardDescription>
-            Approve or reject guest onboarding requests from FinJoe WhatsApp.
+            Approve or reject requests from people who want to join your organization via Finance Joe on WhatsApp.
           </CardDescription>
         </div>
         <Select value={statusFilter} onValueChange={setStatusFilter}>

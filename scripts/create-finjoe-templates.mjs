@@ -61,7 +61,7 @@ const templates = [
   {
     friendly_name: "finjoe_re_engagement",
     approval_name: "finjoe_re_engagement",
-    body: "Hello from FinJoe! We are here to help you with expense submissions, approvals, and any finance-related questions. Reply to this message to get started or ask for assistance.",
+    body: "Hello from Finance Joe! I'm here to help with expenses, income receipts, and any finance questions. Reply to get started or ask me anything.",
     variables: {},
   },
 ];
