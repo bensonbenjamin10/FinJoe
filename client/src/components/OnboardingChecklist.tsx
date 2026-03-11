@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, Circle, ChevronDown, ChevronUp } from "lucide-react";
@@ -91,14 +92,55 @@ export function OnboardingChecklist({ tenantId, currentTab, onTabChange }: Onboa
     enabled: !!tenantId,
   });
 
+  const { data: expenseCategories = [] } = useQuery({
+    queryKey: ["/api/admin/expense-categories", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/expense-categories${tenantId ? `?tenantId=${tenantId}` : ""}`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+
+  const { data: incomeCategories = [] } = useQuery({
+    queryKey: ["/api/admin/income-categories", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/income-categories${tenantId ? `?tenantId=${tenantId}` : ""}`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+
+  const { data: incomeTypes = [] } = useQuery({
+    queryKey: ["/api/admin/income-types", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/income-types${tenantId ? `?tenantId=${tenantId}` : ""}`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+
+  const [, setLocation] = useLocation();
+
   if (!tenantId) return null;
 
   const hasCostCenterLabel = !!(settings?.costCenterLabel && settings.costCenterLabel.trim());
   const hasCostCenters = costCenters.length > 0;
   const hasContacts = contacts.length > 0;
   const hasWhatsApp = !!(whatsappProvider?.whatsappFrom && whatsappProvider.whatsappFrom.trim());
+  const hasExpenseCategories = expenseCategories.length > 0;
+  const hasIncomeCategories = incomeCategories.length > 0;
+  const hasIncomeTypes = incomeTypes.length > 0;
 
-  const allComplete = hasCostCenterLabel && hasCostCenters && hasContacts && hasWhatsApp;
+  const allComplete = hasCostCenterLabel && hasCostCenters && hasContacts && hasWhatsApp && hasExpenseCategories && hasIncomeCategories && hasIncomeTypes;
   const dismissed = dismissedInSession || getDismissedTenants().has(tenantId);
 
   if (dismissed) return null;
@@ -127,6 +169,24 @@ export function OnboardingChecklist({ tenantId, currentTab, onTabChange }: Onboa
       label: "Configure WhatsApp",
       done: hasWhatsApp,
       tab: "settings",
+    },
+    {
+      id: "expense-categories",
+      label: "Add or seed expense categories",
+      done: hasExpenseCategories,
+      navigateTo: `/admin/expenses?tenantId=${tenantId}`,
+    },
+    {
+      id: "income-categories",
+      label: "Add income categories",
+      done: hasIncomeCategories,
+      navigateTo: `/admin/income?tenantId=${tenantId}`,
+    },
+    {
+      id: "income-types",
+      label: "Configure income types",
+      done: hasIncomeTypes,
+      navigateTo: `/admin/income?tenantId=${tenantId}`,
     },
   ];
 
@@ -172,7 +232,13 @@ export function OnboardingChecklist({ tenantId, currentTab, onTabChange }: Onboa
                   variant="link"
                   size="sm"
                   className="h-auto p-0"
-                  onClick={() => onTabChange(step.tab)}
+                  onClick={() => {
+                    if ("navigateTo" in step && step.navigateTo) {
+                      setLocation(step.navigateTo);
+                    } else if ("tab" in step) {
+                      onTabChange(step.tab);
+                    }
+                  }}
                 >
                   Go
                 </Button>

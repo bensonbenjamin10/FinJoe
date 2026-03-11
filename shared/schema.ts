@@ -257,6 +257,17 @@ export const finjoeSettings = pgTable("finjoe_settings", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// Income types (tenant-configurable)
+export const incomeTypes = pgTable("income_types", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  slug: varchar("slug").notNull(),
+  label: text("label").notNull(),
+  displayOrder: integer("display_order").notNull().default(0),
+});
+
 // Income categories (tenant-scoped)
 export const incomeCategories = pgTable("income_categories", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -306,6 +317,7 @@ export const tenantsRelations = relations(tenants, ({ many }) => ({
   finJoeContacts: many(finJoeContacts),
   finjoeSettings: many(finjoeSettings),
   wabaProviders: many(tenantWabaProviders),
+  incomeTypes: many(incomeTypes),
 }));
 
 export const tenantWabaProvidersRelations = relations(tenantWabaProviders, ({ one }) => ({
@@ -326,6 +338,10 @@ export const usersRelations = relations(users, ({ one, many }) => ({
   tenant: one(tenants, { fields: [users.tenantId], references: [tenants.id] }),
   costCenter: one(costCenters, { fields: [users.costCenterId], references: [costCenters.id] }),
   finJoeContacts: many(finJoeContacts),
+}));
+
+export const incomeTypesRelations = relations(incomeTypes, ({ one }) => ({
+  tenant: one(tenants, { fields: [incomeTypes.tenantId], references: [tenants.id] }),
 }));
 
 export const expenseCategoriesRelations = relations(expenseCategories, ({ many }) => ({
@@ -390,6 +406,14 @@ export type ExpenseCategory = typeof expenseCategories.$inferSelect;
 export type InsertExpenseCategory = typeof expenseCategories.$inferInsert;
 export type Expense = typeof expenses.$inferSelect;
 export type InsertExpense = typeof expenses.$inferInsert;
+
+export type ExpenseWithDetails = Expense & {
+  costCenterName?: string | null;
+  categoryName?: string | null;
+  campus?: { id: string; name: string | null; slug: string } | null;
+  costCenter?: { id: string; name: string | null; slug: string } | null;
+  category?: { id: string; name: string | null; slug: string } | null;
+};
 export type FinJoeContact = typeof finJoeContacts.$inferSelect;
 export type InsertFinJoeContact = typeof finJoeContacts.$inferInsert;
 export type FinJoeConversation = typeof finJoeConversations.$inferSelect;
@@ -406,6 +430,8 @@ export type FinjoeSettings = typeof finjoeSettings.$inferSelect;
 export type InsertFinjoeSettings = typeof finjoeSettings.$inferInsert;
 export type PlatformSettings = typeof platformSettings.$inferSelect;
 export type InsertPlatformSettings = typeof platformSettings.$inferInsert;
+export type IncomeType = typeof incomeTypes.$inferSelect;
+export type InsertIncomeType = typeof incomeTypes.$inferInsert;
 export type IncomeCategory = typeof incomeCategories.$inferSelect;
 export type InsertIncomeCategory = typeof incomeCategories.$inferInsert;
 export type IncomeRecord = typeof incomeRecords.$inferSelect;

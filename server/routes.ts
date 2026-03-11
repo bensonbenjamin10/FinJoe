@@ -1,6 +1,6 @@
 import express, { type Express } from "express";
 import passport from "passport";
-import { eq, and, desc, or, sql, inArray } from "drizzle-orm";
+import { eq, and, desc, or, sql, inArray, isNull } from "drizzle-orm";
 import { db } from "./db.js";
 import { hashPassword, requireAdmin, requireSuperAdmin, getTenantId } from "./auth.js";
 import { logger } from "./logger.js";
@@ -10,12 +10,14 @@ import {
   costCenters,
   users,
   expenses,
+  expenseCategories,
   finJoeContacts,
   finJoeRoleChangeRequests,
   finjoeSettings,
   platformSettings,
   incomeCategories,
   incomeRecords,
+  incomeTypes,
 } from "../shared/schema.js";
 import { createFinJoeData } from "../lib/finjoe-data.js";
 
@@ -663,6 +665,119 @@ export async function registerRoutes(app: Express) {
     }
   });
 
+  // Income types (tenant-configurable)
+  app.get("/api/admin/income-types", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const rows = await db
+        .select()
+        .from(incomeTypes)
+        .where(eq(incomeTypes.tenantId, tid))
+        .orderBy(incomeTypes.displayOrder, incomeTypes.label);
+      res.json(rows);
+    } catch (e) {
+      logger.error("Income types error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch income types" });
+    }
+  });
+
+  app.post("/api/admin/income-types", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { slug, label, displayOrder } = req.body;
+      if (!slug || !label) return res.status(400).json({ error: "slug and label required" });
+      const slugNorm = String(slug).toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+      const [created] = await db
+        .insert(incomeTypes)
+        .values({
+          tenantId: tid,
+          slug: slugNorm || slug,
+          label: String(label).trim(),
+          displayOrder: displayOrder ?? 0,
+        })
+        .returning();
+      if (!created) return res.status(500).json({ error: "Failed to create" });
+      res.status(201).json(created);
+    } catch (e: any) {
+      if (e?.code === "23505") return res.status(400).json({ error: "Income type slug already exists" });
+      logger.error("Income type create error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to create" });
+    }
+  });
+
+  app.patch("/api/admin/income-types/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const tid = tenantId ?? req.body?.tenantId;
+      const { slug, label, displayOrder } = req.body;
+      const updates: Record<string, unknown> = {};
+      if (slug !== undefined) updates.slug = String(slug).toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "") || slug;
+      if (label !== undefined) updates.label = String(label).trim();
+      if (displayOrder !== undefined) updates.displayOrder = displayOrder;
+      if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No updates provided" });
+      const whereClause = tid ? and(eq(incomeTypes.id, req.params.id), eq(incomeTypes.tenantId, tid)) : eq(incomeTypes.id, req.params.id);
+      const [updated] = await db.update(incomeTypes).set({ ...updates } as any).where(whereClause).returning();
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      res.json(updated);
+    } catch (e: any) {
+      if (e?.code === "23505") return res.status(400).json({ error: "Income type slug already exists" });
+      logger.error("Income type update error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to update" });
+    }
+  });
+
+  app.delete("/api/admin/income-types/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const rawTid = tenantId ?? req.query?.tenantId ?? req.body?.tenantId;
+      const tid = typeof rawTid === "string" ? rawTid : undefined;
+      const whereClause = tid ? and(eq(incomeTypes.id, req.params.id), eq(incomeTypes.tenantId, tid)) : eq(incomeTypes.id, req.params.id);
+      const [deleted] = await db.delete(incomeTypes).where(whereClause).returning();
+      if (!deleted) return res.status(404).json({ error: "Not found" });
+      res.status(204).send();
+    } catch (e) {
+      logger.error("Income type delete error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to delete" });
+    }
+  });
+
+  app.post("/api/admin/income-types/seed", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const defaults = [
+        { slug: "registration_fee", label: "Registration Fee", displayOrder: 0 },
+        { slug: "remaining_fee", label: "Remaining Fee", displayOrder: 1 },
+        { slug: "hostel_fee", label: "Hostel Fee", displayOrder: 2 },
+        { slug: "other", label: "Other", displayOrder: 3 },
+      ];
+      let seeded = 0;
+      for (const d of defaults) {
+        try {
+          await db.insert(incomeTypes).values({ tenantId: tid, slug: d.slug, label: d.label, displayOrder: d.displayOrder });
+          seeded++;
+        } catch (e: any) {
+          if (e?.code !== "23505") throw e;
+        }
+      }
+      res.json({ seeded, total: defaults.length });
+    } catch (e) {
+      logger.error("Income types seed error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to seed income types" });
+    }
+  });
+
   // Income records
   app.get("/api/admin/income", requireAdmin, async (req, res) => {
     try {
@@ -823,6 +938,365 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("Reconciliation error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to fetch reconciliation" });
+    }
+  });
+
+  // Expense categories
+  app.get("/api/admin/expense-categories", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const includeInactive = req.query?.includeInactive === "true";
+      const conditions = [or(eq(expenseCategories.tenantId, tid), isNull(expenseCategories.tenantId))];
+      if (!includeInactive) conditions.push(eq(expenseCategories.isActive, true));
+      const rows = await db
+        .select()
+        .from(expenseCategories)
+        .where(and(...conditions))
+        .orderBy(expenseCategories.displayOrder, expenseCategories.name);
+      res.json(rows);
+    } catch (e) {
+      logger.error("Expense categories error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch expense categories" });
+    }
+  });
+
+  app.post("/api/admin/expense-categories", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { name, slug, cashflowLabel, displayOrder } = req.body;
+      if (!name || !slug || !cashflowLabel) return res.status(400).json({ error: "name, slug, and cashflowLabel required" });
+      const slugNorm = String(slug).toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+      const [created] = await db
+        .insert(expenseCategories)
+        .values({
+          tenantId: tid,
+          name,
+          slug: slugNorm || slug,
+          cashflowLabel: cashflowLabel || name,
+          displayOrder: displayOrder ?? 0,
+          isActive: true,
+        })
+        .returning();
+      if (!created) return res.status(500).json({ error: "Failed to create" });
+      res.status(201).json(created);
+    } catch (e: any) {
+      if (e?.code === "23505") return res.status(400).json({ error: "Category slug already exists" });
+      logger.error("Expense category create error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to create" });
+    }
+  });
+
+  app.patch("/api/admin/expense-categories/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const tid = tenantId ?? req.body?.tenantId;
+      const { name, slug, cashflowLabel, displayOrder, isActive } = req.body;
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (name !== undefined) updates.name = name;
+      if (slug !== undefined) updates.slug = String(slug).toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "") || slug;
+      if (cashflowLabel !== undefined) updates.cashflowLabel = cashflowLabel;
+      if (displayOrder !== undefined) updates.displayOrder = displayOrder;
+      if (isActive !== undefined) updates.isActive = isActive;
+      const whereClause = tid ? and(eq(expenseCategories.id, req.params.id), eq(expenseCategories.tenantId, tid)) : eq(expenseCategories.id, req.params.id);
+      const [updated] = await db.update(expenseCategories).set(updates as any).where(whereClause).returning();
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      res.json(updated);
+    } catch (e) {
+      logger.error("Expense category update error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to update" });
+    }
+  });
+
+  app.delete("/api/admin/expense-categories/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const rawTid = tenantId ?? req.query?.tenantId;
+      const tid = typeof rawTid === "string" ? rawTid : undefined;
+      const whereClause = tid ? and(eq(expenseCategories.id, req.params.id), eq(expenseCategories.tenantId, tid)) : eq(expenseCategories.id, req.params.id);
+      const [existing] = await db.select({ id: expenses.id }).from(expenses).where(eq(expenses.categoryId, req.params.id)).limit(1);
+      if (existing) return res.status(400).json({ error: "Category has expenses and cannot be deleted" });
+      const [deleted] = await db.delete(expenseCategories).where(whereClause).returning();
+      if (!deleted) return res.status(404).json({ error: "Not found" });
+      res.status(204).send();
+    } catch (e) {
+      logger.error("Expense category delete error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to delete" });
+    }
+  });
+
+  app.post("/api/admin/expense-categories/seed", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const defaults = [
+        { name: "Office Supplies", slug: "office_supplies", cashflowLabel: "Office Supplies", displayOrder: 0 },
+        { name: "Travel", slug: "travel", cashflowLabel: "Travel", displayOrder: 1 },
+        { name: "Utilities", slug: "utilities", cashflowLabel: "Utilities", displayOrder: 2 },
+        { name: "Rent", slug: "rent", cashflowLabel: "Rent", displayOrder: 3 },
+        { name: "Miscellaneous", slug: "miscellaneous", cashflowLabel: "Miscellaneous", displayOrder: 4 },
+      ];
+      let created = 0;
+      let skipped = 0;
+      for (const d of defaults) {
+        const [existing] = await db.select({ id: expenseCategories.id }).from(expenseCategories).where(and(eq(expenseCategories.tenantId, tid), eq(expenseCategories.slug, d.slug))).limit(1);
+        if (existing) {
+          skipped++;
+          continue;
+        }
+        await db.insert(expenseCategories).values({ tenantId: tid, ...d, isActive: true });
+        created++;
+      }
+      res.json({ created, skipped });
+    } catch (e) {
+      logger.error("Expense category seed error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to seed" });
+    }
+  });
+
+  // Expenses
+  app.get("/api/admin/expenses", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { campusId, costCenterId, status, categoryId, source, startDate, endDate } = req.query;
+      const conditions = [eq(expenses.tenantId, tid)];
+      const ccId = (costCenterId ?? campusId) as string | undefined;
+      if (ccId && ccId !== "all") {
+        if (ccId === "null" || ccId === "corporate" || ccId === "__corporate__") {
+          conditions.push(sql`${expenses.costCenterId} IS NULL`);
+        } else {
+          conditions.push(eq(expenses.costCenterId, ccId));
+        }
+      }
+      if (status && status !== "all") conditions.push(eq(expenses.status, status as string));
+      if (categoryId && categoryId !== "all") conditions.push(eq(expenses.categoryId, categoryId as string));
+      if (source && source !== "all") conditions.push(eq(expenses.source, source as string));
+      if (startDate && typeof startDate === "string") conditions.push(sql`${expenses.expenseDate} >= ${startDate}::date`);
+      if (endDate && typeof endDate === "string") conditions.push(sql`${expenses.expenseDate} <= ${endDate}::date`);
+      const rows = await db
+        .select({
+          id: expenses.id,
+          tenantId: expenses.tenantId,
+          costCenterId: expenses.costCenterId,
+          categoryId: expenses.categoryId,
+          amount: expenses.amount,
+          expenseDate: expenses.expenseDate,
+          description: expenses.description,
+          particulars: expenses.particulars,
+          status: expenses.status,
+          invoiceNumber: expenses.invoiceNumber,
+          invoiceDate: expenses.invoiceDate,
+          vendorName: expenses.vendorName,
+          gstin: expenses.gstin,
+          taxType: expenses.taxType,
+          voucherNumber: expenses.voucherNumber,
+          source: expenses.source,
+          createdAt: expenses.createdAt,
+          costCenterName: costCenters.name,
+          categoryName: expenseCategories.name,
+        })
+        .from(expenses)
+        .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
+        .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
+        .where(and(...conditions))
+        .orderBy(desc(expenses.expenseDate), desc(expenses.createdAt))
+        .limit(200);
+      const result = rows.map((r) => ({
+        ...r,
+        campus: r.costCenterId ? { id: r.costCenterId, name: r.costCenterName, slug: "" } : null,
+        costCenter: r.costCenterId ? { id: r.costCenterId, name: r.costCenterName, slug: "" } : null,
+        category: r.categoryId ? { id: r.categoryId, name: r.categoryName, slug: "" } : null,
+      }));
+      res.json(result);
+    } catch (e) {
+      logger.error("Expenses list error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch expenses" });
+    }
+  });
+
+  app.post("/api/admin/expenses", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { campusId, costCenterId, categoryId, amount, expenseDate, description, invoiceNumber, invoiceDate, vendorName, gstin, taxType, voucherNumber } = req.body;
+      const ccId = (costCenterId ?? campusId) && (costCenterId ?? campusId) !== "__corporate__" ? (costCenterId ?? campusId) : null;
+      if (!categoryId || !amount || amount <= 0 || !expenseDate) return res.status(400).json({ error: "categoryId, amount (>0), and expenseDate required" });
+      const [created] = await db
+        .insert(expenses)
+        .values({
+          tenantId: tid,
+          costCenterId: ccId,
+          categoryId,
+          amount: Math.round(Number(amount)),
+          expenseDate: new Date(expenseDate),
+          description: description || null,
+          invoiceNumber: invoiceNumber || null,
+          invoiceDate: invoiceDate ? new Date(invoiceDate) : null,
+          vendorName: vendorName || null,
+          gstin: gstin || null,
+          taxType: taxType || null,
+          voucherNumber: voucherNumber || null,
+          status: "draft",
+          source: "manual",
+        })
+        .returning();
+      if (!created) return res.status(500).json({ error: "Failed to create" });
+      res.status(201).json(created);
+    } catch (e) {
+      logger.error("Expense create error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to create" });
+    }
+  });
+
+  app.patch("/api/admin/expenses/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { costCenterId, campusId, categoryId, amount, expenseDate, description, invoiceNumber, invoiceDate, vendorName, gstin, taxType, voucherNumber } = req.body;
+      const ccId = (costCenterId ?? campusId) !== undefined ? ((costCenterId ?? campusId) && (costCenterId ?? campusId) !== "__corporate__" ? (costCenterId ?? campusId) : null) : undefined;
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (ccId !== undefined) updates.costCenterId = ccId;
+      if (categoryId !== undefined) updates.categoryId = categoryId;
+      if (amount !== undefined) updates.amount = Math.round(Number(amount));
+      if (expenseDate !== undefined) updates.expenseDate = new Date(expenseDate);
+      if (description !== undefined) updates.description = description;
+      if (invoiceNumber !== undefined) updates.invoiceNumber = invoiceNumber;
+      if (invoiceDate !== undefined) updates.invoiceDate = invoiceDate ? new Date(invoiceDate) : null;
+      if (vendorName !== undefined) updates.vendorName = vendorName;
+      if (gstin !== undefined) updates.gstin = gstin;
+      if (taxType !== undefined) updates.taxType = taxType;
+      if (voucherNumber !== undefined) updates.voucherNumber = voucherNumber;
+      const whereClause = and(eq(expenses.id, req.params.id), eq(expenses.tenantId, tid));
+      const [existing] = await db.select({ status: expenses.status }).from(expenses).where(whereClause).limit(1);
+      if (!existing) return res.status(404).json({ error: "Not found" });
+      if (existing.status !== "draft") return res.status(400).json({ error: "Only draft expenses can be edited" });
+      const [updated] = await db.update(expenses).set(updates as any).where(whereClause).returning();
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      res.json(updated);
+    } catch (e) {
+      logger.error("Expense update error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to update" });
+    }
+  });
+
+  app.delete("/api/admin/expenses/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const whereClause = and(eq(expenses.id, req.params.id), eq(expenses.tenantId, tid));
+      const [existing] = await db.select({ status: expenses.status }).from(expenses).where(whereClause).limit(1);
+      if (!existing) return res.status(404).json({ error: "Not found" });
+      if (existing.status !== "draft") return res.status(400).json({ error: "Only draft expenses can be deleted" });
+      await db.delete(expenses).where(whereClause);
+      res.status(204).send();
+    } catch (e) {
+      logger.error("Expense delete error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to delete" });
+    }
+  });
+
+  app.post("/api/admin/expenses/:id/submit", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const whereClause = and(eq(expenses.id, req.params.id), eq(expenses.tenantId, tid));
+      const [existing] = await db.select({ status: expenses.status }).from(expenses).where(whereClause).limit(1);
+      if (!existing) return res.status(404).json({ error: "Not found" });
+      if (existing.status !== "draft") return res.status(400).json({ error: "Only draft expenses can be submitted" });
+      const [updated] = await db.update(expenses).set({ status: "pending_approval", submittedAt: new Date(), submittedById: (req.user as any).id, updatedAt: new Date() }).where(whereClause).returning();
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      res.json(updated);
+    } catch (e) {
+      logger.error("Expense submit error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to submit" });
+    }
+  });
+
+  app.post("/api/admin/expenses/:id/approve", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const whereClause = and(eq(expenses.id, req.params.id), eq(expenses.tenantId, tid));
+      const [existing] = await db.select({ status: expenses.status }).from(expenses).where(whereClause).limit(1);
+      if (!existing) return res.status(404).json({ error: "Not found" });
+      if (existing.status !== "pending_approval") return res.status(400).json({ error: "Only pending expenses can be approved" });
+      const [updated] = await db.update(expenses).set({ status: "approved", approvedAt: new Date(), approvedById: (req.user as any).id, rejectionReason: null, updatedAt: new Date() }).where(whereClause).returning();
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      res.json(updated);
+    } catch (e) {
+      logger.error("Expense approve error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to approve" });
+    }
+  });
+
+  app.post("/api/admin/expenses/:id/reject", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { reason } = req.body;
+      const whereClause = and(eq(expenses.id, req.params.id), eq(expenses.tenantId, tid));
+      const [existing] = await db.select({ status: expenses.status }).from(expenses).where(whereClause).limit(1);
+      if (!existing) return res.status(404).json({ error: "Not found" });
+      if (existing.status !== "pending_approval") return res.status(400).json({ error: "Only pending expenses can be rejected" });
+      const [updated] = await db.update(expenses).set({ status: "rejected", rejectionReason: reason || null, updatedAt: new Date() }).where(whereClause).returning();
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      res.json(updated);
+    } catch (e) {
+      logger.error("Expense reject error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to reject" });
+    }
+  });
+
+  app.post("/api/admin/expenses/:id/payout", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { payoutMethod, payoutRef } = req.body;
+      const whereClause = and(eq(expenses.id, req.params.id), eq(expenses.tenantId, tid));
+      const [existing] = await db.select({ status: expenses.status }).from(expenses).where(whereClause).limit(1);
+      if (!existing) return res.status(404).json({ error: "Not found" });
+      if (existing.status !== "approved") return res.status(400).json({ error: "Only approved expenses can be marked as paid" });
+      const [updated] = await db.update(expenses).set({ status: "paid", payoutMethod: payoutMethod || null, payoutRef: payoutRef || null, payoutAt: new Date(), updatedAt: new Date() }).where(whereClause).returning();
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      res.json(updated);
+    } catch (e) {
+      logger.error("Expense payout error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to record payout" });
     }
   });
 

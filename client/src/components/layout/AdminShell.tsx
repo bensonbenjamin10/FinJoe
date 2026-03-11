@@ -38,6 +38,7 @@ import {
   LogOut,
   ChevronDown,
   TrendingUp,
+  Receipt,
 } from "lucide-react";
 import type { Tenant } from "@shared/schema";
 
@@ -86,6 +87,7 @@ export function AdminShell({ children }: AdminShellProps) {
         ]
       : []),
     { href: "/admin/finjoe", label: "FinJoe", icon: MessageCircle },
+    { href: "/admin/expenses", label: "Expenses", icon: Receipt },
     { href: "/admin/income", label: "Income", icon: TrendingUp },
     ...(isSuperAdmin
       ? [{ href: "/admin/account-settings", label: "Account Settings", icon: Settings }]

@@ -48,15 +48,9 @@ import { useCostCenterLabel } from "@/hooks/use-cost-center-label";
 import type {
   IncomeWithDetails,
   IncomeCategory,
+  IncomeType,
   Campus,
 } from "@shared/schema";
-
-const INCOME_TYPE_LABELS: Record<string, string> = {
-  registration_fee: "Registration Fee",
-  remaining_fee: "Remaining Fee",
-  hostel_fee: "Hostel Fee",
-  other: "Other",
-};
 
 const SOURCE_LABELS: Record<string, string> = {
   manual: "Manual",
@@ -92,6 +86,9 @@ export default function AdminIncome() {
   const [editForm, setEditForm] = useState({ amount: "", particulars: "", incomeType: "other", incomeDate: "" });
   const [viewIncomeDialog, setViewIncomeDialog] = useState<IncomeWithDetails | null>(null);
   const [categoryForm, setCategoryForm] = useState({ name: "", slug: "", incomeType: "other" as string, displayOrder: 0 });
+  const [incomeTypeDialog, setIncomeTypeDialog] = useState<{ mode: "add" | "edit"; type?: IncomeType } | null>(null);
+  const [deleteIncomeTypeDialog, setDeleteIncomeTypeDialog] = useState<IncomeType | null>(null);
+  const [incomeTypeForm, setIncomeTypeForm] = useState({ slug: "", label: "", displayOrder: 0 });
   const [reconStartDate, setReconStartDate] = useState(format(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), "yyyy-MM-dd"));
   const [reconEndDate, setReconEndDate] = useState(format(new Date(), "yyyy-MM-dd"));
 
@@ -146,6 +143,18 @@ export default function AdminIncome() {
     },
     enabled: !!tenantId,
   });
+
+  const { data: incomeTypesList = [] } = useQuery<IncomeType[]>({
+    queryKey: ["/api/admin/income-types", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/income-types${tenantId ? `?tenantId=${tenantId}` : ""}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+
+  const incomeTypeLabel = (slug: string) => incomeTypesList.find((t) => t.slug === slug)?.label ?? slug;
 
   const qs = tenantId ? `?tenantId=${tenantId}` : "";
   const { data: campuses = [] } = useQuery<Campus[]>({
@@ -249,6 +258,74 @@ export default function AdminIncome() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const createIncomeTypeMutation = useMutation({
+    mutationFn: async (data: { slug: string; label: string; displayOrder?: number }) => {
+      const res = await apiRequest("POST", "/api/admin/income-types", { ...data, tenantId });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to create");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/income-types"] });
+      setIncomeTypeDialog(null);
+      setIncomeTypeForm({ slug: "", label: "", displayOrder: 0 });
+      toast({ title: "Income type created" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const updateIncomeTypeMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: { slug?: string; label?: string; displayOrder?: number } }) => {
+      const res = await apiRequest("PATCH", `/api/admin/income-types/${id}`, { ...data, tenantId });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to update");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/income-types"] });
+      setIncomeTypeDialog(null);
+      toast({ title: "Income type updated" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteIncomeTypeMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const url = `/api/admin/income-types/${id}${tenantId ? `?tenantId=${tenantId}` : ""}`;
+      const res = await apiRequest("DELETE", url);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to delete");
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/income-types"] });
+      setDeleteIncomeTypeDialog(null);
+      toast({ title: "Income type deleted" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const seedIncomeTypesMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/income-types/seed", { tenantId });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to seed");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/income-types"] });
+      toast({ title: "Income types seeded", description: `${data.seeded} of ${data.total} added` });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!createForm.categoryId || !createForm.amount || parseFloat(createForm.amount) <= 0) {
@@ -328,6 +405,7 @@ export default function AdminIncome() {
               <TabsTrigger value="list">List</TabsTrigger>
               <TabsTrigger value="create">Create</TabsTrigger>
               <TabsTrigger value="categories">Categories</TabsTrigger>
+              <TabsTrigger value="income-types">Income Types</TabsTrigger>
               <TabsTrigger value="reconciliation">Reconciliation</TabsTrigger>
             </TabsList>
 
@@ -411,7 +489,7 @@ export default function AdminIncome() {
                               ₹ {(inc.amount / 1).toLocaleString("en-IN")}
                             </span>
                           </TableCell>
-                          <TableCell>{INCOME_TYPE_LABELS[inc.incomeType] || inc.incomeType}</TableCell>
+                          <TableCell>{incomeTypeLabel(inc.incomeType)}</TableCell>
                           <TableCell>{SOURCE_LABELS[inc.source] || inc.source}</TableCell>
                           <TableCell>
                             <div className="flex gap-1">
@@ -498,8 +576,8 @@ export default function AdminIncome() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {Object.entries(INCOME_TYPE_LABELS).map(([k, v]) => (
-                        <SelectItem key={k} value={k}>{v}</SelectItem>
+                      {incomeTypesList.map((t) => (
+                        <SelectItem key={t.id} value={t.slug}>{t.label}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -579,7 +657,7 @@ export default function AdminIncome() {
                       <TableRow key={c.id}>
                         <TableCell className="font-medium">{c.name}</TableCell>
                         <TableCell className="font-mono text-sm">{c.slug}</TableCell>
-                        <TableCell>{INCOME_TYPE_LABELS[c.incomeType] || c.incomeType}</TableCell>
+                        <TableCell>{incomeTypeLabel(c.incomeType)}</TableCell>
                         <TableCell>{c.displayOrder}</TableCell>
                         <TableCell>
                           <Badge variant={c.isActive ? "default" : "secondary"}>
@@ -615,6 +693,75 @@ export default function AdminIncome() {
                 {categoriesForAdmin.length === 0 && (
                   <div className="text-center py-8 text-muted-foreground">
                     No categories. Default categories are seeded from migration.
+                  </div>
+                )}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="income-types">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-muted-foreground">
+                    Configure income types for this tenant (e.g. Registration Fee, Product Sales, Consulting).
+                  </p>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => seedIncomeTypesMutation.mutate()}
+                      disabled={seedIncomeTypesMutation.isPending}
+                    >
+                      {seedIncomeTypesMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Seed Defaults"}
+                    </Button>
+                    <Button onClick={() => setIncomeTypeDialog({ mode: "add" })}>
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Type
+                    </Button>
+                  </div>
+                </div>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Slug</TableHead>
+                      <TableHead>Label</TableHead>
+                      <TableHead>Order</TableHead>
+                      <TableHead className="w-[120px]">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {incomeTypesList.map((t) => (
+                      <TableRow key={t.id}>
+                        <TableCell className="font-mono text-sm">{t.slug}</TableCell>
+                        <TableCell className="font-medium">{t.label}</TableCell>
+                        <TableCell>{t.displayOrder}</TableCell>
+                        <TableCell>
+                          <div className="flex gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setIncomeTypeDialog({ mode: "edit", type: t });
+                                setIncomeTypeForm({ slug: t.slug, label: t.label, displayOrder: t.displayOrder });
+                              }}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-destructive"
+                              onClick={() => setDeleteIncomeTypeDialog(t)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                {incomeTypesList.length === 0 && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No income types. Click &quot;Seed Defaults&quot; to add education-institute defaults, or add custom types.
                   </div>
                 )}
               </div>
@@ -726,7 +873,7 @@ export default function AdminIncome() {
               <p><span className="font-medium">Date:</span> {format(new Date(viewIncomeDialog.incomeDate), "PPP")}</p>
               <p><span className="font-medium">Amount:</span> ₹ {viewIncomeDialog.amount.toLocaleString("en-IN")}</p>
               <p><span className="font-medium">Category:</span> {viewIncomeDialog.category?.name || "-"}</p>
-              <p><span className="font-medium">Type:</span> {INCOME_TYPE_LABELS[viewIncomeDialog.incomeType] || viewIncomeDialog.incomeType}</p>
+              <p><span className="font-medium">Type:</span> {incomeTypeLabel(viewIncomeDialog.incomeType)}</p>
               <p><span className="font-medium">Source:</span> {SOURCE_LABELS[viewIncomeDialog.source] || viewIncomeDialog.source}</p>
               <p><span className="font-medium">{costCenterLabel}:</span> {viewIncomeDialog.campus?.name || "Corporate"}</p>
               <p><span className="font-medium">Particulars:</span> {viewIncomeDialog.particulars || "—"}</p>
@@ -788,8 +935,8 @@ export default function AdminIncome() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.entries(INCOME_TYPE_LABELS).map(([k, v]) => (
-                      <SelectItem key={k} value={k}>{v}</SelectItem>
+                    {incomeTypesList.map((t) => (
+                      <SelectItem key={t.id} value={t.slug}>{t.label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -865,9 +1012,9 @@ export default function AdminIncome() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.entries(INCOME_TYPE_LABELS).map(([k, v]) => (
-                    <SelectItem key={k} value={k}>{v}</SelectItem>
-                  ))}
+                  {incomeTypesList.map((t) => (
+                        <SelectItem key={t.id} value={t.slug}>{t.label}</SelectItem>
+                      ))}
                 </SelectContent>
               </Select>
             </div>
@@ -887,6 +1034,90 @@ export default function AdminIncome() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add/Edit Income Type Dialog */}
+      <Dialog open={!!incomeTypeDialog} onOpenChange={() => setIncomeTypeDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{incomeTypeDialog?.mode === "edit" ? "Edit Income Type" : "Add Income Type"}</DialogTitle>
+            <DialogDescription>
+              Income types categorize income records. Slug is used in data; label is shown to users.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!incomeTypeForm.slug.trim() || !incomeTypeForm.label.trim()) {
+                toast({ title: "Error", description: "Slug and label required", variant: "destructive" });
+                return;
+              }
+              if (incomeTypeDialog?.mode === "edit" && incomeTypeDialog.type) {
+                updateIncomeTypeMutation.mutate({ id: incomeTypeDialog.type.id, data: incomeTypeForm });
+              } else {
+                createIncomeTypeMutation.mutate(incomeTypeForm);
+              }
+            }}
+            className="space-y-4"
+          >
+            <div>
+              <Label>Slug</Label>
+              <Input
+                value={incomeTypeForm.slug}
+                onChange={(e) => setIncomeTypeForm((f) => ({ ...f, slug: e.target.value.toLowerCase().replace(/\s+/g, "_") }))}
+                placeholder="e.g., product_sales"
+                required
+                disabled={incomeTypeDialog?.mode === "edit"}
+              />
+            </div>
+            <div>
+              <Label>Label</Label>
+              <Input
+                value={incomeTypeForm.label}
+                onChange={(e) => setIncomeTypeForm((f) => ({ ...f, label: e.target.value }))}
+                placeholder="e.g., Product Sales"
+                required
+              />
+            </div>
+            <div>
+              <Label>Display Order</Label>
+              <Input
+                type="number"
+                min="0"
+                value={incomeTypeForm.displayOrder}
+                onChange={(e) => setIncomeTypeForm((f) => ({ ...f, displayOrder: parseInt(e.target.value) || 0 }))}
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setIncomeTypeDialog(null)}>Cancel</Button>
+              <Button type="submit" disabled={createIncomeTypeMutation.isPending || updateIncomeTypeMutation.isPending}>
+                {(createIncomeTypeMutation.isPending || updateIncomeTypeMutation.isPending) ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Income Type Dialog */}
+      <Dialog open={!!deleteIncomeTypeDialog} onOpenChange={() => setDeleteIncomeTypeDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Income Type</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete &quot;{deleteIncomeTypeDialog?.label}&quot;? Income records using this type will keep the slug but may show it as raw text until you add a type with the same slug.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteIncomeTypeDialog(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteIncomeTypeDialog && deleteIncomeTypeMutation.mutate(deleteIncomeTypeDialog.id)}
+              disabled={deleteIncomeTypeMutation.isPending}
+            >
+              {deleteIncomeTypeMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Delete"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

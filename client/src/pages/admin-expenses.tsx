@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "wouter";
+import { Link, useSearchParams } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -53,6 +53,7 @@ import { cn } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
+import { useCostCenterLabel } from "@/hooks/use-cost-center-label";
 import type {
   ExpenseWithDetails,
   ExpenseCategory,
@@ -462,7 +463,12 @@ const STATUS_BADGES: Record<string, { label: string; variant: "default" | "secon
 
 export default function AdminExpenses() {
   const { toast } = useToast();
-  const { canApproveExpenses, canImportExpenses } = useAuth();
+  const { user, canApproveExpenses, canImportExpenses } = useAuth();
+  const [searchParams] = useSearchParams();
+  const isSuperAdmin = user?.role === "super_admin";
+  const urlTenantId = searchParams.get("tenantId");
+  const tenantId = isSuperAdmin ? (urlTenantId || user?.tenantId || null) : user?.tenantId ?? null;
+  const { costCenterLabel } = useCostCenterLabel(tenantId);
   const [activeTab, setActiveTab] = useState("list");
   const [filters, setFilters] = useState({
     campusId: "all",
@@ -498,7 +504,8 @@ export default function AdminExpenses() {
   const [exportEnd, setExportEnd] = useState<Date | undefined>();
   const buildQueryParams = () => {
     const params = new URLSearchParams();
-    if (filters.campusId && filters.campusId !== "all") params.append("campusId", filters.campusId);
+    if (tenantId) params.append("tenantId", tenantId);
+    if (filters.campusId && filters.campusId !== "all") params.append("campusId", filters.campusId === "corporate" ? "null" : filters.campusId);
     if (filters.status && filters.status !== "all") params.append("status", filters.status);
     if (filters.categoryId && filters.categoryId !== "all") params.append("categoryId", filters.categoryId);
     if (filters.source && filters.source !== "all") params.append("source", filters.source);
@@ -507,31 +514,46 @@ export default function AdminExpenses() {
     return params.toString();
   };
 
+  const qs = tenantId ? `?tenantId=${tenantId}` : "";
   const { data: expenses = [], isLoading } = useQuery<ExpenseWithDetails[]>({
-    queryKey: ["/api/admin/expenses", filters],
+    queryKey: ["/api/admin/expenses", filters, tenantId],
     queryFn: async () => {
       const q = buildQueryParams();
-      const res = await fetch(`/api/admin/expenses${q ? `?${q}` : ""}`);
+      const res = await fetch(`/api/admin/expenses${q ? `?${q}` : ""}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
+    enabled: !!tenantId,
   });
 
   const { data: categories = [] } = useQuery<ExpenseCategory[]>({
-    queryKey: ["/api/admin/expense-categories"],
-  });
-
-  const { data: categoriesForAdmin = [] } = useQuery<ExpenseCategory[]>({
-    queryKey: ["/api/admin/expense-categories", "admin"],
+    queryKey: ["/api/admin/expense-categories", tenantId],
     queryFn: async () => {
-      const res = await fetch("/api/admin/expense-categories?includeInactive=true");
+      const res = await fetch(`/api/admin/expense-categories${tenantId ? `?tenantId=${tenantId}` : ""}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
+    enabled: !!tenantId,
+  });
+
+  const { data: categoriesForAdmin = [] } = useQuery<ExpenseCategory[]>({
+    queryKey: ["/api/admin/expense-categories", "admin", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/expense-categories?includeInactive=true${tenantId ? `&tenantId=${tenantId}` : ""}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!tenantId,
   });
 
   const { data: campuses = [] } = useQuery<Campus[]>({
-    queryKey: ["/api/campuses"],
+    queryKey: ["/api/cost-centers", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/cost-centers${qs}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!tenantId,
   });
 
   const { data: pettyCashFunds = [] } = useQuery<any[]>({
@@ -589,7 +611,7 @@ export default function AdminExpenses() {
 
   const seedMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/admin/expense-categories/seed", {});
+      const res = await apiRequest("POST", "/api/admin/expense-categories/seed", { tenantId });
       if (!res.ok) throw new Error("Failed to seed");
       return res.json();
     },
@@ -601,7 +623,7 @@ export default function AdminExpenses() {
 
   const createMutation = useMutation({
     mutationFn: async (data: any) => {
-      const res = await apiRequest("POST", "/api/admin/expenses", data);
+      const res = await apiRequest("POST", "/api/admin/expenses", { ...data, tenantId });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to create");
@@ -619,7 +641,7 @@ export default function AdminExpenses() {
 
   const submitMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await apiRequest("POST", `/api/admin/expenses/${id}/submit`, {});
+      const res = await apiRequest("POST", `/api/admin/expenses/${id}/submit`, { tenantId });
       if (!res.ok) throw new Error("Failed to submit");
       return res.json();
     },
@@ -632,7 +654,7 @@ export default function AdminExpenses() {
 
   const approveMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await apiRequest("POST", `/api/admin/expenses/${id}/approve`, {});
+      const res = await apiRequest("POST", `/api/admin/expenses/${id}/approve`, { tenantId });
       if (!res.ok) throw new Error("Failed to approve");
       return res.json();
     },
@@ -645,7 +667,7 @@ export default function AdminExpenses() {
 
   const rejectMutation = useMutation({
     mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
-      const res = await apiRequest("POST", `/api/admin/expenses/${id}/reject`, { reason });
+      const res = await apiRequest("POST", `/api/admin/expenses/${id}/reject`, { reason, tenantId });
       if (!res.ok) throw new Error("Failed to reject");
       return res.json();
     },
@@ -658,7 +680,7 @@ export default function AdminExpenses() {
 
   const payoutMutation = useMutation({
     mutationFn: async ({ id, payoutMethod, payoutRef }: { id: string; payoutMethod: string; payoutRef: string }) => {
-      const res = await apiRequest("POST", `/api/admin/expenses/${id}/payout`, { payoutMethod, payoutRef });
+      const res = await apiRequest("POST", `/api/admin/expenses/${id}/payout`, { payoutMethod, payoutRef, tenantId });
       if (!res.ok) throw new Error("Failed to record payout");
       return res.json();
     },
@@ -671,7 +693,7 @@ export default function AdminExpenses() {
 
   const updateExpenseMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: Record<string, unknown> }) => {
-      const res = await apiRequest("PATCH", `/api/admin/expenses/${id}`, data);
+      const res = await apiRequest("PATCH", `/api/admin/expenses/${id}`, { ...data, tenantId });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to update");
@@ -688,7 +710,8 @@ export default function AdminExpenses() {
 
   const deleteExpenseMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await apiRequest("DELETE", `/api/admin/expenses/${id}`);
+      const url = `/api/admin/expenses/${id}${tenantId ? `?tenantId=${tenantId}` : ""}`;
+      const res = await apiRequest("DELETE", url);
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to delete");
@@ -704,7 +727,7 @@ export default function AdminExpenses() {
 
   const createCategoryMutation = useMutation({
     mutationFn: async (data: { name: string; slug: string; cashflowLabel: string; displayOrder?: number }) => {
-      const res = await apiRequest("POST", "/api/admin/expense-categories", data);
+      const res = await apiRequest("POST", "/api/admin/expense-categories", { ...data, tenantId });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to create");
@@ -721,7 +744,7 @@ export default function AdminExpenses() {
 
   const updateCategoryMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: Partial<{ name: string; slug: string; cashflowLabel: string; displayOrder: number; isActive: boolean }> }) => {
-      const res = await apiRequest("PATCH", `/api/admin/expense-categories/${id}`, data);
+      const res = await apiRequest("PATCH", `/api/admin/expense-categories/${id}`, { ...data, tenantId });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to update");
@@ -738,7 +761,8 @@ export default function AdminExpenses() {
 
   const deleteCategoryMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await apiRequest("DELETE", `/api/admin/expense-categories/${id}`);
+      const url = `/api/admin/expense-categories/${id}${tenantId ? `?tenantId=${tenantId}` : ""}`;
+      const res = await apiRequest("DELETE", url);
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to delete");
@@ -780,11 +804,26 @@ export default function AdminExpenses() {
       return;
     }
     const params = new URLSearchParams();
+    if (tenantId) params.append("tenantId", tenantId);
     params.append("startDate", format(exportStart, "yyyy-MM-dd"));
     params.append("endDate", format(exportEnd, "yyyy-MM-dd"));
     window.open(`/api/admin/expenses/export?${params.toString()}`, "_blank");
     toast({ title: "Export started" });
   };
+
+  if (!tenantId) {
+    return (
+      <div className="container max-w-7xl py-8">
+        <Card>
+          <CardContent className="py-12 text-center">
+            <p className="text-muted-foreground">
+              {isSuperAdmin ? "Select a tenant from the dropdown above to manage expenses." : "Tenant context is required."}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="container max-w-7xl py-8">
@@ -800,7 +839,7 @@ export default function AdminExpenses() {
                 Manage campus and corporate office expenses, approvals, and payouts.
               </CardDescription>
             </div>
-            <Link href="/admin/income">
+            <Link href={tenantId ? `/admin/income?tenantId=${tenantId}` : "/admin/income"}>
               <Button variant="outline" size="sm">
                 <TrendingUp className="h-4 w-4 mr-2" />
                 Income
@@ -832,10 +871,10 @@ export default function AdminExpenses() {
                 <div className="flex flex-wrap gap-2">
                   <Select value={filters.campusId} onValueChange={(v) => setFilters((f) => ({ ...f, campusId: v }))}>
                     <SelectTrigger className="w-[180px]">
-                      <SelectValue placeholder="Campus" />
+                      <SelectValue placeholder={costCenterLabel} />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">All Campuses</SelectItem>
+                      <SelectItem value="all">All {costCenterLabel}s</SelectItem>
                       <SelectItem value="corporate">Corporate Office</SelectItem>
                       {campuses.map((c) => (
                         <SelectItem key={c.id} value={c.id}>

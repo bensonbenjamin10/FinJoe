@@ -50,10 +50,20 @@ UPDATE expense_categories SET tenant_id = (SELECT id FROM tenants WHERE slug = '
 
 -- 7. Add tenant_id to expenses
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS tenant_id varchar REFERENCES tenants(id);
-UPDATE expenses e SET tenant_id = COALESCE(
-  (SELECT c.tenant_id FROM campuses c WHERE c.id = e.campus_id),
-  (SELECT id FROM tenants WHERE slug = 'default' LIMIT 1)
-) WHERE tenant_id IS NULL;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'expenses' AND column_name = 'campus_id') THEN
+    UPDATE expenses e SET tenant_id = COALESCE(
+      (SELECT c.tenant_id FROM campuses c WHERE c.id = e.campus_id),
+      (SELECT id FROM tenants WHERE slug = 'default' LIMIT 1)
+    ) WHERE tenant_id IS NULL;
+  ELSIF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'expenses' AND column_name = 'cost_center_id') THEN
+    UPDATE expenses e SET tenant_id = COALESCE(
+      (SELECT cc.tenant_id FROM cost_centers cc WHERE cc.id = e.cost_center_id),
+      (SELECT id FROM tenants WHERE slug = 'default' LIMIT 1)
+    ) WHERE tenant_id IS NULL;
+  END IF;
+END $$;
 UPDATE expenses SET tenant_id = (SELECT id FROM tenants WHERE slug = 'default' LIMIT 1) WHERE tenant_id IS NULL;
 ALTER TABLE expenses ALTER COLUMN tenant_id SET NOT NULL;
 
@@ -113,9 +123,19 @@ ALTER TABLE finjoe_settings ALTER COLUMN tenant_id SET NOT NULL;
 -- finjoe_settings: one row per tenant
 CREATE UNIQUE INDEX IF NOT EXISTS finjoe_settings_tenant_unique ON finjoe_settings(tenant_id);
 
--- 13. Add tenant_id to petty_cash_funds (via campus)
+-- 13. Add tenant_id to petty_cash_funds (via campus or cost_center)
 ALTER TABLE petty_cash_funds ADD COLUMN IF NOT EXISTS tenant_id varchar REFERENCES tenants(id);
-UPDATE petty_cash_funds p SET tenant_id = (
-  SELECT c.tenant_id FROM campuses c WHERE c.id = p.campus_id LIMIT 1
-) WHERE tenant_id IS NULL;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'petty_cash_funds' AND column_name = 'campus_id') THEN
+    UPDATE petty_cash_funds p SET tenant_id = (
+      SELECT c.tenant_id FROM campuses c WHERE c.id = p.campus_id LIMIT 1
+    ) WHERE tenant_id IS NULL;
+  ELSIF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'petty_cash_funds' AND column_name = 'cost_center_id') THEN
+    UPDATE petty_cash_funds p SET tenant_id = (
+      SELECT cc.tenant_id FROM cost_centers cc WHERE cc.id = p.cost_center_id LIMIT 1
+    ) WHERE tenant_id IS NULL;
+  END IF;
+END $$;
+UPDATE petty_cash_funds SET tenant_id = (SELECT id FROM tenants WHERE slug = 'default' LIMIT 1) WHERE tenant_id IS NULL;
 ALTER TABLE petty_cash_funds ALTER COLUMN tenant_id SET NOT NULL;
