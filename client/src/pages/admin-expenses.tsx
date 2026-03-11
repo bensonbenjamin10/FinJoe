@@ -60,7 +60,7 @@ import type {
   Campus,
 } from "@shared/schema";
 
-function ExpenseImportWizard({ onSuccess }: { onSuccess: () => void }) {
+function ExpenseImportWizard({ tenantId, onSuccess }: { tenantId: string | null; onSuccess: () => void }) {
   const { toast } = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<{
@@ -77,7 +77,8 @@ function ExpenseImportWizard({ onSuccess }: { onSuccess: () => void }) {
     mutationFn: async (f: File) => {
       const form = new FormData();
       form.append("file", f);
-      const res = await fetch("/api/admin/expenses/import/preview", { method: "POST", body: form });
+      if (tenantId) form.append("tenantId", tenantId);
+      const res = await fetch("/api/admin/expenses/import/preview", { method: "POST", body: form, credentials: "include" });
       if (!res.ok) throw new Error((await res.json()).error || "Preview failed");
       return res.json();
     },
@@ -89,7 +90,8 @@ function ExpenseImportWizard({ onSuccess }: { onSuccess: () => void }) {
     mutationFn: async (f: File) => {
       const form = new FormData();
       form.append("file", f);
-      const res = await fetch("/api/admin/expenses/import/execute", { method: "POST", body: form });
+      if (tenantId) form.append("tenantId", tenantId);
+      const res = await fetch("/api/admin/expenses/import/execute", { method: "POST", body: form, credentials: "include" });
       if (!res.ok) throw new Error((await res.json()).error || "Import failed");
       return res.json();
     },
@@ -1308,11 +1310,14 @@ export default function AdminExpenses() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                  {!tenantId && (
+                    <p className="text-sm text-muted-foreground">Select a tenant from the dropdown above to import data.</p>
+                  )}
                   <div className="flex gap-2">
                     <Button
                       variant="outline"
                       onClick={async () => {
-                        const res = await fetch("/api/admin/expenses/import/template");
+                        const res = await fetch("/api/admin/expenses/import/template", { credentials: "include" });
                         const blob = await res.blob();
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement("a");
@@ -1327,6 +1332,7 @@ export default function AdminExpenses() {
                     </Button>
                   </div>
                   <ExpenseImportWizard
+                    tenantId={tenantId}
                     onSuccess={() => {
                       queryClient.invalidateQueries({ queryKey: ["/api/admin/expenses"] });
                       queryClient.invalidateQueries({ queryKey: ["/api/admin/income"] });

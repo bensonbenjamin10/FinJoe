@@ -1,7 +1,9 @@
 import express, { type Express } from "express";
+import multer from "multer";
 import passport from "passport";
 import { eq, and, desc, or, sql, inArray, isNull } from "drizzle-orm";
 import { db } from "./db.js";
+import { parseBankStatementCsv } from "../lib/bank-statement-parser.js";
 import { hashPassword, requireAdmin, requireSuperAdmin, getTenantId } from "./auth.js";
 import { logger } from "./logger.js";
 import {
@@ -20,6 +22,8 @@ import {
   incomeTypes,
 } from "../shared/schema.js";
 import { createFinJoeData } from "../lib/finjoe-data.js";
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 export async function registerRoutes(app: Express) {
   const http = await import("http");
@@ -1073,6 +1077,123 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("Expense category seed error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to seed" });
+    }
+  });
+
+  // Expense/Income import from bank statement CSV
+  app.post("/api/admin/expenses/import/preview", requireAdmin, upload.single("file"), async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const file = (req as any).file;
+      if (!file?.buffer) return res.status(400).json({ error: "No file uploaded" });
+
+      const expCats = await db.select({ slug: expenseCategories.slug }).from(expenseCategories).where(and(eq(expenseCategories.isActive, true), or(eq(expenseCategories.tenantId, tid), isNull(expenseCategories.tenantId))));
+      const incCats = await db.select({ slug: incomeCategories.slug }).from(incomeCategories).where(and(eq(incomeCategories.tenantId, tid), eq(incomeCategories.isActive, true)));
+      const expSlugs = expCats.map((c) => c.slug);
+      const incSlugs = incCats.length > 0 ? incCats.map((c) => c.slug) : ["other"];
+
+      const { expenses: expRows, income: incRows, skippedZero } = parseBankStatementCsv(file.buffer, expSlugs, incSlugs);
+
+      const totalExpAmount = expRows.reduce((s, r) => s + r.amount, 0);
+      const totalIncAmount = incRows.reduce((s, r) => s + r.amount, 0);
+
+      res.json({
+        preview: expRows.map((r) => ({ date: r.date, particulars: r.particulars, amount: r.amount, majorHead: r.majorHead ?? "", branch: r.branch ?? "", categoryMatch: r.categoryMatch })),
+        totalRows: expRows.length,
+        totalAmount: totalExpAmount,
+        incomePreview: incRows.map((r) => ({ date: r.date, particulars: r.particulars, amount: r.amount, categoryMatch: r.categoryMatch })),
+        incomeTotalRows: incRows.length,
+        incomeTotalAmount: totalIncAmount,
+        skippedZero,
+      });
+    } catch (e) {
+      logger.error("Import preview error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to parse CSV" });
+    }
+  });
+
+  app.post("/api/admin/expenses/import/execute", requireAdmin, upload.single("file"), async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const file = (req as any).file;
+      if (!file?.buffer) return res.status(400).json({ error: "No file uploaded" });
+
+      const expCats = await db.select({ id: expenseCategories.id, slug: expenseCategories.slug }).from(expenseCategories).where(and(eq(expenseCategories.isActive, true), or(eq(expenseCategories.tenantId, tid), isNull(expenseCategories.tenantId))));
+      const incCats = await db.select({ id: incomeCategories.id, slug: incomeCategories.slug }).from(incomeCategories).where(and(eq(incomeCategories.tenantId, tid), eq(incomeCategories.isActive, true)));
+      const costCentersList = await db.select({ id: costCenters.id, name: costCenters.name, slug: costCenters.slug }).from(costCenters).where(and(eq(costCenters.tenantId, tid), eq(costCenters.isActive, true)));
+
+      const expSlugToId = Object.fromEntries(expCats.map((c) => [c.slug, c.id]));
+      const incSlugToId = Object.fromEntries(incCats.map((c) => [c.slug, c.id]));
+      const branchToCcId = (name: string | undefined): string | null => {
+        if (!name?.trim()) return null;
+        const n = name.trim().toLowerCase();
+        const match = costCentersList.find((c) => c.name.toLowerCase() === n || c.slug.toLowerCase() === n);
+        return match?.id ?? null;
+      };
+
+      const { expenses: expRows, income: incRows } = parseBankStatementCsv(file.buffer, expCats.map((c) => c.slug), incCats.length > 0 ? incCats.map((c) => c.slug) : ["other"]);
+
+      let imported = 0;
+      let incomeImported = 0;
+
+      for (const r of expRows) {
+        const categoryId = expSlugToId[r.categoryMatch] ?? expCats[0]?.id;
+        if (!categoryId) continue;
+        const ccId = branchToCcId(r.branch);
+        await db.insert(expenses).values({
+          tenantId: tid,
+          costCenterId: ccId,
+          categoryId,
+          amount: r.amount,
+          expenseDate: new Date(r.date),
+          description: r.particulars || "Bank import",
+          status: "draft",
+          source: "bank_import",
+        });
+        imported++;
+      }
+
+      const defaultIncCatId = incCats[0]?.id;
+      for (const r of incRows) {
+        const categoryId = incSlugToId[r.categoryMatch] ?? defaultIncCatId;
+        if (!categoryId) continue;
+        await db.insert(incomeRecords).values({
+          tenantId: tid,
+          costCenterId: null,
+          categoryId,
+          amount: r.amount,
+          incomeDate: new Date(r.date),
+          particulars: r.particulars || "Bank import",
+          incomeType: "other",
+          source: "bank_import",
+        });
+        incomeImported++;
+      }
+
+      res.json({ imported, incomeImported });
+    } catch (e) {
+      logger.error("Import execute error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to import" });
+    }
+  });
+
+  app.get("/api/admin/expenses/import/template", requireAdmin, async (req, res) => {
+    try {
+      const csv = "Date,Particulars,Withdrawals,Deposits,A/C,Major Head,Branch\n01-01-2025,Sample payment,1000,0,,,HO\n02-01-2025,Sample deposit,0,5000,,,HO";
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", "attachment; filename=expense-import-template.csv");
+      res.send(csv);
+    } catch (e) {
+      logger.error("Import template error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to generate template" });
     }
   });
 
