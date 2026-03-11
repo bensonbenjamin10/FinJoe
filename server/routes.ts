@@ -1,6 +1,6 @@
 import express, { type Express } from "express";
 import passport from "passport";
-import { eq, and, desc, or, sql } from "drizzle-orm";
+import { eq, and, desc, or, sql, inArray } from "drizzle-orm";
 import { db } from "./db.js";
 import { hashPassword, requireAdmin, requireSuperAdmin, getTenantId } from "./auth.js";
 import { logger } from "./logger.js";
@@ -61,7 +61,11 @@ export async function registerRoutes(app: Express) {
 
   app.get("/api/setup/status", async (_req, res) => {
     try {
-      const [admin] = await db.select().from(users).where(eq(users.role, "admin")).limit(1);
+      const [admin] = await db
+        .select()
+        .from(users)
+        .where(inArray(users.role, ["admin", "super_admin"]))
+        .limit(1);
       res.json({ setupComplete: !!admin, needsSetup: !admin });
     } catch {
       res.json({ setupComplete: false, needsSetup: true });
