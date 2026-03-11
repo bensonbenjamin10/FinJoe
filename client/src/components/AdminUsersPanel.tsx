@@ -37,7 +37,8 @@ type AdminUser = {
   name: string;
   email: string;
   role: string;
-  campusId: string | null;
+  campusId?: string | null;
+  costCenterId?: string | null;
   isActive: boolean;
   createdAt: string;
 };
@@ -47,6 +48,7 @@ const ROLES = [
   "admin",
   "cashier",
   "finance",
+  "cost_center_coordinator",
   "campus_coordinator",
   "head_office",
 ] as const;
@@ -55,6 +57,7 @@ const ROLE_BADGE_STYLES: Record<string, string> = {
   admin: "bg-red-500/20 text-red-700 dark:text-red-400 border-red-500/30",
   cashier: "bg-amber-500/20 text-amber-700 dark:text-amber-400 border-amber-500/30",
   finance: "bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border-emerald-500/30",
+  cost_center_coordinator: "bg-blue-500/20 text-blue-700 dark:text-blue-400 border-blue-500/30",
   campus_coordinator: "bg-blue-500/20 text-blue-700 dark:text-blue-400 border-blue-500/30",
   head_office: "bg-purple-500/20 text-purple-700 dark:text-purple-400 border-purple-500/30",
   student: "bg-slate-500/20 text-slate-700 dark:text-slate-400 border-slate-500/30",
@@ -121,22 +124,25 @@ export default function AdminUsersPanel() {
     setEditDialog({ open: true, user });
     setEditForm({
       role: user.role,
-      campusId: user.campusId ?? "__none__",
+      campusId: (user.costCenterId ?? user.campusId) ?? "__none__",
     });
   };
 
   const handleSaveEdit = () => {
     if (!editDialog.user) return;
     const { role, campusId } = editForm;
-    const payload: { role: string; campusId?: string | null } = { role };
-    if (role === "campus_coordinator") {
+    const payload: { role: string; campusId?: string | null; costCenterId?: string | null } = { role };
+    const isCoordinator = role === "cost_center_coordinator" || role === "campus_coordinator";
+    if (isCoordinator) {
       if (!campusId || campusId === "__none__") {
-        toast({ title: "Campus is required for campus coordinator", variant: "destructive" });
+        toast({ title: "Cost center is required for coordinator role", variant: "destructive" });
         return;
       }
       payload.campusId = campusId;
+      payload.costCenterId = campusId;
     } else {
       payload.campusId = null;
+      payload.costCenterId = null;
     }
     updateUserMutation.mutate({ id: editDialog.user.id, data: payload });
   };
@@ -149,7 +155,7 @@ export default function AdminUsersPanel() {
           Users & Roles
         </CardTitle>
         <CardDescription>
-          View and manage user roles and campus assignments
+          View and manage user roles and cost center assignments
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -185,10 +191,10 @@ export default function AdminUsersPanel() {
             onValueChange={(v) => setFilters((f) => ({ ...f, campusId: v }))}
           >
             <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Filter by campus" />
+              <SelectValue placeholder="Filter by cost center" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All campuses</SelectItem>
+              <SelectItem value="all">All cost centers</SelectItem>
               {campuses?.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
                   {c.name}
@@ -220,7 +226,7 @@ export default function AdminUsersPanel() {
                   <TableHead>Name</TableHead>
                   <TableHead>Email</TableHead>
                   <TableHead>Role</TableHead>
-                  <TableHead>Campus</TableHead>
+                  <TableHead>Cost Center</TableHead>
                   <TableHead>Active</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead className="w-[80px]">Actions</TableHead>
@@ -235,8 +241,8 @@ export default function AdminUsersPanel() {
                       <RoleBadge role={user.role} />
                     </TableCell>
                     <TableCell>
-                      {user.campusId
-                        ? campuses?.find((c) => c.id === user.campusId)?.name ?? user.campusId
+                      {(user.costCenterId ?? user.campusId)
+                        ? campuses?.find((c) => c.id === (user.costCenterId ?? user.campusId))?.name ?? (user.costCenterId ?? user.campusId)
                         : "—"}
                     </TableCell>
                     <TableCell>
@@ -293,18 +299,18 @@ export default function AdminUsersPanel() {
                 </SelectContent>
               </Select>
             </div>
-            {editForm.role === "campus_coordinator" && (
+            {(editForm.role === "cost_center_coordinator" || editForm.role === "campus_coordinator") && (
               <div>
-                <label className="text-sm font-medium mb-2 block">Campus *</label>
+                <label className="text-sm font-medium mb-2 block">Cost Center *</label>
                 <Select
                   value={editForm.campusId}
                   onValueChange={(v) => setEditForm((f) => ({ ...f, campusId: v }))}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Select campus" />
+                    <SelectValue placeholder="Select cost center" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__none__">Select campus</SelectItem>
+                    <SelectItem value="__none__">Select cost center</SelectItem>
                     {campuses?.map((c) => (
                       <SelectItem key={c.id} value={c.id}>
                         {c.name}

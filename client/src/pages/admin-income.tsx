@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Link } from "wouter";
+import { Link, useSearchParams } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -46,6 +46,7 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import type {
   IncomeWithDetails,
   IncomeCategory,
@@ -67,6 +68,11 @@ const SOURCE_LABELS: Record<string, string> = {
 
 export default function AdminIncome() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const [searchParams] = useSearchParams();
+  const isSuperAdmin = user?.role === "super_admin";
+  const urlTenantId = searchParams.get("tenantId");
+  const tenantId = isSuperAdmin ? (urlTenantId || user?.tenantId || null) : user?.tenantId ?? null;
   const [activeTab, setActiveTab] = useState("list");
   const [filters, setFilters] = useState({
     campusId: "all",
@@ -109,6 +115,7 @@ export default function AdminIncome() {
 
   const buildQueryParams = () => {
     const params = new URLSearchParams();
+    if (tenantId) params.append("tenantId", tenantId);
     if (filters.campusId && filters.campusId !== "all") params.append("campusId", filters.campusId === "corporate" ? "null" : filters.campusId);
     if (filters.categoryId && filters.categoryId !== "all") params.append("categoryId", filters.categoryId);
     if (filters.startDate) params.append("startDate", filters.startDate);
@@ -118,41 +125,57 @@ export default function AdminIncome() {
   };
 
   const { data: incomeList = [], isLoading } = useQuery<IncomeWithDetails[]>({
-    queryKey: ["/api/admin/income", filters],
+    queryKey: ["/api/admin/income", filters, tenantId],
     queryFn: async () => {
       const q = buildQueryParams();
-      const res = await fetch(`/api/admin/income${q ? `?${q}` : ""}`);
+      const res = await fetch(`/api/admin/income${q ? `?${q}` : ""}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
+    enabled: !!tenantId,
   });
 
   const { data: categories = [] } = useQuery<IncomeCategory[]>({
-    queryKey: ["/api/admin/income-categories"],
-  });
-
-  const { data: categoriesForAdmin = [] } = useQuery<IncomeCategory[]>({
-    queryKey: ["/api/admin/income-categories", "admin"],
+    queryKey: ["/api/admin/income-categories", tenantId],
     queryFn: async () => {
-      const res = await fetch("/api/admin/income-categories?includeInactive=true");
+      const res = await fetch(`/api/admin/income-categories${tenantId ? `?tenantId=${tenantId}` : ""}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
+    enabled: !!tenantId,
   });
 
+  const { data: categoriesForAdmin = [] } = useQuery<IncomeCategory[]>({
+    queryKey: ["/api/admin/income-categories", "admin", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/income-categories?includeInactive=true${tenantId ? `&tenantId=${tenantId}` : ""}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+
+  const qs = tenantId ? `?tenantId=${tenantId}` : "";
   const { data: campuses = [] } = useQuery<Campus[]>({
-    queryKey: ["/api/campuses"],
+    queryKey: ["/api/campuses", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/campuses${qs}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!tenantId,
   });
 
   const { data: suggestionsData } = useQuery<{ suggestions: Array<{ registration: RegistrationWithDetails; score: number; reason: string }> }>({
     queryKey: ["/api/admin/income/suggestions", mapIncomeDialog?.id],
     queryFn: async () => {
       if (!mapIncomeDialog) return { suggestions: [] };
-      const res = await fetch(`/api/admin/income/${mapIncomeDialog.id}/suggestions`);
-      if (!res.ok) throw new Error("Failed to fetch");
+      const res = await fetch(`/api/admin/income/${mapIncomeDialog.id}/suggestions`, { credentials: "include" });
+      if (!res.ok) return { suggestions: [] };
       return res.json();
     },
-    enabled: !!mapIncomeDialog,
+    enabled: !!mapIncomeDialog && !!tenantId,
+    retry: false,
   });
 
   const suggestions = suggestionsData?.suggestions ?? [];
@@ -162,11 +185,12 @@ export default function AdminIncome() {
     queryFn: async () => {
       const params = new URLSearchParams();
       if (mapSearch.trim()) params.append("search", mapSearch.trim());
-      const res = await fetch(`/api/admin/registrations${params.toString() ? `?${params.toString()}` : ""}`);
-      if (!res.ok) throw new Error("Failed to fetch");
+      const res = await fetch(`/api/admin/registrations${params.toString() ? `?${params.toString()}` : ""}`, { credentials: "include" });
+      if (!res.ok) return [];
       return res.json();
     },
     enabled: !!mapIncomeDialog && mapSearch.trim().length >= 2,
+    retry: false,
   });
 
   const mapMutation = useMutation({
@@ -190,7 +214,7 @@ export default function AdminIncome() {
 
   const createMutation = useMutation({
     mutationFn: async (data: any) => {
-      const res = await apiRequest("POST", "/api/admin/income", data);
+      const res = await apiRequest("POST", "/api/admin/income", { ...data, tenantId });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to create");
@@ -208,7 +232,7 @@ export default function AdminIncome() {
 
   const updateIncomeMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: any }) => {
-      const res = await apiRequest("PATCH", `/api/admin/income/${id}`, data);
+      const res = await apiRequest("PATCH", `/api/admin/income/${id}`, { ...data, tenantId });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to update");
@@ -304,17 +328,30 @@ export default function AdminIncome() {
     queryKey: ["/api/admin/reconciliation", reconStartDate, reconEndDate],
     queryFn: async () => {
       const params = new URLSearchParams({ startDate: reconStartDate, endDate: reconEndDate });
-      const res = await fetch(`/api/admin/reconciliation?${params}`);
-      if (!res.ok) throw new Error("Failed to fetch");
+      const res = await fetch(`/api/admin/reconciliation?${params}`, { credentials: "include" });
+      if (!res.ok) return { totalIncome: 0, totalExpenses: 0, bankNet: 0, unmappedIncomeCount: 0, unmappedIncomeAmount: 0, incomeCount: 0, expenseCount: 0 };
       return res.json();
     },
     enabled: activeTab === "reconciliation",
+    retry: false,
   });
+
+  if (!tenantId) {
+    return (
+      <div className="container max-w-7xl py-8">
+        <Card>
+          <CardContent className="py-12 text-center text-muted-foreground">
+            {isSuperAdmin ? "Select a tenant to manage income." : "Tenant context required."}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="container max-w-7xl py-8">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/admin/expenses">
+        <Link href="/admin/finjoe">
           <Button variant="ghost" size="icon">
             <ArrowLeft className="h-4 w-4" />
           </Button>

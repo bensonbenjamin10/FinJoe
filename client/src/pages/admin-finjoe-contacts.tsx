@@ -33,7 +33,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { FinJoeContact, Campus } from "@shared/schema";
 
-const ROLES = ["campus_coordinator", "head_office", "finance", "admin", "vendor", "faculty", "student", "guest"] as const;
+const ROLES = ["cost_center_coordinator", "campus_coordinator", "head_office", "finance", "admin", "vendor", "faculty", "student", "guest"] as const;
 
 export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | null }) {
   const { toast } = useToast();
@@ -85,6 +85,7 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
         role: data.role,
         name: data.name || undefined,
         campusId: data.campusId || undefined,
+        costCenterId: data.campusId || undefined,
         studentId: data.studentId || undefined,
       });
       if (!res.ok) {
@@ -151,7 +152,7 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
       phone: c.phone,
       role: c.role as (typeof ROLES)[number],
       name: c.name || "",
-      campusId: c.campusId || "",
+      campusId: (c as { costCenterId?: string; campusId?: string }).costCenterId ?? c.campusId ?? "",
       studentId: c.studentId || "",
       isActive: c.isActive,
     });
@@ -170,6 +171,7 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
           role: form.role,
           name: form.name,
           campusId: form.campusId || undefined,
+          costCenterId: form.campusId || undefined,
           studentId: studentIdValue,
           isActive: form.isActive,
         } as Parameters<typeof updateMutation.mutate>[0] extends { data: infer D } ? D : never,
@@ -217,7 +219,7 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
                   <TableHead className="px-6 py-4">Phone</TableHead>
                   <TableHead className="px-6 py-4">Name</TableHead>
                   <TableHead className="px-6 py-4">Role</TableHead>
-                  <TableHead className="px-6 py-4">Campus</TableHead>
+                  <TableHead className="px-6 py-4">Cost Center</TableHead>
                   <TableHead className="px-6 py-4">Linked user</TableHead>
                   <TableHead className="px-6 py-4">Status</TableHead>
                   <TableHead className="w-[100px] px-6 py-4">Actions</TableHead>
@@ -232,7 +234,7 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
                       <span className="capitalize">{c.role}</span>
                     </TableCell>
                     <TableCell className="px-6 py-4">
-                      {campuses.find((x) => x.id === c.campusId)?.name || "-"}
+                      {campuses.find((x) => x.id === ((c as { costCenterId?: string; campusId?: string }).costCenterId ?? c.campusId))?.name || "-"}
                     </TableCell>
                     <TableCell className="px-6 py-4">
                       {c.studentId

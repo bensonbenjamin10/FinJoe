@@ -1,5 +1,5 @@
 /**
- * Fetch system context (campuses, categories, audit requirements) for FinJoe prompts.
+ * Fetch system context (cost centers, categories, audit requirements) for FinJoe prompts.
  * Uses direct DB access via lib/finjoe-data.
  */
 
@@ -15,20 +15,22 @@ export async function fetchSystemContext(tenantId: string): Promise<string> {
   if (cached && Date.now() - cached.at < CONTEXT_CACHE_TTL_MS) return cached.context;
 
   const finJoeData = createFinJoeData(db, tenantId);
-  const [campuses, categories, audit] = await Promise.all([
-    finJoeData.getCampuses(),
+  const [costCenters, categories, audit, settings] = await Promise.all([
+    finJoeData.getCostCenters(),
     finJoeData.getExpenseCategories(),
     Promise.resolve(finJoeData.getAuditRequirements()),
+    finJoeData.getFinJoeSettings(),
   ]);
 
-  const campusList = campuses?.map((c) => c.name).join(", ") || "Corporate Office";
+  const costCenterLabel = settings?.costCenterLabel ?? "Cost Center";
+  const costCenterList = costCenters?.map((c) => c.name).join(", ") || "Corporate Office";
   const categoryList = categories?.map((c) => c.name).join(", ") || "Operating Expenses";
   const auditDesc = audit
     ? `Required: ${audit.required.join(", ")}. Optional: ${audit.optional.join(", ")}. GSTIN: ${audit.gstinFormat}. Tax types: ${audit.taxTypes.join(", ")}.`
     : "Required: invoice number, date, vendor name. Optional: GSTIN (15 chars), tax type (no_gst, gst_itc, gst_rcm, gst_no_itc).";
 
   const context = `SYSTEM DATA:
-Campuses: ${campusList}
+${costCenterLabel}s: ${costCenterList}
 Expense categories: ${categoryList}
 Audit compliance: ${auditDesc}`;
   contextCache.set(tenantId, { context, at: Date.now() });
@@ -41,21 +43,24 @@ export function clearSystemContextCache(tenantId?: string) {
   else contextCache.clear();
 }
 
-export type CampusInfo = { id: string; name: string; slug: string };
+export type CostCenterInfo = { id: string; name: string; slug: string };
+export type CampusInfo = CostCenterInfo;
 export type CategoryInfo = { id: string; name: string; slug: string };
 
-/** Fetch structured campuses and categories for validation and mapping */
+/** Fetch structured cost centers and categories for validation and mapping */
 export async function fetchSystemData(tenantId: string): Promise<{
-  campuses: CampusInfo[];
+  costCenters: CostCenterInfo[];
+  campuses: CostCenterInfo[];
   categories: CategoryInfo[];
 }> {
   const finJoeData = createFinJoeData(db, tenantId);
-  const [campuses, categories] = await Promise.all([
-    finJoeData.getCampuses(),
+  const [costCenters, categories] = await Promise.all([
+    finJoeData.getCostCenters(),
     finJoeData.getExpenseCategories(),
   ]);
   return {
-    campuses: campuses ?? [],
+    costCenters: costCenters ?? [],
+    campuses: costCenters ?? [],
     categories: categories ?? [],
   };
 }
@@ -76,17 +81,20 @@ export function resolveCategoryFromMessage(
 
 const CORPORATE_ALIASES = ["ho", "head office", "corporate", "hq", "corporate office"];
 
-/** Map user message/campus name to campus id. */
-export function resolveCampusFromMessage(
+/** Map user message/cost center name to cost center id. */
+export function resolveCostCenterFromMessage(
   message: string,
-  campuses: CampusInfo[]
+  costCenters: CostCenterInfo[]
 ): string | null {
   const lower = message.trim().toLowerCase();
   if (!lower) return null;
   if (CORPORATE_ALIASES.includes(lower)) return "__corporate__";
-  const bySlug = campuses.find((c) => c.slug.toLowerCase() === lower || c.slug.toLowerCase().replace(/-/g, " ") === lower);
+  const bySlug = costCenters.find((c) => c.slug.toLowerCase() === lower || c.slug.toLowerCase().replace(/-/g, " ") === lower);
   if (bySlug) return bySlug.id;
-  const byName = campuses.find((c) => c.name.toLowerCase().includes(lower) || lower.includes(c.name.toLowerCase()));
+  const byName = costCenters.find((c) => c.name.toLowerCase().includes(lower) || lower.includes(c.name.toLowerCase()));
   if (byName) return byName.id;
   return null;
 }
+
+/** Legacy alias for backward compatibility */
+export const resolveCampusFromMessage = resolveCostCenterFromMessage;

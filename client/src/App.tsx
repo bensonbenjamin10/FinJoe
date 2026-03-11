@@ -7,6 +7,7 @@ import Landing from "@/pages/landing";
 import Login from "@/pages/login";
 import Setup from "@/pages/setup";
 import AdminFinJoe from "@/pages/admin-finjoe";
+import AdminIncome from "@/pages/admin-income";
 import AdminTenants from "@/pages/admin-tenants";
 import AdminTenantUsers from "@/pages/admin-tenant-users";
 import AdminAccountSettings from "@/pages/admin-account-settings";
@@ -45,6 +46,13 @@ function Router() {
           <ProtectedRoute>
             <AdminShell>
               <AdminFinJoe />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/income">
+          <ProtectedRoute>
+            <AdminShell>
+              <AdminIncome />
             </AdminShell>
           </ProtectedRoute>
         </Route>

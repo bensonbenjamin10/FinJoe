@@ -9,7 +9,7 @@ import type { ExtractedExpenseRow } from "./agent/gemini.js";
 const AMOUNT_HEADERS = ["amount", "Amount", "AMOUNT", "Withdrawals", "withdrawals"];
 const VENDOR_HEADERS = ["name", "Name", "vendorName", "Vendor", "Payee"];
 const DESCRIPTION_HEADERS = ["particulars", "Particulars", "description", "Description"];
-const CAMPUS_HEADERS = ["campus", "Campus", "Location", "location"];
+const COST_CENTER_HEADERS = ["cost center", "Cost Center", "campus", "Campus", "Location", "location", "branch", "Branch", "department", "Department"];
 
 function findColumn(row: Record<string, string>, headers: string[]): string | undefined {
   const keys = Object.keys(row);
@@ -35,13 +35,13 @@ export function parseExpensesFromCsv(buffer: Buffer): ExtractedExpenseRow[] {
 
     const vendorName = findColumn(row, VENDOR_HEADERS);
     const description = findColumn(row, DESCRIPTION_HEADERS);
-    const campus = findColumn(row, CAMPUS_HEADERS);
+    const costCenter = findColumn(row, COST_CENTER_HEADERS);
 
     result.push({
       amount,
       vendorName: vendorName || undefined,
       description: description || undefined,
-      campus: campus || undefined,
+      campus: costCenter || undefined,
     });
   }
 

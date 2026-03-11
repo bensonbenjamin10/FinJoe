@@ -40,18 +40,22 @@ export const tenantWabaProviders = pgTable("tenant_waba_providers", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-// Campuses - minimal for FinJoe (tenant_id, slug unique via migration)
-export const campuses = pgTable("campuses", {
+// Cost Centers - tenant-configurable (campus, branch, department, etc.)
+export const costCenters = pgTable("cost_centers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id")
     .notNull()
     .references(() => tenants.id),
   name: text("name").notNull(),
   slug: text("slug").notNull(),
+  type: varchar("type"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+// Legacy alias for backward compatibility
+export const campuses = costCenters;
 
 // Users - FinJoe's equivalent of students (admin, finance, etc.). tenant_id null = super_admin
 export const users = pgTable("users", {
@@ -61,7 +65,7 @@ export const users = pgTable("users", {
   passwordHash: text("password_hash").notNull(),
   name: text("name").notNull(),
   role: text("role").notNull().default("admin"),
-  campusId: varchar("campus_id").references(() => campuses.id),
+  costCenterId: varchar("cost_center_id").references(() => costCenters.id),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -87,7 +91,7 @@ export const pettyCashFunds = pgTable("petty_cash_funds", {
   tenantId: varchar("tenant_id")
     .notNull()
     .references(() => tenants.id),
-  campusId: varchar("campus_id").references(() => campuses.id).notNull(),
+  costCenterId: varchar("cost_center_id").references(() => costCenters.id).notNull(),
   custodianId: varchar("custodian_id").references(() => users.id).notNull(),
   imprestAmount: integer("imprest_amount").notNull(),
   currentBalance: integer("current_balance").notNull().default(0),
@@ -101,7 +105,7 @@ export const expenses = pgTable("expenses", {
   tenantId: varchar("tenant_id")
     .notNull()
     .references(() => tenants.id),
-  campusId: varchar("campus_id").references(() => campuses.id),
+  costCenterId: varchar("cost_center_id").references(() => costCenters.id),
   categoryId: varchar("category_id").references(() => expenseCategories.id).notNull(),
   amount: integer("amount").notNull(),
   expenseDate: timestamp("expense_date").notNull(),
@@ -152,7 +156,7 @@ export const finJoeContacts = pgTable("fin_joe_contacts", {
   role: text("role").notNull(),
   studentId: varchar("student_id").references(() => users.id),
   name: text("name"),
-  campusId: varchar("campus_id").references(() => campuses.id),
+  costCenterId: varchar("cost_center_id").references(() => costCenters.id),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -207,7 +211,7 @@ export const finJoeRoleChangeRequests = pgTable("fin_joe_role_change_requests", 
   contactPhone: varchar("contact_phone").notNull(),
   requestedRole: text("requested_role").notNull(),
   name: text("name"),
-  campusId: varchar("campus_id").references(() => campuses.id),
+  costCenterId: varchar("cost_center_id").references(() => costCenters.id),
   studentId: varchar("student_id").references(() => users.id),
   status: text("status").notNull().default("pending"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -248,6 +252,40 @@ export const finjoeSettings = pgTable("finjoe_settings", {
   notificationEmails: text("notification_emails"),
   resendFromEmail: text("resend_from_email"),
   smsFrom: text("sms_from"),
+  costCenterLabel: text("cost_center_label"),
+  costCenterType: text("cost_center_type"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Income categories (tenant-scoped)
+export const incomeCategories = pgTable("income_categories", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
+  name: text("name").notNull(),
+  slug: text("slug").notNull(),
+  incomeType: text("income_type").notNull().default("other"),
+  displayOrder: integer("display_order").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Income records
+export const incomeRecords = pgTable("income_records", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
+  costCenterId: varchar("cost_center_id").references(() => costCenters.id),
+  categoryId: varchar("category_id").references(() => incomeCategories.id),
+  amount: integer("amount").notNull(),
+  incomeDate: timestamp("income_date").notNull(),
+  particulars: text("particulars"),
+  incomeType: text("income_type").notNull().default("other"),
+  source: text("source").notNull().default("manual"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
@@ -262,7 +300,8 @@ export const platformSettings = pgTable("platform_settings", {
 
 // Relations
 export const tenantsRelations = relations(tenants, ({ many }) => ({
-  campuses: many(campuses),
+  costCenters: many(costCenters),
+  campuses: many(costCenters),
   users: many(users),
   finJoeContacts: many(finJoeContacts),
   finjoeSettings: many(finjoeSettings),
@@ -273,18 +312,19 @@ export const tenantWabaProvidersRelations = relations(tenantWabaProviders, ({ on
   tenant: one(tenants, { fields: [tenantWabaProviders.tenantId], references: [tenants.id] }),
 }));
 
-export const campusesRelations = relations(campuses, ({ one, many }) => ({
-  tenant: one(tenants, { fields: [campuses.tenantId], references: [tenants.id] }),
+export const costCentersRelations = relations(costCenters, ({ one, many }) => ({
+  tenant: one(tenants, { fields: [costCenters.tenantId], references: [tenants.id] }),
   users: many(users),
-  expenseCategories: many(expenseCategories),
   pettyCashFunds: many(pettyCashFunds),
   finJoeContacts: many(finJoeContacts),
   finJoeRoleChangeRequests: many(finJoeRoleChangeRequests),
 }));
 
+export const campusesRelations = costCentersRelations;
+
 export const usersRelations = relations(users, ({ one, many }) => ({
   tenant: one(tenants, { fields: [users.tenantId], references: [tenants.id] }),
-  campus: one(campuses, { fields: [users.campusId], references: [campuses.id] }),
+  costCenter: one(costCenters, { fields: [users.costCenterId], references: [costCenters.id] }),
   finJoeContacts: many(finJoeContacts),
 }));
 
@@ -293,7 +333,7 @@ export const expenseCategoriesRelations = relations(expenseCategories, ({ many }
 }));
 
 export const expensesRelations = relations(expenses, ({ one, many }) => ({
-  campus: one(campuses, { fields: [expenses.campusId], references: [campuses.id] }),
+  costCenter: one(costCenters, { fields: [expenses.costCenterId], references: [costCenters.id] }),
   category: one(expenseCategories, { fields: [expenses.categoryId], references: [expenseCategories.id] }),
   submittedBy: one(users, { fields: [expenses.submittedById], references: [users.id] }),
   approvedBy: one(users, { fields: [expenses.approvedById], references: [users.id] }),
@@ -303,7 +343,7 @@ export const expensesRelations = relations(expenses, ({ one, many }) => ({
 export const finJoeContactsRelations = relations(finJoeContacts, ({ one, many }) => ({
   tenant: one(tenants, { fields: [finJoeContacts.tenantId], references: [tenants.id] }),
   user: one(users, { fields: [finJoeContacts.studentId], references: [users.id] }),
-  campus: one(campuses, { fields: [finJoeContacts.campusId], references: [campuses.id] }),
+  costCenter: one(costCenters, { fields: [finJoeContacts.costCenterId], references: [costCenters.id] }),
   conversations: many(finJoeConversations),
   roleChangeRequests: many(finJoeRoleChangeRequests),
 }));
@@ -325,7 +365,7 @@ export const finJoeMediaRelations = relations(finJoeMedia, ({ one }) => ({
 
 export const finJoeRoleChangeRequestsRelations = relations(finJoeRoleChangeRequests, ({ one }) => ({
   tenant: one(tenants, { fields: [finJoeRoleChangeRequests.tenantId], references: [tenants.id] }),
-  campus: one(campuses, { fields: [finJoeRoleChangeRequests.campusId], references: [campuses.id] }),
+  costCenter: one(costCenters, { fields: [finJoeRoleChangeRequests.costCenterId], references: [costCenters.id] }),
   user: one(users, { fields: [finJoeRoleChangeRequests.studentId], references: [users.id] }),
   approvedByUser: one(users, { fields: [finJoeRoleChangeRequests.approvedBy], references: [users.id] }),
 }));
@@ -340,8 +380,10 @@ export type Tenant = typeof tenants.$inferSelect;
 export type InsertTenant = typeof tenants.$inferInsert;
 export type TenantWabaProvider = typeof tenantWabaProviders.$inferSelect;
 export type InsertTenantWabaProvider = typeof tenantWabaProviders.$inferInsert;
-export type Campus = typeof campuses.$inferSelect;
-export type InsertCampus = typeof campuses.$inferInsert;
+export type CostCenter = typeof costCenters.$inferSelect;
+export type InsertCostCenter = typeof costCenters.$inferInsert;
+export type Campus = CostCenter;
+export type InsertCampus = InsertCostCenter;
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type ExpenseCategory = typeof expenseCategories.$inferSelect;
@@ -364,3 +406,16 @@ export type FinjoeSettings = typeof finjoeSettings.$inferSelect;
 export type InsertFinjoeSettings = typeof finjoeSettings.$inferInsert;
 export type PlatformSettings = typeof platformSettings.$inferSelect;
 export type InsertPlatformSettings = typeof platformSettings.$inferInsert;
+export type IncomeCategory = typeof incomeCategories.$inferSelect;
+export type InsertIncomeCategory = typeof incomeCategories.$inferInsert;
+export type IncomeRecord = typeof incomeRecords.$inferSelect;
+export type InsertIncomeRecord = typeof incomeRecords.$inferInsert;
+
+export type IncomeWithDetails = IncomeRecord & {
+  costCenterName?: string | null;
+  categoryName?: string | null;
+  campusId?: string | null;
+  campusName?: string | null;
+};
+
+export type RegistrationWithDetails = Record<string, unknown>;

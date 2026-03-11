@@ -317,7 +317,8 @@ async function executeFunctionCall(
 
   switch (name) {
     case "create_expense": {
-      const amount = typeof args.amount === "number" ? Math.round(args.amount) : args.amount;
+      const amountVal = typeof args.amount === "number" ? Math.round(args.amount) : parseAmount(args.amount);
+      const amount = amountVal ?? 0;
       let categoryId = String(args.categoryId ?? "");
       let campusId = args.campusId ? String(args.campusId) : null;
       if (categoryId && !validCategoryIds.includes(categoryId)) {
@@ -360,7 +361,7 @@ async function executeFunctionCall(
       try {
         expense = await finJoeData.createExpense({
           tenantId,
-          campusId: expenseData.campusId,
+          costCenterId: expenseData.campusId,
           categoryId: expenseData.categoryId,
           amount: expenseData.amount,
           expenseDate: expenseData.expenseDate,
@@ -475,7 +476,7 @@ async function executeFunctionCall(
         try {
           const expense = await finJoeData.createExpense({
             tenantId,
-            campusId: item.campusId,
+            costCenterId: item.campusId,
             categoryId: item.categoryId,
             amount: item.amount,
             expenseDate: item.expenseDate,
@@ -539,7 +540,7 @@ async function executeFunctionCall(
           contactPhone,
           requestedRole,
           name,
-          campusId,
+          costCenterId: campusId,
           studentId,
         });
       } catch (err) {
@@ -557,10 +558,10 @@ async function executeFunctionCall(
     }
 
     case "store_pending_expense": {
-      const amount = typeof args.amount === "number" ? Math.round(args.amount) : args.amount;
+      const amountVal = typeof args.amount === "number" ? Math.round(args.amount) : parseAmount(args.amount);
       const missingFields = Array.isArray(args.missingFields) ? args.missingFields.map(String) : [];
       const extracted: ExtractedExpense & { categoryId?: string; campusId?: string | null } = {
-        amount: amount ?? undefined,
+        amount: amountVal ?? undefined,
         vendorName: args.vendorName ? String(args.vendorName) : undefined,
         invoiceNumber: args.invoiceNumber ? String(args.invoiceNumber) : undefined,
         invoiceDate: args.invoiceDate ? String(args.invoiceDate) : undefined,
@@ -607,7 +608,7 @@ async function executeFunctionCall(
       const startDate = args.startDate ? String(args.startDate) : undefined;
       const endDate = args.endDate ? String(args.endDate) : undefined;
       const limit = typeof args.limit === "number" ? Math.min(Math.max(1, args.limit), 100) : undefined;
-      const rows = await finJoeData.listExpenses({ campusId, status, categoryId, startDate, endDate, limit });
+      const rows = await finJoeData.listExpenses({ costCenterId: campusId, campusId, status, categoryId, startDate, endDate, limit });
       return { success: true, data: { expenses: rows } };
     }
 
@@ -639,7 +640,7 @@ async function executeFunctionCall(
       }
       const updates: {
         amount?: number;
-        campusId?: string | null;
+        costCenterId?: string | null;
         categoryId?: string;
         expenseDate?: string;
         description?: string | null;
@@ -649,14 +650,15 @@ async function executeFunctionCall(
         gstin?: string | null;
         taxType?: string | null;
       } = {};
-      if (typeof args.amount === "number") updates.amount = Math.round(args.amount);
+      const amt = typeof args.amount === "number" ? Math.round(args.amount) : parseAmount(args.amount);
+      if (amt !== undefined) updates.amount = amt;
       if (args.vendorName !== undefined) updates.vendorName = args.vendorName ? String(args.vendorName) : null;
       if (args.invoiceNumber !== undefined) updates.invoiceNumber = args.invoiceNumber ? String(args.invoiceNumber) : null;
       if (args.invoiceDate !== undefined) updates.invoiceDate = args.invoiceDate ? String(args.invoiceDate) : null;
       if (args.expenseDate !== undefined) updates.expenseDate = String(args.expenseDate);
       if (args.description !== undefined) updates.description = args.description ? String(args.description) : null;
       if (categoryId) updates.categoryId = categoryId;
-      if (campusId !== undefined) updates.campusId = campusId;
+      if (campusId !== undefined) updates.costCenterId = campusId;
       if (args.gstin !== undefined) updates.gstin = args.gstin ? String(args.gstin) : null;
       if (args.taxType !== undefined) updates.taxType = args.taxType ? String(args.taxType) : null;
       if (Object.keys(updates).length === 0) {
@@ -679,7 +681,7 @@ async function executeFunctionCall(
       if (!campusId && execCtx.contactRole === "campus_coordinator" && execCtx.contactCampusId) {
         campusId = execCtx.contactCampusId;
       }
-      const rows = await finJoeData.listPendingApprovals(campusId);
+      const rows = await finJoeData.listPendingApprovals(campusId ?? undefined);
       return { success: true, data: { pendingApprovals: rows } };
     }
 
@@ -701,7 +703,7 @@ async function executeFunctionCall(
       const startDate = String(args.startDate ?? "");
       const endDate = String(args.endDate ?? "");
       const campusId = args.campusId ? String(args.campusId) : undefined;
-      const summary = await finJoeData.getExpenseSummary({ startDate, endDate, campusId });
+      const summary = await finJoeData.getExpenseSummary({ startDate, endDate, costCenterId: campusId, campusId });
       return { success: true, data: summary };
     }
 
@@ -712,7 +714,7 @@ async function executeFunctionCall(
 
     case "petty_cash_summary": {
       const campusId = args.campusId ? String(args.campusId) : undefined;
-      const rows = await finJoeData.getPettyCashSummary(campusId);
+      const rows = await finJoeData.getPettyCashSummary(campusId ?? undefined);
       return { success: true, data: { pettyCashFunds: rows } };
     }
 

@@ -192,7 +192,7 @@ export async function handleWebhook(req: Request, res: Response) {
             traceId,
             tenantId,
             contact.name,
-            contact.campusId ?? undefined
+            contact.costCenterId ?? undefined
           );
         } catch (err) {
           logger.error("Agent processing error", { traceId, err: String(err) });

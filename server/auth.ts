@@ -80,6 +80,7 @@ declare global {
       role: string;
       tenantId?: string | null;
       campusId?: string | null;
+      costCenterId?: string | null;
       isActive: boolean;
     }
   }

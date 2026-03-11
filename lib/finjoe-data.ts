@@ -4,7 +4,7 @@
 
 import { eq, and, desc, sql, or, isNull } from "drizzle-orm";
 import {
-  campuses,
+  costCenters,
   expenseCategories,
   finjoeSettings,
   expenses,
@@ -17,7 +17,8 @@ import {
 
 export type FinJoeDb = any;
 
-export type CampusInfo = { id: string; name: string; slug: string };
+export type CostCenterInfo = { id: string; name: string; slug: string };
+export type CampusInfo = CostCenterInfo;
 export type CategoryInfo = { id: string; name: string; slug: string };
 export type AuditRequirements = {
   required: string[];
@@ -33,6 +34,8 @@ export type FinJoeSettings = {
   notificationEmails: string | null;
   resendFromEmail: string | null;
   smsFrom: string | null;
+  costCenterLabel: string | null;
+  costCenterType: string | null;
 };
 
 const AUDIT_REQUIREMENTS: AuditRequirements = {
@@ -44,7 +47,7 @@ const AUDIT_REQUIREMENTS: AuditRequirements = {
 
 export type CreateExpenseInput = {
   tenantId: string;
-  campusId: string | null;
+  costCenterId: string | null;
   categoryId: string;
   amount: number;
   expenseDate: string;
@@ -62,19 +65,23 @@ export type CreateRoleChangeInput = {
   contactPhone: string;
   requestedRole: string;
   name: string;
-  campusId?: string | null;
+  costCenterId?: string | null;
   studentId?: string | null;
 };
 
 export function createFinJoeData(db: FinJoeDb, tenantId: string) {
   return {
-    async getCampuses(): Promise<CampusInfo[]> {
+    async getCostCenters(): Promise<CostCenterInfo[]> {
       const rows = await db
-        .select({ id: campuses.id, name: campuses.name, slug: campuses.slug })
-        .from(campuses)
-        .where(and(eq(campuses.isActive, true), eq(campuses.tenantId, tenantId)))
-        .orderBy(campuses.name);
+        .select({ id: costCenters.id, name: costCenters.name, slug: costCenters.slug })
+        .from(costCenters)
+        .where(and(eq(costCenters.isActive, true), eq(costCenters.tenantId, tenantId)))
+        .orderBy(costCenters.name);
       return rows;
+    },
+
+    async getCampuses(): Promise<CampusInfo[]> {
+      return this.getCostCenters();
     },
 
     async getExpenseCategories(): Promise<CategoryInfo[]> {
@@ -101,16 +108,18 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
         notificationEmails: settings.notificationEmails ?? null,
         resendFromEmail: settings.resendFromEmail ?? null,
         smsFrom: settings.smsFrom ?? null,
+        costCenterLabel: settings.costCenterLabel ?? null,
+        costCenterType: settings.costCenterType ?? null,
       };
     },
 
     async createExpense(data: CreateExpenseInput): Promise<{ id: string } | null> {
-      const campusIdForDb = data.campusId === "__corporate__" || data.campusId === "null" ? null : data.campusId;
+      const costCenterIdForDb = data.costCenterId === "__corporate__" || data.costCenterId === "null" ? null : data.costCenterId;
       const [created] = await db
         .insert(expenses)
         .values({
           tenantId: data.tenantId,
-          campusId: campusIdForDb,
+          costCenterId: costCenterIdForDb,
           categoryId: data.categoryId,
           amount: data.amount,
           expenseDate: new Date(data.expenseDate),
@@ -141,7 +150,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
       id: string,
       updates: {
         amount?: number;
-        campusId?: string | null;
+        costCenterId?: string | null;
         categoryId?: string;
         expenseDate?: string;
         description?: string | null;
@@ -158,7 +167,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
 
       const setValues: Record<string, unknown> = { updatedAt: new Date() };
       if (updates.amount !== undefined) setValues.amount = updates.amount;
-      if (updates.campusId !== undefined) setValues.campusId = updates.campusId;
+      if (updates.costCenterId !== undefined) setValues.costCenterId = updates.costCenterId;
       if (updates.categoryId !== undefined) setValues.categoryId = updates.categoryId;
       if (updates.expenseDate !== undefined) setValues.expenseDate = new Date(updates.expenseDate);
       if (updates.description !== undefined) setValues.description = updates.description;
@@ -189,21 +198,24 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
       const [row] = await db
         .select()
         .from(expenses)
-        .leftJoin(campuses, eq(expenses.campusId, campuses.id))
+        .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
         .leftJoin(users, eq(expenses.submittedById, users.id))
         .where(and(eq(expenses.id, id), eq(expenses.tenantId, tenantId)))
         .limit(1);
       if (!row?.expenses) return null;
+      const costCenter = (row as Record<string, unknown>).costCenters as { id: string; name: string; slug: string } | null | undefined;
       return {
         ...row.expenses,
-        campus: row.campuses ? { id: row.campuses.id, name: row.campuses.name, slug: row.campuses.slug } : null,
+        campus: costCenter ? { id: costCenter.id, name: costCenter.name, slug: costCenter.slug } : null,
+        costCenter: costCenter ? { id: costCenter.id, name: costCenter.name, slug: costCenter.slug } : null,
         category: row.expense_categories ? { id: row.expense_categories.id, name: row.expense_categories.name, slug: row.expense_categories.slug } : null,
         submittedBy: row.users ? { id: row.users.id, name: row.users.name } : null,
       };
     },
 
     async listExpenses(filters?: {
+      costCenterId?: string | null;
       campusId?: string | null;
       status?: string;
       categoryId?: string;
@@ -212,11 +224,12 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
       limit?: number;
     }): Promise<Array<Record<string, unknown>>> {
       const conditions = [eq(expenses.tenantId, tenantId)];
-      if (filters?.campusId !== undefined && filters.campusId !== null && filters.campusId !== "") {
-        if (filters.campusId === "null" || filters.campusId === "__corporate__") {
-          conditions.push(sql`${expenses.campusId} IS NULL`);
+      const ccId = filters?.costCenterId ?? filters?.campusId;
+      if (ccId !== undefined && ccId !== null && ccId !== "") {
+        if (ccId === "null" || ccId === "__corporate__") {
+          conditions.push(sql`${expenses.costCenterId} IS NULL`);
         } else {
-          conditions.push(eq(expenses.campusId, filters.campusId));
+          conditions.push(eq(expenses.costCenterId, ccId));
         }
       }
       if (filters?.status) conditions.push(eq(expenses.status, filters.status));
@@ -232,11 +245,11 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
           expenseDate: expenses.expenseDate,
           vendorName: expenses.vendorName,
           description: expenses.description,
-          campusName: campuses.name,
+          costCenterName: costCenters.name,
           categoryName: expenseCategories.name,
         })
         .from(expenses)
-        .leftJoin(campuses, eq(expenses.campusId, campuses.id))
+        .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
         .orderBy(desc(expenses.expenseDate), desc(expenses.createdAt))
         .$dynamic();
@@ -244,24 +257,25 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
       if (conditions.length > 0) query = query.where(and(...conditions));
       const limit = Math.min(filters?.limit ?? 50, 100);
       const rows = await query.limit(limit);
-      return rows.map((r) => ({
+      return rows.map((r: Record<string, unknown>) => ({
         id: r.id,
         amount: r.amount,
         status: r.status,
         expenseDate: r.expenseDate,
         vendorName: r.vendorName,
         description: r.description,
-        campusName: r.campusName,
+        campusName: r.costCenterName,
+        costCenterName: r.costCenterName,
         categoryName: r.categoryName,
       }));
     },
 
-    async listPendingApprovals(campusId?: string | null): Promise<Array<Record<string, unknown>>> {
+    async listPendingApprovals(costCenterId?: string | null): Promise<Array<Record<string, unknown>>> {
       const conditions = [eq(expenses.status, "pending_approval"), eq(expenses.tenantId, tenantId)];
-      if (campusId && campusId !== "null" && campusId !== "__corporate__") {
-        conditions.push(eq(expenses.campusId, campusId));
-      } else if (campusId === "null" || campusId === "__corporate__") {
-        conditions.push(sql`${expenses.campusId} IS NULL`);
+      if (costCenterId && costCenterId !== "null" && costCenterId !== "__corporate__") {
+        conditions.push(eq(expenses.costCenterId, costCenterId));
+      } else if (costCenterId === "null" || costCenterId === "__corporate__") {
+        conditions.push(sql`${expenses.costCenterId} IS NULL`);
       }
       const rows = await db
         .select({
@@ -269,12 +283,13 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
           amount: expenses.amount,
           vendorName: expenses.vendorName,
           expenseDate: expenses.expenseDate,
-          campusName: campuses.name,
+          campusName: costCenters.name,
+          costCenterName: costCenters.name,
           description: expenses.description,
           categoryName: expenseCategories.name,
         })
         .from(expenses)
-        .leftJoin(campuses, eq(expenses.campusId, campuses.id))
+        .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
         .where(and(...conditions))
         .orderBy(desc(expenses.createdAt))
@@ -291,11 +306,12 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
           requestedRole: finJoeRoleChangeRequests.requestedRole,
           name: finJoeRoleChangeRequests.name,
           status: finJoeRoleChangeRequests.status,
-          campusName: campuses.name,
+          campusName: costCenters.name,
+          costCenterName: costCenters.name,
           createdAt: finJoeRoleChangeRequests.createdAt,
         })
         .from(finJoeRoleChangeRequests)
-        .leftJoin(campuses, eq(finJoeRoleChangeRequests.campusId, campuses.id))
+        .leftJoin(costCenters, eq(finJoeRoleChangeRequests.costCenterId, costCenters.id))
         .orderBy(desc(finJoeRoleChangeRequests.createdAt))
         .limit(50)
         .$dynamic();
@@ -315,11 +331,11 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
           vendorName: expenses.vendorName,
           invoiceNumber: expenses.invoiceNumber,
           description: expenses.description,
-          campusName: campuses.name,
+          costCenterName: costCenters.name,
           categoryName: expenseCategories.name,
         })
         .from(expenses)
-        .leftJoin(campuses, eq(expenses.campusId, campuses.id))
+        .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
         .where(
           and(
@@ -333,23 +349,28 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
         )
         .orderBy(desc(expenses.expenseDate))
         .limit(limit);
-      return rows;
+      return rows.map((r: Record<string, unknown>) => ({
+        ...r,
+        campusName: r.costCenterName,
+      }));
     },
 
     async getExpenseSummary(filters?: {
       startDate?: string;
       endDate?: string;
+      costCenterId?: string | null;
       campusId?: string | null;
       groupBy?: "status" | "campus" | "category";
     }): Promise<Record<string, unknown>> {
       const conditions = [eq(expenses.tenantId, tenantId)];
       if (filters?.startDate) conditions.push(sql`${expenses.expenseDate} >= ${filters.startDate}::date`);
       if (filters?.endDate) conditions.push(sql`${expenses.expenseDate} <= ${filters.endDate}::date`);
-      if (filters?.campusId !== undefined && filters.campusId !== null && filters.campusId !== "" && filters.campusId !== "__corporate__") {
-        if (filters.campusId === "null") {
-          conditions.push(sql`${expenses.campusId} IS NULL`);
+      const ccId = filters?.costCenterId ?? filters?.campusId;
+      if (ccId !== undefined && ccId !== null && ccId !== "" && ccId !== "__corporate__") {
+        if (ccId === "null") {
+          conditions.push(sql`${expenses.costCenterId} IS NULL`);
         } else {
-          conditions.push(eq(expenses.campusId, filters.campusId));
+          conditions.push(eq(expenses.costCenterId, ccId));
         }
       }
 
@@ -357,7 +378,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
       const baseQuery = db.select().from(expenses).$dynamic();
       const allRows = whereClause ? await baseQuery.where(whereClause) : await baseQuery;
 
-      const totalAmount = allRows.reduce((sum, r) => sum + (r.amount ?? 0), 0);
+      const totalAmount = (allRows as Array<{ amount?: number }>).reduce((sum: number, r) => sum + (r.amount ?? 0), 0);
       const byStatus: Record<string, number> = {};
       for (const r of allRows) {
         const s = r.status ?? "unknown";
@@ -386,19 +407,20 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
       };
     },
 
-    async getPettyCashSummary(campusId?: string | null): Promise<Array<Record<string, unknown>>> {
+    async getPettyCashSummary(costCenterId?: string | null): Promise<Array<Record<string, unknown>>> {
       const conditions = [eq(pettyCashFunds.tenantId, tenantId)];
-      if (campusId && campusId !== "null" && campusId !== "__corporate__") conditions.push(eq(pettyCashFunds.campusId, campusId));
+      if (costCenterId && costCenterId !== "null" && costCenterId !== "__corporate__") conditions.push(eq(pettyCashFunds.costCenterId, costCenterId));
       let query = db
         .select({
           id: pettyCashFunds.id,
           imprestAmount: pettyCashFunds.imprestAmount,
           currentBalance: pettyCashFunds.currentBalance,
-          campusName: campuses.name,
+          campusName: costCenters.name,
+          costCenterName: costCenters.name,
           custodianName: users.name,
         })
         .from(pettyCashFunds)
-        .leftJoin(campuses, eq(pettyCashFunds.campusId, campuses.id))
+        .leftJoin(costCenters, eq(pettyCashFunds.costCenterId, costCenters.id))
         .leftJoin(users, eq(pettyCashFunds.custodianId, users.id))
         .where(and(...conditions));
       return query;
@@ -505,7 +527,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
             contactPhone: data.contactPhone,
             requestedRole: data.requestedRole,
             name: data.name,
-            campusId: data.campusId ?? null,
+            costCenterId: data.costCenterId ?? null,
             studentId: data.studentId ?? null,
             status: "pending",
           })
@@ -543,7 +565,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
         .set({
           role: reqRow.requestedRole,
           name: reqRow.name,
-          campusId: reqRow.campusId,
+          costCenterId: reqRow.costCenterId,
           studentId: reqRow.studentId,
           updatedAt: new Date(),
         })

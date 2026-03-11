@@ -9,6 +9,7 @@ export type ExpenseData = {
   expenseDate?: string;
   categoryId?: string;
   campusId?: string | null;
+  costCenterId?: string | null;
   description?: string | null;
   invoiceNumber?: string | null;
   invoiceDate?: string | null;

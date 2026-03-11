@@ -1,18 +1,20 @@
 import express, { type Express } from "express";
 import passport from "passport";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, or, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import { hashPassword, requireAdmin, requireSuperAdmin, getTenantId } from "./auth.js";
 import { logger } from "./logger.js";
 import {
   tenants,
   tenantWabaProviders,
-  campuses,
+  costCenters,
   users,
   finJoeContacts,
   finJoeRoleChangeRequests,
   finjoeSettings,
   platformSettings,
+  incomeCategories,
+  incomeRecords,
 } from "../shared/schema.js";
 import { createFinJoeData } from "../lib/finjoe-data.js";
 
@@ -94,6 +96,23 @@ export async function registerRoutes(app: Express) {
     }
   });
 
+  app.get("/api/cost-centers", async (req, res) => {
+    try {
+      const q = req.query?.tenantId;
+      const tenantId = getTenantId(req) ?? (typeof q === "string" ? q : null);
+      if (!tenantId) return res.status(400).json({ error: "tenantId required (login or pass ?tenantId=)" });
+      const rows = await db
+        .select()
+        .from(costCenters)
+        .where(and(eq(costCenters.isActive, true), eq(costCenters.tenantId, tenantId)))
+        .orderBy(costCenters.name);
+      res.json(rows);
+    } catch (e) {
+      logger.error("Cost centers error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch cost centers" });
+    }
+  });
+
   app.get("/api/campuses", async (req, res) => {
     try {
       const q = req.query?.tenantId;
@@ -101,9 +120,9 @@ export async function registerRoutes(app: Express) {
       if (!tenantId) return res.status(400).json({ error: "tenantId required (login or pass ?tenantId=)" });
       const rows = await db
         .select()
-        .from(campuses)
-        .where(and(eq(campuses.isActive, true), eq(campuses.tenantId, tenantId)))
-        .orderBy(campuses.name);
+        .from(costCenters)
+        .where(and(eq(costCenters.isActive, true), eq(costCenters.tenantId, tenantId)))
+        .orderBy(costCenters.name);
       res.json(rows);
     } catch (e) {
       logger.error("Campuses error", { requestId: req.requestId, err: String(e) });
@@ -151,11 +170,12 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(400).json({ error: "tenantId required" });
       if (!tenantId) return res.status(400).json({ error: "tenantId required (pass in body for super_admin)" });
 
-      const { phone, role, name, campusId, studentId } = req.body;
+      const { phone, role, name, campusId, costCenterId, studentId } = req.body;
+      const ccId = costCenterId ?? campusId;
       if (!phone || !role) return res.status(400).json({ error: "phone and role required" });
       const digits = phone.replace(/\D/g, "");
       const normalized = digits.length === 10 ? `91${digits}` : digits.startsWith("91") ? digits : `91${digits}`;
-      const validRoles = ["campus_coordinator", "head_office", "finance", "admin", "vendor", "faculty", "student", "guest"];
+      const validRoles = ["cost_center_coordinator", "campus_coordinator", "head_office", "finance", "admin", "vendor", "faculty", "student", "guest"];
       if (!validRoles.includes(role)) return res.status(400).json({ error: `role must be one of: ${validRoles.join(", ")}` });
 
       let resolvedUserId = studentId || null;
@@ -172,7 +192,7 @@ export async function registerRoutes(app: Express) {
               name: name || "FinJoe Admin",
               role,
               tenantId,
-              campusId: campusId || null,
+              costCenterId: ccId || null,
               isActive: true,
             })
             .returning({ id: users.id });
@@ -187,7 +207,7 @@ export async function registerRoutes(app: Express) {
           phone: normalized.length > 10 ? normalized : `91${normalized}`,
           role,
           name: name || null,
-          campusId: campusId || null,
+          costCenterId: ccId || null,
           studentId: resolvedUserId,
           isActive: true,
         })
@@ -206,11 +226,12 @@ export async function registerRoutes(app: Express) {
       const user = req.user as Express.User;
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
 
-      const { role, name, campusId, studentId, isActive } = req.body;
+      const { role, name, campusId, costCenterId, studentId, isActive } = req.body;
+      const ccId = costCenterId ?? campusId;
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (role !== undefined) updates.role = role;
       if (name !== undefined) updates.name = name;
-      if (campusId !== undefined) updates.campusId = campusId;
+      if (ccId !== undefined) updates.costCenterId = ccId;
       if (studentId !== undefined) updates.studentId = studentId;
       if (isActive !== undefined) updates.isActive = isActive;
 
@@ -231,7 +252,7 @@ export async function registerRoutes(app: Express) {
               name: (name ?? existing.name) || "FinJoe Admin",
               role: targetRole,
               tenantId: existing.tenantId,
-              campusId: campusId ?? existing.campusId,
+              costCenterId: ccId ?? existing.costCenterId,
               isActive: true,
             })
             .returning({ id: users.id });
@@ -279,12 +300,12 @@ export async function registerRoutes(app: Express) {
           requestedRole: finJoeRoleChangeRequests.requestedRole,
           name: finJoeRoleChangeRequests.name,
           status: finJoeRoleChangeRequests.status,
-          campusId: finJoeRoleChangeRequests.campusId,
+          costCenterId: finJoeRoleChangeRequests.costCenterId,
           createdAt: finJoeRoleChangeRequests.createdAt,
-          campusName: campuses.name,
+          costCenterName: costCenters.name,
         })
         .from(finJoeRoleChangeRequests)
-        .leftJoin(campuses, eq(finJoeRoleChangeRequests.campusId, campuses.id))
+        .leftJoin(costCenters, eq(finJoeRoleChangeRequests.costCenterId, costCenters.id))
         .orderBy(desc(finJoeRoleChangeRequests.createdAt))
         .limit(50)
         .$dynamic();
@@ -348,6 +369,8 @@ export async function registerRoutes(app: Express) {
         notificationEmails: row.notificationEmails,
         resendFromEmail: row.resendFromEmail,
         smsFrom: row.smsFrom,
+        costCenterLabel: row.costCenterLabel ?? "Cost Center",
+        costCenterType: row.costCenterType ?? "campus",
       });
     } catch (e) {
       logger.error("FinJoe settings get error", { requestId: req.requestId, err: String(e) });
@@ -362,7 +385,7 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.body?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { expenseApprovalTemplateSid, expenseApprovedTemplateSid, expenseRejectedTemplateSid, reEngagementTemplateSid, notificationEmails, resendFromEmail, smsFrom } = req.body;
+      const { expenseApprovalTemplateSid, expenseApprovedTemplateSid, expenseRejectedTemplateSid, reEngagementTemplateSid, notificationEmails, resendFromEmail, smsFrom, costCenterLabel, costCenterType } = req.body;
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (expenseApprovalTemplateSid !== undefined) updates.expenseApprovalTemplateSid = expenseApprovalTemplateSid || null;
       if (expenseApprovedTemplateSid !== undefined) updates.expenseApprovedTemplateSid = expenseApprovedTemplateSid || null;
@@ -371,6 +394,8 @@ export async function registerRoutes(app: Express) {
       if (notificationEmails !== undefined) updates.notificationEmails = notificationEmails || null;
       if (resendFromEmail !== undefined) updates.resendFromEmail = resendFromEmail || null;
       if (smsFrom !== undefined) updates.smsFrom = smsFrom || null;
+      if (costCenterLabel !== undefined) updates.costCenterLabel = costCenterLabel || null;
+      if (costCenterType !== undefined) updates.costCenterType = costCenterType || null;
       const [existing] = await db.select().from(finjoeSettings).where(eq(finjoeSettings.tenantId, tid)).limit(1);
       let result;
       if (existing) {
@@ -452,6 +477,202 @@ export async function registerRoutes(app: Express) {
       if (e?.code === "23505") return res.status(400).json({ error: "Provider already exists for this tenant" });
       logger.error("WhatsApp provider put error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to save provider" });
+    }
+  });
+
+  // Income categories
+  app.get("/api/admin/income-categories", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const includeInactive = req.query?.includeInactive === "true";
+      const conditions = [eq(incomeCategories.tenantId, tid)];
+      if (!includeInactive) conditions.push(eq(incomeCategories.isActive, true));
+      const rows = await db
+        .select()
+        .from(incomeCategories)
+        .where(and(...conditions))
+        .orderBy(incomeCategories.displayOrder, incomeCategories.name);
+      res.json(rows);
+    } catch (e) {
+      logger.error("Income categories error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch income categories" });
+    }
+  });
+
+  app.post("/api/admin/income-categories", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { name, slug, incomeType, displayOrder } = req.body;
+      if (!name || !slug) return res.status(400).json({ error: "name and slug required" });
+      const slugNorm = String(slug).toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+      const [created] = await db
+        .insert(incomeCategories)
+        .values({
+          tenantId: tid,
+          name,
+          slug: slugNorm || slug,
+          incomeType: incomeType ?? "other",
+          displayOrder: displayOrder ?? 0,
+          isActive: true,
+        })
+        .returning();
+      if (!created) return res.status(500).json({ error: "Failed to create" });
+      res.status(201).json(created);
+    } catch (e: any) {
+      if (e?.code === "23505") return res.status(400).json({ error: "Category slug already exists" });
+      logger.error("Income category create error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to create" });
+    }
+  });
+
+  app.patch("/api/admin/income-categories/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const tid = tenantId ?? req.body?.tenantId;
+      const { name, slug, incomeType, displayOrder, isActive } = req.body;
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (name !== undefined) updates.name = name;
+      if (slug !== undefined) updates.slug = String(slug).toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "") || slug;
+      if (incomeType !== undefined) updates.incomeType = incomeType;
+      if (displayOrder !== undefined) updates.displayOrder = displayOrder;
+      if (isActive !== undefined) updates.isActive = isActive;
+      const whereClause = tid ? and(eq(incomeCategories.id, req.params.id), eq(incomeCategories.tenantId, tid)) : eq(incomeCategories.id, req.params.id);
+      const [updated] = await db.update(incomeCategories).set(updates as any).where(whereClause).returning();
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      res.json(updated);
+    } catch (e) {
+      logger.error("Income category update error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to update" });
+    }
+  });
+
+  app.delete("/api/admin/income-categories/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const rawTid = tenantId ?? req.query?.tenantId;
+      const tid = typeof rawTid === "string" ? rawTid : undefined;
+      const whereClause = tid ? and(eq(incomeCategories.id, req.params.id), eq(incomeCategories.tenantId, tid)) : eq(incomeCategories.id, req.params.id);
+      const [deleted] = await db.delete(incomeCategories).where(whereClause).returning();
+      if (!deleted) return res.status(404).json({ error: "Not found" });
+      res.status(204).send();
+    } catch (e) {
+      logger.error("Income category delete error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to delete" });
+    }
+  });
+
+  // Income records
+  app.get("/api/admin/income", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { campusId, costCenterId, categoryId, startDate, endDate } = req.query;
+      const ccId = (costCenterId ?? campusId) as string | undefined;
+      const conditions = [eq(incomeRecords.tenantId, tid)];
+      if (ccId && ccId !== "all") {
+        if (ccId === "null" || ccId === "__corporate__") conditions.push(sql`${incomeRecords.costCenterId} IS NULL`);
+        else conditions.push(eq(incomeRecords.costCenterId, ccId));
+      }
+      if (categoryId && categoryId !== "all") conditions.push(eq(incomeRecords.categoryId, categoryId as string));
+      if (startDate && typeof startDate === "string") conditions.push(sql`${incomeRecords.incomeDate} >= ${startDate}::date`);
+      if (endDate && typeof endDate === "string") conditions.push(sql`${incomeRecords.incomeDate} <= ${endDate}::date`);
+      const rows = await db
+        .select({
+          id: incomeRecords.id,
+          tenantId: incomeRecords.tenantId,
+          costCenterId: incomeRecords.costCenterId,
+          categoryId: incomeRecords.categoryId,
+          amount: incomeRecords.amount,
+          incomeDate: incomeRecords.incomeDate,
+          particulars: incomeRecords.particulars,
+          incomeType: incomeRecords.incomeType,
+          source: incomeRecords.source,
+          createdAt: incomeRecords.createdAt,
+          costCenterName: costCenters.name,
+          categoryName: incomeCategories.name,
+        })
+        .from(incomeRecords)
+        .leftJoin(costCenters, eq(incomeRecords.costCenterId, costCenters.id))
+        .leftJoin(incomeCategories, eq(incomeRecords.categoryId, incomeCategories.id))
+        .where(and(...conditions))
+        .orderBy(desc(incomeRecords.incomeDate), desc(incomeRecords.createdAt))
+        .limit(200);
+      const result = rows.map((r) => ({
+        ...r,
+        campusId: r.costCenterId,
+        campusName: r.costCenterName,
+      }));
+      res.json(result);
+    } catch (e) {
+      logger.error("Income list error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch income" });
+    }
+  });
+
+  app.post("/api/admin/income", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { campusId, costCenterId, categoryId, amount, incomeDate, particulars, incomeType } = req.body;
+      const ccId = (costCenterId ?? campusId) && (costCenterId ?? campusId) !== "__corporate__" ? (costCenterId ?? campusId) : null;
+      if (!categoryId || !amount || amount <= 0 || !incomeDate) return res.status(400).json({ error: "categoryId, amount (>0), and incomeDate required" });
+      const [created] = await db
+        .insert(incomeRecords)
+        .values({
+          tenantId: tid,
+          costCenterId: ccId,
+          categoryId,
+          amount: Math.round(Number(amount)),
+          incomeDate: new Date(incomeDate),
+          particulars: particulars || null,
+          incomeType: incomeType ?? "other",
+          source: "manual",
+        })
+        .returning();
+      if (!created) return res.status(500).json({ error: "Failed to create" });
+      res.status(201).json(created);
+    } catch (e) {
+      logger.error("Income create error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to create" });
+    }
+  });
+
+  app.patch("/api/admin/income/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = (tenantId ?? req.body?.tenantId) as string;
+      const { costCenterId, campusId, categoryId, amount, incomeDate, particulars, incomeType } = req.body;
+      const ccId = (costCenterId ?? campusId) !== undefined ? ((costCenterId ?? campusId) && (costCenterId ?? campusId) !== "__corporate__" ? (costCenterId ?? campusId) : null) : undefined;
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (ccId !== undefined) updates.costCenterId = ccId;
+      if (categoryId !== undefined) updates.categoryId = categoryId;
+      if (amount !== undefined) updates.amount = Math.round(Number(amount));
+      if (incomeDate !== undefined) updates.incomeDate = new Date(incomeDate);
+      if (particulars !== undefined) updates.particulars = particulars;
+      if (incomeType !== undefined) updates.incomeType = incomeType;
+      const whereClause = and(eq(incomeRecords.id, req.params.id), eq(incomeRecords.tenantId, tid));
+      const [updated] = await db.update(incomeRecords).set(updates as any).where(whereClause).returning();
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      res.json(updated);
+    } catch (e) {
+      logger.error("Income update error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to update" });
     }
   });
 

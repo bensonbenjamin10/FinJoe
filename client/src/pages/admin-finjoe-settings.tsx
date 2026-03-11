@@ -48,6 +48,8 @@ type FinJoeSettings = {
   notificationEmails?: string | null;
   resendFromEmail?: string | null;
   smsFrom?: string | null;
+  costCenterLabel?: string | null;
+  costCenterType?: string | null;
 };
 
 type WhatsAppProvider = {
@@ -105,6 +107,7 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
 
   const [templateForm, setTemplateForm] = useState<FinJoeSettings>({});
   const [channelsForm, setChannelsForm] = useState<FinJoeSettings>({});
+  const [costCenterForm, setCostCenterForm] = useState<Pick<FinJoeSettings, "costCenterLabel" | "costCenterType">>({});
 
   const updateSettingsMutation = useMutation({
     mutationFn: async (data: FinJoeSettings) => {
@@ -260,6 +263,46 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
               Save WhatsApp Provider
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="p-6">
+          <CardTitle className="font-display">Cost Center Labels</CardTitle>
+          <CardDescription className="text-base">
+            Configure how cost centers are displayed in your organization. Use "Campus" for education, "Branch" for retail, "Department" for corporate, or any custom label.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4 p-6">
+          <div className="grid gap-2">
+            <Label>Cost Center Label (e.g. Campus, Branch, Department)</Label>
+            <Input
+              placeholder="Cost Center"
+              value={costCenterForm.costCenterLabel ?? settings?.costCenterLabel ?? ""}
+              onChange={(e) => setCostCenterForm((f) => ({ ...f, costCenterLabel: e.target.value }))}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label>Cost Center Type (e.g. campus, branch, department)</Label>
+            <Input
+              placeholder="campus"
+              value={costCenterForm.costCenterType ?? settings?.costCenterType ?? ""}
+              onChange={(e) => setCostCenterForm((f) => ({ ...f, costCenterType: e.target.value }))}
+            />
+          </div>
+          <Button
+            onClick={() =>
+              updateSettingsMutation.mutate({
+                ...settings,
+                costCenterLabel: costCenterForm.costCenterLabel ?? settings?.costCenterLabel ?? null,
+                costCenterType: costCenterForm.costCenterType ?? settings?.costCenterType ?? null,
+              })
+            }
+            disabled={updateSettingsMutation.isPending}
+          >
+            {updateSettingsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+            Save Cost Center Settings
+          </Button>
         </CardContent>
       </Card>
 
