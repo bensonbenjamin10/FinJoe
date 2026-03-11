@@ -23,9 +23,11 @@ export type ParsedIncomeRow = {
 };
 
 const DATE_HEADERS = ["date", "transaction date", "value date", "txn date"];
-const PARTICULARS_HEADERS = ["particulars", "description", "narration", "remarks"];
-const WITHDRAWAL_HEADERS = ["withdrawals", "withdrawal", "debit", "debits"];
-const DEPOSIT_HEADERS = ["deposits", "deposit", "credit", "credits"];
+const PARTICULARS_HEADERS = ["particulars", "description", "narration", "remarks", "transaction details"];
+const WITHDRAWAL_HEADERS = ["withdrawals", "withdrawal", "debit", "debits", "dr", "debit amt", "withdrawal amt"];
+const DEPOSIT_HEADERS = ["deposits", "deposit", "credit", "credits", "cr", "credit amt", "deposit amt"];
+const AMOUNT_HEADERS = ["amount", "transaction amount", "value"];
+const TYPE_HEADERS = ["transaction type", "type", "cr/dr", "debit/credit"];
 const BRANCH_HEADERS = ["branch", "location", "cost center", "campus", "major head"];
 
 function findColumn(row: Record<string, string>, headers: string[]): string | undefined {
@@ -85,6 +87,7 @@ export function isValidDateString(dateStr: string): boolean {
 
 /** Keyword-to-category slug mapping for expense categorization */
 const EXPENSE_KEYWORDS: Array<{ keywords: string[]; slug: string }> = [
+  { keywords: ["salary", "salaries", "payroll", "wages", "stipend"], slug: "miscellaneous" },
   { keywords: ["petrol", "fuel", "diesel", "conveyance", "travel", "transport"], slug: "travel" },
   { keywords: ["stationery", "supplies", "office"], slug: "office_supplies" },
   { keywords: ["rent"], slug: "rent" },
@@ -99,7 +102,8 @@ function matchExpenseCategory(particulars: string, categorySlugs: string[]): str
       return slug;
     }
   }
-  return categorySlugs[0] ?? "miscellaneous";
+  // Fallback: use "miscellaneous" for unknown types (not first category, which may be office_supplies)
+  return categorySlugs.includes("miscellaneous") ? "miscellaneous" : (categorySlugs[0] ?? "miscellaneous");
 }
 
 function matchIncomeCategory(particulars: string, categorySlugs: string[]): string {
@@ -134,10 +138,29 @@ export function parseBankStatementCsv(
 
     const withdrawalStr = findColumn(row, WITHDRAWAL_HEADERS) ?? row["Withdrawals"] ?? row["withdrawals"];
     const depositStr = findColumn(row, DEPOSIT_HEADERS) ?? row["Deposits"] ?? row["deposits"];
+    const amountStr = findColumn(row, AMOUNT_HEADERS) ?? row["Amount"] ?? row["amount"];
+    const typeStr = findColumn(row, TYPE_HEADERS) ?? row["Transaction Type"] ?? row["Cr/Dr"] ?? row["Type"];
     const branch = findColumn(row, BRANCH_HEADERS) ?? row["Branch"] ?? row["branch"];
 
-    const withdrawalVal = parseAmount(withdrawalStr);
-    const depositVal = parseAmount(depositStr);
+    let withdrawalVal = parseAmount(withdrawalStr);
+    let depositVal = parseAmount(depositStr);
+
+    // Single Amount + Type column (Credit/Debit, Cr/Dr)
+    if ((withdrawalVal == null || withdrawalVal === 0) && (depositVal == null || depositVal === 0) && amountStr) {
+      const amt = parseAmount(amountStr);
+      if (amt != null && amt !== 0) {
+        const typeLower = (typeStr ?? "").toLowerCase();
+        const isCredit = typeLower.includes("cr") || typeLower.includes("credit") || typeLower.includes("deposit");
+        const isDebit = typeLower.includes("dr") || typeLower.includes("debit") || typeLower.includes("withdrawal");
+        if (isCredit) depositVal = Math.abs(amt);
+        else if (isDebit) withdrawalVal = Math.abs(amt);
+        else {
+          // Signed amount: negative = expense, positive = income
+          if (amt < 0) withdrawalVal = Math.abs(amt);
+          else depositVal = amt;
+        }
+      }
+    }
 
     if (withdrawalVal != null && withdrawalVal > 0) {
       if (!date) continue;
@@ -161,7 +184,7 @@ export function parseBankStatementCsv(
         categoryMatch: categoryName,
       });
     } else {
-      if (withdrawalVal === 0 && depositVal === 0) skippedZero++;
+      if ((withdrawalVal === 0 || withdrawalVal == null) && (depositVal === 0 || depositVal == null)) skippedZero++;
     }
   }
 
