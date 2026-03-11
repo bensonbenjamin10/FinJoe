@@ -6,10 +6,10 @@ const MODEL_ID = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const FALLBACK_MODEL = "gemini-2.0-flash";
 
 /** Rich system prompt: FinJoe as Finance Joe—knows everything about finance */
-export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional persona who knows everything about finance. You help organizations manage expenses, income, and financial planning over WhatsApp.
+export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional persona who knows everything about finance. You help organizations manage expenses and financial planning over WhatsApp.
 
 === IDENTITY & CONTEXT ===
-- You represent Finance Joe: the go-to expert for finance questions, expense tracking, and income recording.
+- You represent Finance Joe: the go-to expert for finance questions and expense tracking. (Income recording is not yet supported via WhatsApp—users can record income in the web app.)
 - You help the user's organization with expenses, onboarding, and finance workflows over WhatsApp.
 - Tone: warm, knowledgeable, approachable—like a finance expert who's always ready to help. Be concise but clear. No artificial length limits.
 
@@ -21,22 +21,22 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 - When user says "cancel" or "delete" a draft: use delete_expense(expenseId). Use list_expenses with status=draft to find the expense ID if needed.
 - Finance and admin roles can approve, reject, and record payout for expenses; approve or reject role-change requests.
 - When user says "it's paid", "payment done", etc., use record_payout with the expense ID from recent context (e.g. the expense just approved). If unclear, list approved expenses to find it.
-- Corporate Office: for HQ/central expenses, use campusId null or __corporate__. No campus = Corporate Office.
-- Petty cash: campuses may have petty cash funds; use petty_cash_summary when user asks about balances.
+- Corporate Office: for HQ/central expenses, use campusId null or __corporate__. No cost center = Corporate Office.
+- Petty cash: cost centers may have petty cash funds; use petty_cash_summary when user asks about balances.
 
 === RECORDING EXPENSES ===
-- Required: amount. Also campus (or Corporate Office for HQ expenses).
+- Required: amount. Also cost center (or Corporate Office for HQ expenses). Use the terminology from SYSTEM DATA (e.g. campus, branch, department).
 - Optional: vendor, invoice number, invoice date, category, description, GSTIN, tax type.
 - Audit: for larger or formal expenses, invoice number, invoice date, and vendor name are typically required (see injected audit rules).
 - Tax types: no_gst (unregistered vendor), gst_itc (GST paid, claiming ITC), gst_rcm (reverse charge), gst_no_itc (GST paid, not claiming ITC). Ask for GSTIN (15 chars) when invoice shows GST.
 - PENDING EXPENSE: You receive extracted data and missingFields. Use them—do not ignore. Map user replies to missing fields. When the last missing field is filled, call create_expense immediately. Otherwise call store_pending_expense with updated missingFields and ask for the rest.
-- Use today's date for invoiceDate if not provided. Default category: operating_expenses.
+- Use today's date for invoiceDate if not provided. Default category: first from the provided category list, or ask user to specify if none configured.
 
 === ONBOARDING (ROLE REQUESTS) ===
 - Roles: vendor, faculty, student.
-- Required: name. For vendor and faculty: also campus.
-- Student: campus optional; include studentId if the user provides it.
-- Call create_role_change_request when you have name and (for vendor/faculty) campus. Otherwise store_pending_role_change and ask for what's missing.
+- Required: name. For vendor and faculty: also cost center (campus/branch/department per org config).
+- Student: cost center optional; include studentId if the user provides it.
+- Call create_role_change_request when you have name and (for vendor/faculty) cost center. Otherwise store_pending_role_change and ask for what's missing.
 
 === ROLE-BASED CAPABILITIES ===
 - guest, vendor, faculty, student: create expense, submit role request, Q&A about process.
@@ -44,14 +44,14 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 - admin, finance: above + expense_summary, pending_workload, petty_cash_summary, approve/reject expenses and role requests.
 - Use the tools available to your role. When user asks for status, reports, or to take action, use the appropriate tool.
 
-=== CATEGORY & CAMPUS MAPPING ===
-- Map user words to categories: petrol/fuel/conveyance/travel → travel; stationery/supplies → office; food/catering → catering; etc. Use the provided category list; match by name or slug.
-- Map user words to campuses: "chennai", "Chennai" → Chennai campus; "delhi", "noida" → matching campus. Use the provided campus list.
-- Default category when unclear: operating_expenses.
+=== CATEGORY & COST CENTER MAPPING ===
+- Map user words to the provided expense category list by name or slug. Use the category list from SYSTEM DATA; do not assume fixed mappings.
+- Map user words to cost centers: match by name or slug from the provided list. Use the terminology from SYSTEM DATA (e.g. campus, branch).
+- Default category when unclear: first from the provided category list. If no categories exist, ask the user to specify or suggest they contact admin.
 - Corporate Office: use __corporate__ or null for campusId when expense is for HQ.
 
 === ERROR HANDLING ===
-- Invalid campus, category, or amount: ask the user to correct. Do not guess or fabricate.
+- Invalid cost center, category, or amount: ask the user to correct. Do not guess or fabricate.
 - Image extraction unclear or failed: ask for key fields (amount, vendor, etc.) in natural language.
 - If validation fails after a tool call, explain what went wrong and what to fix.
 - Duplicate expense risk: if user might be re-submitting the same invoice, you can mention checking for duplicates—but still process if they confirm.
@@ -61,7 +61,7 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 - Acknowledge delays (e.g. "Processing the image...") so the user knows you're working.
 - Explain audit or GST requirements when helpful.
 - Be proactive: if the user seems to be waiting, confirm you're on it.
-- When presenting pending approvals or expense lists, ALWAYS include for each item: amount, category (or description), vendor if present, campus, and ID. This helps approvers identify and act on items.
+- When presenting pending approvals or expense lists, ALWAYS include for each item: amount, category (or description), vendor if present, cost center, and ID. This helps approvers identify and act on items.
 
 === WHATSAPP FORMATTING (strict) ===
 - WhatsApp does NOT support LaTeX. Never use \\( \\), \\[ \\], \\frac, \\sum, or any LaTeX.
@@ -70,7 +70,7 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 - Keep formatting simple. Avoid over-formatting.
 
 === BULK TABLE EXPENSES ===
-- When EXTRACTED BULK EXPENSES (from table image or CSV) is provided, you MUST call bulk_create_expenses with that data. Do not ask for confirmation unless the user explicitly asks. Map campus strings (HO, Chennai, etc.) to campusId. Max 25 per call.
+- When EXTRACTED BULK EXPENSES (from table image or CSV) is provided, you MUST call bulk_create_expenses with that data. Do not ask for confirmation unless the user explicitly asks. Map cost center strings (HO, Chennai, etc.) to campusId. Max 25 per call.
 
 === EDGE CASES ===
 - Multiple images in one message: process each; if they're for different expenses, handle one at a time or ask which to process first.
@@ -82,19 +82,19 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 
 === EXAMPLES (follow this style) ===
 
-Example 1 - Expense from image, missing campus:
+Example 1 - Expense from image, missing cost center:
 User: [sends receipt photo]
-Assistant: Got it, I see ₹2,500 for office supplies from ABC Stationers. Which campus is this for?
+Assistant: Got it, I see ₹2,500 for office supplies from ABC Stationers. Which cost center is this for? (Use the label from SYSTEM DATA, e.g. campus, branch.)
 User: Chennai
-Assistant: [calls create_expense with amount 2500, campusId Chennai, category from supplies] Done. Recorded ₹2,500 for Chennai campus.
+Assistant: [calls create_expense with amount 2500, campusId Chennai, category from supplies] Done. Recorded ₹2,500 for Chennai.
 
 Example 2 - Admin asking for pending approvals:
 User: What needs my approval?
 Assistant: [calls list_pending_approvals] You have 3 expenses pending: *₹5,000* Travel - Bharat Petro (Chennai) ID: abc123; *₹1,200* Stationery - ABC Supplies (Delhi) ID: def456; *₹8,500* Corporate Office - XYZ Ltd ID: ghi789. Say "approve abc123" or "reject def456 reason: duplicate" to act.
 
-Example 3 - Role request, missing campus:
+Example 3 - Role request, missing cost center:
 User: I want to onboard as a vendor
-Assistant: Sure. What's your name and which campus will you be working with?
+Assistant: Sure. What's your name and which cost center will you be working with? (Use the label from SYSTEM DATA.)
 User: Rahul Kumar, Delhi
 Assistant: [calls create_role_change_request] Submitted your request to become a vendor for Delhi. We'll get back to you soon.
 
@@ -110,13 +110,13 @@ Assistant: [calls record_payout with expenseId from recent context, payoutMethod
 const FINJOE_FUNCTION_DECLARATIONS = [
   {
     name: "create_expense",
-    description: "Record an expense when you have amount and campus (or amount alone for Corporate Office). Call this when user has provided the last missing piece for a pending expense (e.g. campus after amount). Use today's date for invoiceDate if not provided. Category defaults to operating expenses. Vendor and invoice details are optional for simple expenses.",
+    description: "Record an expense when you have amount and cost center (or amount alone for Corporate Office). Call this when user has provided the last missing piece for a pending expense (e.g. cost center after amount). Use today's date for invoiceDate if not provided. Category defaults to first from the provided list. Vendor and invoice details are optional for simple expenses.",
     parameters: {
       type: Type.OBJECT,
       properties: {
         amount: { type: Type.NUMBER, description: "Amount in rupees (integer)" },
-        categoryId: { type: Type.STRING, description: "Expense category ID or slug (optional, defaults to operating_expenses)" },
-        campusId: { type: Type.STRING, description: "Campus ID, slug, or name (e.g. chennai, Chennai). Null for Corporate Office." },
+        categoryId: { type: Type.STRING, description: "Expense category ID or slug (optional, defaults to first from provided list)" },
+        campusId: { type: Type.STRING, description: "Cost center ID, slug, or name (per org config: campus, branch, etc.). Null for Corporate Office." },
         vendorName: { type: Type.STRING, description: "Vendor/supplier name (optional)" },
         invoiceNumber: { type: Type.STRING, description: "Invoice number (optional)" },
         invoiceDate: { type: Type.STRING, description: "Invoice date YYYY-MM-DD (optional, use today if missing)" },
@@ -139,8 +139,8 @@ const FINJOE_FUNCTION_DECLARATIONS = [
             type: Type.OBJECT,
             properties: {
               amount: { type: Type.NUMBER, description: "Amount in rupees (required)" },
-              campusId: { type: Type.STRING, description: "Campus ID, slug, or name (e.g. chennai, HO). Optional, defaults to Corporate Office." },
-              categoryId: { type: Type.STRING, description: "Category ID (optional, defaults to operating_expenses)" },
+              campusId: { type: Type.STRING, description: "Cost center ID, slug, or name (per org config). Optional, defaults to Corporate Office." },
+              categoryId: { type: Type.STRING, description: "Category ID (optional, defaults to first from provided list)" },
               vendorName: { type: Type.STRING, description: "Vendor name (optional)" },
               description: { type: Type.STRING, description: "Description (optional)" },
               invoiceDate: { type: Type.STRING, description: "YYYY-MM-DD (optional, use today if missing)" },
@@ -155,13 +155,13 @@ const FINJOE_FUNCTION_DECLARATIONS = [
   },
   {
     name: "create_role_change_request",
-    description: "Submit a guest's request to become vendor, faculty, or student. Call only when you have name and (for vendor/faculty) campus.",
+    description: "Submit a guest's request to become vendor, faculty, or student. Call only when you have name and (for vendor/faculty) cost center.",
     parameters: {
       type: Type.OBJECT,
       properties: {
         requestedRole: { type: Type.STRING, description: "vendor, faculty, or student" },
         name: { type: Type.STRING, description: "Full name" },
-        campusId: { type: Type.STRING, description: "Campus ID (required for vendor/faculty)" },
+        campusId: { type: Type.STRING, description: "Cost center ID (required for vendor/faculty)" },
         studentId: { type: Type.STRING, description: "Student ID if known (for student role)" },
       },
       required: ["requestedRole", "name"],
@@ -169,7 +169,7 @@ const FINJOE_FUNCTION_DECLARATIONS = [
   },
   {
     name: "store_pending_expense",
-    description: "Save incomplete expense extraction for follow-up. Call when you have partial data (e.g. from image) but missing campus or category. Do NOT create the expense yet.",
+    description: "Save incomplete expense extraction for follow-up. Call when you have partial data (e.g. from image) but missing cost center or category. Do NOT create the expense yet.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -183,7 +183,7 @@ const FINJOE_FUNCTION_DECLARATIONS = [
         missingFields: {
           type: Type.ARRAY,
           items: { type: Type.STRING },
-          description: "e.g. campus, category",
+          description: "e.g. cost center, category",
         },
       },
       required: ["amount", "missingFields"],
@@ -191,7 +191,7 @@ const FINJOE_FUNCTION_DECLARATIONS = [
   },
   {
     name: "store_pending_role_change",
-    description: "Save partial role-change request. Call when user stated role but name or campus is missing.",
+    description: "Save partial role-change request. Call when user stated role but name or cost center is missing.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -211,7 +211,7 @@ const FINJOE_FUNCTION_DECLARATIONS = [
     parameters: {
       type: Type.OBJECT,
       properties: {
-        campusId: { type: Type.STRING, description: "Campus ID or __corporate__ for Corporate Office" },
+        campusId: { type: Type.STRING, description: "Cost center ID or __corporate__ for Corporate Office" },
         status: { type: Type.STRING, description: "draft, pending_approval, approved, rejected, paid" },
         categoryId: { type: Type.STRING },
         startDate: { type: Type.STRING, description: "YYYY-MM-DD" },
@@ -320,7 +320,7 @@ const FINJOE_FUNCTION_DECLARATIONS = [
   },
   {
     name: "petty_cash_summary",
-    description: "Get petty cash fund balances by campus.",
+    description: "Get petty cash fund balances by cost center.",
     parameters: {
       type: Type.OBJECT,
       properties: { campusId: { type: Type.STRING } },
@@ -467,6 +467,7 @@ export type AgentTurnInput = {
   contactName?: string | null;
   history: ConversationTurn[];
   systemContext: string;
+  costCenterLabel?: string;
   campuses: Array<{ id: string; name: string; slug: string }>;
   categories: Array<{ id: string; name: string; slug: string }>;
   pendingExpense?: {
@@ -506,6 +507,7 @@ export async function agentTurnWithFunctionResponse(
     contactName,
     history,
     systemContext,
+    costCenterLabel = "Cost Center",
     campuses,
     categories,
     pendingExpense,
@@ -516,18 +518,19 @@ export async function agentTurnWithFunctionResponse(
 
   const campusList = campuses.map((c) => `${c.name} (id: ${c.id})`).join(", ");
   const categoryList = categories.map((c) => `${c.name} (id: ${c.id})`).join(", ");
-  let contextBlock = `${systemContext}\n\nAvailable campuses with IDs: ${campusList}\nExpense categories with IDs: ${categoryList}`;
+  const ccLabel = costCenterLabel.endsWith("s") ? costCenterLabel : `${costCenterLabel}s`;
+  let contextBlock = `${systemContext}\n\nTerminology: Use "${costCenterLabel}" (plural "${ccLabel}") instead of "campus". Parameter campusId maps to cost center. Corporate Office = HQ/central.\n\nAvailable ${ccLabel} with IDs: ${campusList}\nExpense categories with IDs: ${categoryList}`;
   if (pendingExpense) {
     contextBlock += `\n\nPENDING EXPENSE—you have this data: ${JSON.stringify(pendingExpense.extracted)}. STILL MISSING: ${pendingExpense.missingFields.join(", ")}.`;
   }
   if (pendingRoleChange) {
-    contextBlock += `\n\nPENDING ROLE CHANGE: ${pendingRoleChange.requestedRole}, name=${pendingRoleChange.name ?? "?"}, campus=${pendingRoleChange.campusName ?? pendingRoleChange.campusId ?? "?"}.`;
+    contextBlock += `\n\nPENDING ROLE CHANGE: ${pendingRoleChange.requestedRole}, name=${pendingRoleChange.name ?? "?"}, ${costCenterLabel.toLowerCase()}=${pendingRoleChange.campusName ?? pendingRoleChange.campusId ?? "?"}.`;
   }
   if (extractedFromImage && extractedFromImage.amount) {
     contextBlock += `\n\nEXTRACTED FROM INVOICE IMAGE: ${JSON.stringify(extractedFromImage)}.`;
   }
   if (extractedBulkFromImage?.length) {
-    contextBlock += `\n\nEXTRACTED BULK EXPENSES (from table image or CSV): ${JSON.stringify(extractedBulkFromImage)}. Map each row's campus to campusId.`;
+    contextBlock += `\n\nEXTRACTED BULK EXPENSES (from table image or CSV): ${JSON.stringify(extractedBulkFromImage)}. Map each row's ${costCenterLabel.toLowerCase()} to campusId.`;
   }
 
   const historyText = history.length ? `\nRecent conversation:\n${history.map((h) => `${h.role}: ${h.content}`).join("\n")}\n` : "";
@@ -602,6 +605,7 @@ export async function agentTurn(input: AgentTurnInput): Promise<AgentTurnResult>
     contactName,
     history,
     systemContext,
+    costCenterLabel = "Cost Center",
     campuses,
     categories,
     pendingExpense,
@@ -612,23 +616,26 @@ export async function agentTurn(input: AgentTurnInput): Promise<AgentTurnResult>
 
   const campusList = campuses.map((c) => `${c.name} (id: ${c.id})`).join(", ");
   const categoryList = categories.map((c) => `${c.name} (id: ${c.id})`).join(", ");
+  const ccLabel = costCenterLabel.endsWith("s") ? costCenterLabel : `${costCenterLabel}s`;
 
   let contextBlock = `${systemContext}
 
-Available campuses with IDs: ${campusList}
+Terminology: Use "${costCenterLabel}" (plural "${ccLabel}") instead of "campus". Parameter campusId maps to cost center. Corporate Office = HQ/central.
+
+Available ${ccLabel} with IDs: ${campusList}
 Expense categories with IDs: ${categoryList}`;
 
   if (pendingExpense) {
     contextBlock += `\n\nPENDING EXPENSE—you have this data: ${JSON.stringify(pendingExpense.extracted)}. STILL MISSING: ${pendingExpense.missingFields.join(", ")}. When the user's message fills any of these, use it. When all are filled, call create_expense.`;
   }
   if (pendingRoleChange) {
-    contextBlock += `\n\nPENDING ROLE CHANGE: ${pendingRoleChange.requestedRole}, name=${pendingRoleChange.name ?? "?"}, campus=${pendingRoleChange.campusName ?? pendingRoleChange.campusId ?? "?"}.`;
+    contextBlock += `\n\nPENDING ROLE CHANGE: ${pendingRoleChange.requestedRole}, name=${pendingRoleChange.name ?? "?"}, ${costCenterLabel.toLowerCase()}=${pendingRoleChange.campusName ?? pendingRoleChange.campusId ?? "?"}.`;
   }
   if (extractedFromImage && extractedFromImage.amount) {
     contextBlock += `\n\nEXTRACTED FROM INVOICE IMAGE: ${JSON.stringify(extractedFromImage)}. Use create_expense if complete, or store_pending_expense and ask for missing fields.`;
   }
   if (input.extractedBulkFromImage?.length) {
-    contextBlock += `\n\nEXTRACTED BULK EXPENSES (from table image or CSV): ${JSON.stringify(input.extractedBulkFromImage)}. Map each row's campus to campusId. Call bulk_create_expenses now with the expenses array.`;
+    contextBlock += `\n\nEXTRACTED BULK EXPENSES (from table image or CSV): ${JSON.stringify(input.extractedBulkFromImage)}. Map each row's ${costCenterLabel.toLowerCase()} to campusId. Call bulk_create_expenses now with the expenses array.`;
   }
   if (input.extractionFailed) {
     contextBlock += `\n\nEXTRACTION ATTEMPTED: We tried to extract expense data from the image but could not reliably identify an amount. Please ask the user to type the amount and key details, or send a clearer image.`;
@@ -647,7 +654,7 @@ Current message: "${userMessage}"`;
 
 ${contextBlock}
 
-Respond naturally. CRITICAL: Check PENDING EXPENSE and Missing fields. If the user's current message fills the last missing field (e.g. they say "chennai" when campus was missing), call create_expense now. If still missing fields, call store_pending_expense with updated missingFields and ask for the remaining ones (one or multiple—your choice). If you have amount and campus, call create_expense. Otherwise, reply with helpful text.`;
+Respond naturally. CRITICAL: Check PENDING EXPENSE and Missing fields. If the user's current message fills the last missing field (e.g. they say "chennai" when cost center was missing), call create_expense now. If still missing fields, call store_pending_expense with updated missingFields and ask for the remaining ones (one or multiple—your choice). If you have amount and cost center, call create_expense. Otherwise, reply with helpful text.`;
 
   const doAgentTurn = async (model: string) => {
     const response = await gemini.models.generateContent({

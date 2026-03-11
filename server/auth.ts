@@ -100,7 +100,15 @@ export function requireSuperAdmin(req: any, res: any, next: any) {
   next();
 }
 
-/** Returns tenantId for the request: from session, or from query when super_admin impersonates */
+/**
+ * Returns tenantId for the request: from session (user.tenantId), or from query when super_admin impersonates.
+ *
+ * IMPORTANT for super_admin: getTenantId only reads req.query?.tenantId, NOT req.body.
+ * For POST/PATCH routes where super_admin must specify tenant context, the route must
+ * explicitly fall back to req.body?.tenantId or req.query?.tenantId, e.g.:
+ *   const tenantId = getTenantId(req) ?? req.body?.tenantId ?? req.query?.tenantId;
+ * Otherwise super_admin requests without ?tenantId= in the URL will get null.
+ */
 export function getTenantId(req: any): string | null {
   const user = req.user as Express.User;
   if (!user) return null;

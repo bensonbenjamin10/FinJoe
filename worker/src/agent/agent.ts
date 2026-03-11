@@ -125,7 +125,7 @@ export async function processWithAgent(
   const body = (messageBody || "").trim();
   const ctx = { traceId, conversationId, messageId };
 
-  const systemContext = await fetchSystemContext(tenantId);
+  const { context: systemContext, costCenterLabel } = await fetchSystemContext(tenantId);
   const { campuses, categories } = await fetchSystemData(tenantId);
   const validCampusIds = campuses.map((c) => c.id);
   const validCategoryIds = categories.map((c) => c.id);
@@ -192,6 +192,7 @@ export async function processWithAgent(
     contactName,
     history,
     systemContext,
+    costCenterLabel,
     campuses,
     categories,
     pendingExpense: convContext.pendingExpense
@@ -270,6 +271,7 @@ export async function processWithAgent(
         contactName,
         history,
         systemContext,
+        costCenterLabel,
         campuses,
         categories,
         pendingExpense: updatedConvContext.pendingExpense
@@ -317,6 +319,9 @@ async function executeFunctionCall(
 
   switch (name) {
     case "create_expense": {
+      if (validCategoryIds.length === 0) {
+        return { success: false, error: "No expense categories configured. Ask admin to add categories in FinJoe Settings." };
+      }
       const amountVal = typeof args.amount === "number" ? Math.round(args.amount) : parseAmount(args.amount);
       const amount = amountVal ?? 0;
       let categoryId = String(args.categoryId ?? "");
@@ -332,7 +337,7 @@ async function executeFunctionCall(
       const expenseData = {
         amount: amount ?? 0,
         expenseDate: String(args.invoiceDate ?? new Date().toISOString().slice(0, 10)),
-        categoryId: categoryId || (validCategoryIds[0] ?? "operating_expenses"),
+        categoryId: categoryId || validCategoryIds[0] || "",
         campusId,
         description: args.description ? String(args.description) : null,
         invoiceNumber: args.invoiceNumber ? String(args.invoiceNumber) : null,
@@ -397,6 +402,9 @@ async function executeFunctionCall(
     }
 
     case "bulk_create_expenses": {
+      if (validCategoryIds.length === 0) {
+        return { success: false, error: "No expense categories configured. Ask admin to add categories in FinJoe Settings." };
+      }
       const BULK_MAX = 25;
       const rawExpenses = Array.isArray(args.expenses) ? args.expenses : [];
       if (rawExpenses.length === 0) {
@@ -407,7 +415,7 @@ async function executeFunctionCall(
       }
 
       const today = new Date().toISOString().slice(0, 10);
-      const defaultCategoryId = validCategoryIds[0] ?? "operating_expenses";
+      const defaultCategoryId = validCategoryIds[0];
       const expenseItems: Array<{
         amount: number;
         expenseDate: string;
@@ -558,6 +566,9 @@ async function executeFunctionCall(
     }
 
     case "store_pending_expense": {
+      if (validCategoryIds.length === 0) {
+        return { success: false, error: "No expense categories configured. Ask admin to add categories in FinJoe Settings." };
+      }
       const amountVal = typeof args.amount === "number" ? Math.round(args.amount) : parseAmount(args.amount);
       const missingFields = Array.isArray(args.missingFields) ? args.missingFields.map(String) : [];
       const extracted: ExtractedExpense & { categoryId?: string; campusId?: string | null } = {

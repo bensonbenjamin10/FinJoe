@@ -416,11 +416,15 @@ export async function registerRoutes(app: Express) {
 
   app.post("/api/admin/finjoe/role-requests/:id/approve", requireAdmin, async (req, res) => {
     try {
-      const tenantId = getTenantId(req);
+      let tenantId = getTenantId(req);
       const user = req.user as Express.User;
       if (!user?.id) return res.status(401).json({ error: "Unauthorized" });
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
-      const finJoeData = createFinJoeData(db, tenantId || "default");
+      if (!tenantId) {
+        const [defaultTenant] = await db.select({ id: tenants.id }).from(tenants).where(eq(tenants.slug, "default")).limit(1);
+        tenantId = defaultTenant?.id ?? "default";
+      }
+      const finJoeData = createFinJoeData(db, tenantId);
       const result = await finJoeData.approveRoleRequest(req.params.id, user.id, "admin");
       if (!result) return res.status(404).json({ error: "Role request not found or not pending" });
       res.json({ id: result.id, approved: true });
@@ -432,12 +436,16 @@ export async function registerRoutes(app: Express) {
 
   app.post("/api/admin/finjoe/role-requests/:id/reject", requireAdmin, async (req, res) => {
     try {
-      const tenantId = getTenantId(req);
+      let tenantId = getTenantId(req);
       const user = req.user as Express.User;
       if (!user?.id) return res.status(401).json({ error: "Unauthorized" });
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      if (!tenantId) {
+        const [defaultTenant] = await db.select({ id: tenants.id }).from(tenants).where(eq(tenants.slug, "default")).limit(1);
+        tenantId = defaultTenant?.id ?? "default";
+      }
       const { reason } = req.body;
-      const finJoeData = createFinJoeData(db, tenantId || "default");
+      const finJoeData = createFinJoeData(db, tenantId);
       const result = await finJoeData.rejectRoleRequest(req.params.id, user.id, reason || "Rejected via admin", "admin");
       if (!result) return res.status(404).json({ error: "Role request not found or not pending" });
       res.json({ id: result.id, rejected: true, reason: reason || "Rejected via admin" });
@@ -656,6 +664,8 @@ export async function registerRoutes(app: Express) {
       const rawTid = tenantId ?? req.query?.tenantId;
       const tid = typeof rawTid === "string" ? rawTid : undefined;
       const whereClause = tid ? and(eq(incomeCategories.id, req.params.id), eq(incomeCategories.tenantId, tid)) : eq(incomeCategories.id, req.params.id);
+      const [existing] = await db.select({ id: incomeRecords.id }).from(incomeRecords).where(eq(incomeRecords.categoryId, req.params.id)).limit(1);
+      if (existing) return res.status(400).json({ error: "Category has income records and cannot be deleted" });
       const [deleted] = await db.delete(incomeCategories).where(whereClause).returning();
       if (!deleted) return res.status(404).json({ error: "Not found" });
       res.status(204).send();
@@ -1021,7 +1031,9 @@ export async function registerRoutes(app: Express) {
       const rawTid = tenantId ?? req.query?.tenantId;
       const tid = typeof rawTid === "string" ? rawTid : undefined;
       const whereClause = tid ? and(eq(expenseCategories.id, req.params.id), eq(expenseCategories.tenantId, tid)) : eq(expenseCategories.id, req.params.id);
-      const [existing] = await db.select({ id: expenses.id }).from(expenses).where(eq(expenses.categoryId, req.params.id)).limit(1);
+      const expenseConditions = [eq(expenses.categoryId, req.params.id)];
+      if (tid) expenseConditions.push(eq(expenses.tenantId, tid));
+      const [existing] = await db.select({ id: expenses.id }).from(expenses).where(and(...expenseConditions)).limit(1);
       if (existing) return res.status(400).json({ error: "Category has expenses and cannot be deleted" });
       const [deleted] = await db.delete(expenseCategories).where(whereClause).returning();
       if (!deleted) return res.status(404).json({ error: "Not found" });
