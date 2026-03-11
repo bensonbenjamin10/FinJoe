@@ -30,6 +30,7 @@ import { Switch } from "@/components/ui/switch";
 import { Plus, Edit, Trash2, MessageCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { useCostCenterLabel } from "@/hooks/use-cost-center-label";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { FinJoeContact, Campus } from "@shared/schema";
 
@@ -37,6 +38,7 @@ const ROLES = ["cost_center_coordinator", "campus_coordinator", "head_office", "
 
 export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | null }) {
   const { toast } = useToast();
+  const { costCenterLabel } = useCostCenterLabel(tenantId);
   const [dialog, setDialog] = useState<{ mode: "add" | "edit"; contact?: FinJoeContact } | null>(null);
   const [form, setForm] = useState({
     phone: "",
@@ -318,13 +320,13 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
               />
             </div>
             <div className="grid gap-2">
-              <Label>Campus (optional)</Label>
+              <Label>{costCenterLabel} (optional)</Label>
               <Select
                 value={form.campusId || "none"}
                 onValueChange={(v) => setForm((f) => ({ ...f, campusId: v === "none" ? "" : v }))}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Select campus" />
+                  <SelectValue placeholder={`Select ${costCenterLabel.toLowerCase()}`} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">None</SelectItem>
@@ -336,9 +338,9 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
                 </SelectContent>
               </Select>
             </div>
-            {form.role === "campus_coordinator" && (
+            {(form.role === "campus_coordinator" || form.role === "cost_center_coordinator") && (
               <p className="text-sm text-muted-foreground">
-                Campus coordinators are scoped to a campus. Select the campus they manage.
+                {costCenterLabel} coordinators are scoped to a {costCenterLabel.toLowerCase()}. Select the {costCenterLabel.toLowerCase()} they manage.
               </p>
             )}
             {(form.role === "admin" || form.role === "finance") && (

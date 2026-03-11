@@ -9,6 +9,7 @@ import {
   tenantWabaProviders,
   costCenters,
   users,
+  expenses,
   finJoeContacts,
   finJoeRoleChangeRequests,
   finjoeSettings,
@@ -127,6 +128,95 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("Campuses error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to fetch campuses" });
+    }
+  });
+
+  app.get("/api/admin/cost-centers", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req) ?? req.query?.tenantId;
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(400).json({ error: "tenantId required" });
+      if (!tenantId || typeof tenantId !== "string") return res.status(400).json({ error: "tenantId required" });
+      const rows = await db
+        .select()
+        .from(costCenters)
+        .where(eq(costCenters.tenantId, tenantId))
+        .orderBy(costCenters.name);
+      res.json(rows);
+    } catch (e) {
+      logger.error("Admin cost centers error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch cost centers" });
+    }
+  });
+
+  app.post("/api/admin/cost-centers", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req) ?? req.body?.tenantId;
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(400).json({ error: "tenantId required" });
+      if (!tenantId || typeof tenantId !== "string") return res.status(400).json({ error: "tenantId required (pass in body for super_admin)" });
+      const { name, slug, type } = req.body;
+      if (!name || typeof name !== "string" || !name.trim()) return res.status(400).json({ error: "name required" });
+      const slugVal = (slug && typeof slug === "string" && slug.trim())
+        ? slug.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "")
+        : name.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+      if (!slugVal || /^[-]+$/.test(slugVal)) return res.status(400).json({ error: "slug could not be derived from name (use letters or numbers)" });
+      const [created] = await db
+        .insert(costCenters)
+        .values({
+          tenantId,
+          name: name.trim(),
+          slug: slugVal,
+          type: (type && typeof type === "string") ? type.trim() || null : null,
+          isActive: true,
+        })
+        .returning();
+      if (!created) return res.status(500).json({ error: "Failed to create" });
+      res.status(201).json(created);
+    } catch (e: any) {
+      if (e?.code === "23505") return res.status(409).json({ error: "A cost center with this slug already exists" });
+      logger.error("Cost center create error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to create" });
+    }
+  });
+
+  app.patch("/api/admin/cost-centers/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req) ?? req.body?.tenantId;
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(400).json({ error: "tenantId required" });
+      if (!tenantId || typeof tenantId !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { name, slug, type, isActive } = req.body;
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (name !== undefined && typeof name === "string" && name.trim()) updates.name = name.trim();
+      if (slug !== undefined && typeof slug === "string" && slug.trim())
+        updates.slug = slug.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+      if (type !== undefined) updates.type = (typeof type === "string" && type.trim()) ? type.trim() : null;
+      if (typeof isActive === "boolean") updates.isActive = isActive;
+      const whereClause = and(eq(costCenters.id, req.params.id), eq(costCenters.tenantId, tenantId));
+      const [updated] = await db.update(costCenters).set(updates as any).where(whereClause).returning();
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      res.json(updated);
+    } catch (e: any) {
+      if (e?.code === "23505") return res.status(409).json({ error: "A cost center with this slug already exists" });
+      logger.error("Cost center update error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to update" });
+    }
+  });
+
+  app.delete("/api/admin/cost-centers/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req) ?? req.body?.tenantId ?? req.query?.tenantId;
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(400).json({ error: "tenantId required" });
+      if (!tenantId || typeof tenantId !== "string") return res.status(400).json({ error: "tenantId required" });
+      const whereClause = and(eq(costCenters.id, req.params.id), eq(costCenters.tenantId, tenantId));
+      const [updated] = await db.update(costCenters).set({ isActive: false, updatedAt: new Date() }).where(whereClause).returning();
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      res.status(204).send();
+    } catch (e) {
+      logger.error("Cost center delete error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to delete" });
     }
   });
 
@@ -673,6 +763,62 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("Income update error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to update" });
+    }
+  });
+
+  app.get("/api/admin/reconciliation", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { startDate, endDate } = req.query;
+      if (!startDate || !endDate || typeof startDate !== "string" || typeof endDate !== "string") {
+        return res.status(400).json({ error: "startDate and endDate required" });
+      }
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
+        return res.status(400).json({ error: "startDate and endDate must be valid ISO dates (YYYY-MM-DD)" });
+      }
+      if (startDate > endDate) {
+        return res.status(400).json({ error: "startDate must be before or equal to endDate" });
+      }
+      const incomeRows = await db
+        .select({ amount: incomeRecords.amount })
+        .from(incomeRecords)
+        .where(
+          and(
+            eq(incomeRecords.tenantId, tid),
+            sql`${incomeRecords.incomeDate} >= ${startDate}::date`,
+            sql`${incomeRecords.incomeDate} <= ${endDate}::date`
+          )
+        );
+      const expenseRows = await db
+        .select({ amount: expenses.amount })
+        .from(expenses)
+        .where(
+          and(
+            eq(expenses.tenantId, tid),
+            eq(expenses.status, "paid"),
+            sql`${expenses.expenseDate} >= ${startDate}::date`,
+            sql`${expenses.expenseDate} <= ${endDate}::date`
+          )
+        );
+      const totalIncome = incomeRows.reduce((s, r) => s + (r.amount || 0), 0);
+      const totalExpenses = expenseRows.reduce((s, r) => s + (r.amount || 0), 0);
+      res.json({
+        totalIncome,
+        totalExpenses,
+        bankNet: totalIncome - totalExpenses,
+        incomeCount: incomeRows.length,
+        expenseCount: expenseRows.length,
+        unmappedIncomeCount: incomeRows.length,
+        unmappedIncomeAmount: totalIncome,
+      });
+    } catch (e) {
+      logger.error("Reconciliation error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch reconciliation" });
     }
   });
 

@@ -37,21 +37,18 @@ import {
   Pencil,
   Trash2,
   Tag,
-  Link2,
-  Unlink,
   ArrowLeft,
-  Search,
 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
+import { useCostCenterLabel } from "@/hooks/use-cost-center-label";
 import type {
   IncomeWithDetails,
   IncomeCategory,
   Campus,
-  RegistrationWithDetails,
 } from "@shared/schema";
 
 const INCOME_TYPE_LABELS: Record<string, string> = {
@@ -73,13 +70,13 @@ export default function AdminIncome() {
   const isSuperAdmin = user?.role === "super_admin";
   const urlTenantId = searchParams.get("tenantId");
   const tenantId = isSuperAdmin ? (urlTenantId || user?.tenantId || null) : user?.tenantId ?? null;
+  const { costCenterLabel } = useCostCenterLabel(tenantId);
   const [activeTab, setActiveTab] = useState("list");
   const [filters, setFilters] = useState({
     campusId: "all",
     categoryId: "all",
     startDate: "",
     endDate: "",
-    mapped: "all",
   });
   const [createForm, setCreateForm] = useState({
     campusId: "__corporate__",
@@ -94,10 +91,6 @@ export default function AdminIncome() {
   const [editIncomeDialog, setEditIncomeDialog] = useState<IncomeWithDetails | null>(null);
   const [editForm, setEditForm] = useState({ amount: "", particulars: "", incomeType: "other", incomeDate: "" });
   const [viewIncomeDialog, setViewIncomeDialog] = useState<IncomeWithDetails | null>(null);
-  const [mapIncomeDialog, setMapIncomeDialog] = useState<IncomeWithDetails | null>(null);
-  const [mapSearch, setMapSearch] = useState("");
-  const [mapIncomeType, setMapIncomeType] = useState<"registration_fee" | "remaining_fee" | "hostel_fee">("registration_fee");
-  const [mapRegistrationId, setMapRegistrationId] = useState<string>("");
   const [categoryForm, setCategoryForm] = useState({ name: "", slug: "", incomeType: "other" as string, displayOrder: 0 });
   const [reconStartDate, setReconStartDate] = useState(format(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), "yyyy-MM-dd"));
   const [reconEndDate, setReconEndDate] = useState(format(new Date(), "yyyy-MM-dd"));
@@ -120,7 +113,6 @@ export default function AdminIncome() {
     if (filters.categoryId && filters.categoryId !== "all") params.append("categoryId", filters.categoryId);
     if (filters.startDate) params.append("startDate", filters.startDate);
     if (filters.endDate) params.append("endDate", filters.endDate);
-    if (filters.mapped && filters.mapped !== "all") params.append("mapped", filters.mapped);
     return params.toString();
   };
 
@@ -166,52 +158,6 @@ export default function AdminIncome() {
     enabled: !!tenantId,
   });
 
-  const { data: suggestionsData } = useQuery<{ suggestions: Array<{ registration: RegistrationWithDetails; score: number; reason: string }> }>({
-    queryKey: ["/api/admin/income/suggestions", mapIncomeDialog?.id],
-    queryFn: async () => {
-      if (!mapIncomeDialog) return { suggestions: [] };
-      const res = await fetch(`/api/admin/income/${mapIncomeDialog.id}/suggestions`, { credentials: "include" });
-      if (!res.ok) return { suggestions: [] };
-      return res.json();
-    },
-    enabled: !!mapIncomeDialog && !!tenantId,
-    retry: false,
-  });
-
-  const suggestions = suggestionsData?.suggestions ?? [];
-
-  const { data: registrations = [] } = useQuery<RegistrationWithDetails[]>({
-    queryKey: ["/api/admin/registrations", mapSearch],
-    queryFn: async () => {
-      const params = new URLSearchParams();
-      if (mapSearch.trim()) params.append("search", mapSearch.trim());
-      const res = await fetch(`/api/admin/registrations${params.toString() ? `?${params.toString()}` : ""}`, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: !!mapIncomeDialog && mapSearch.trim().length >= 2,
-    retry: false,
-  });
-
-  const mapMutation = useMutation({
-    mutationFn: async ({ incomeId, registrationId, incomeType }: { incomeId: string; registrationId: string; incomeType: string }) => {
-      const res = await apiRequest("POST", `/api/admin/income/${incomeId}/map`, { registrationId, incomeType });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Failed to map");
-      }
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/income"] });
-      setMapIncomeDialog(null);
-      setMapSearch("");
-      setMapRegistrationId("");
-      toast({ title: "Income mapped to student" });
-    },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
-  });
-
   const createMutation = useMutation({
     mutationFn: async (data: any) => {
       const res = await apiRequest("POST", "/api/admin/income", { ...data, tenantId });
@@ -249,7 +195,9 @@ export default function AdminIncome() {
 
   const createCategoryMutation = useMutation({
     mutationFn: async (data: any) => {
-      const res = await apiRequest("POST", "/api/admin/income-categories", data);
+      const body = { ...data };
+      if (tenantId) body.tenantId = tenantId;
+      const res = await apiRequest("POST", "/api/admin/income-categories", body);
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to create");
@@ -267,7 +215,9 @@ export default function AdminIncome() {
 
   const updateCategoryMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: any }) => {
-      const res = await apiRequest("PATCH", `/api/admin/income-categories/${id}`, data);
+      const body = { ...data };
+      if (tenantId) body.tenantId = tenantId;
+      const res = await apiRequest("PATCH", `/api/admin/income-categories/${id}`, body);
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to update");
@@ -284,7 +234,8 @@ export default function AdminIncome() {
 
   const deleteCategoryMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await apiRequest("DELETE", `/api/admin/income-categories/${id}`);
+      const url = `/api/admin/income-categories/${id}${tenantId ? `?tenantId=${tenantId}` : ""}`;
+      const res = await apiRequest("DELETE", url);
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to delete");
@@ -325,14 +276,15 @@ export default function AdminIncome() {
     incomeCount: number;
     expenseCount: number;
   }>({
-    queryKey: ["/api/admin/reconciliation", reconStartDate, reconEndDate],
+    queryKey: ["/api/admin/reconciliation", reconStartDate, reconEndDate, tenantId],
     queryFn: async () => {
       const params = new URLSearchParams({ startDate: reconStartDate, endDate: reconEndDate });
+      if (tenantId) params.append("tenantId", tenantId);
       const res = await fetch(`/api/admin/reconciliation?${params}`, { credentials: "include" });
       if (!res.ok) return { totalIncome: 0, totalExpenses: 0, bankNet: 0, unmappedIncomeCount: 0, unmappedIncomeAmount: 0, incomeCount: 0, expenseCount: 0 };
       return res.json();
     },
-    enabled: activeTab === "reconciliation",
+    enabled: activeTab === "reconciliation" && !!tenantId,
     retry: false,
   });
 
@@ -363,7 +315,7 @@ export default function AdminIncome() {
               Income Management
             </CardTitle>
             <CardDescription>
-              Manage income (deposits, fee receipts). Import from bank CSV via Expenses → Import. Map income to students for reconciliation.
+              Manage income (deposits, fee receipts). Import from bank CSV via Expenses → Import. Use Reconciliation tab for income vs expenses summary.
             </CardDescription>
           </CardHeader>
         </Card>
@@ -384,11 +336,11 @@ export default function AdminIncome() {
                 <div className="flex flex-wrap gap-2">
                   <Select value={filters.campusId} onValueChange={(v) => setFilters((f) => ({ ...f, campusId: v }))}>
                     <SelectTrigger className="w-[180px]">
-                      <SelectValue placeholder="Campus" />
+                      <SelectValue placeholder={costCenterLabel} />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">All Campuses</SelectItem>
-                      <SelectItem value="corporate">Corporate Office</SelectItem>
+                      <SelectItem value="all">All {costCenterLabel}s</SelectItem>
+                      <SelectItem value="corporate">Corporate</SelectItem>
                       {campuses.map((c) => (
                         <SelectItem key={c.id} value={c.id}>
                           {c.name}
@@ -407,16 +359,6 @@ export default function AdminIncome() {
                           {c.name}
                         </SelectItem>
                       ))}
-                    </SelectContent>
-                  </Select>
-                  <Select value={filters.mapped} onValueChange={(v) => setFilters((f) => ({ ...f, mapped: v }))}>
-                    <SelectTrigger className="w-[160px]">
-                      <SelectValue placeholder="Mapped" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All</SelectItem>
-                      <SelectItem value="true">Mapped</SelectItem>
-                      <SelectItem value="false">Unmapped</SelectItem>
                     </SelectContent>
                   </Select>
                   <Input
@@ -448,11 +390,10 @@ export default function AdminIncome() {
                         <TableHead>Date</TableHead>
                         <TableHead>Particulars</TableHead>
                         <TableHead>Category</TableHead>
-                        <TableHead>Campus</TableHead>
+                        <TableHead>{costCenterLabel}</TableHead>
                         <TableHead>Amount</TableHead>
                         <TableHead>Type</TableHead>
                         <TableHead>Source</TableHead>
-                        <TableHead>Mapped</TableHead>
                         <TableHead className="w-[80px]">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -464,7 +405,7 @@ export default function AdminIncome() {
                             {inc.particulars || "—"}
                           </TableCell>
                           <TableCell>{inc.category?.name || "-"}</TableCell>
-                          <TableCell>{inc.campus?.name || "Corporate Office"}</TableCell>
+                          <TableCell>{inc.campus?.name || "Corporate"}</TableCell>
                           <TableCell>
                             <span className="font-medium text-green-600 dark:text-green-400">
                               ₹ {(inc.amount / 1).toLocaleString("en-IN")}
@@ -472,19 +413,6 @@ export default function AdminIncome() {
                           </TableCell>
                           <TableCell>{INCOME_TYPE_LABELS[inc.incomeType] || inc.incomeType}</TableCell>
                           <TableCell>{SOURCE_LABELS[inc.source] || inc.source}</TableCell>
-                          <TableCell>
-                            {inc.registrationId ? (
-                              <Badge variant="default" className="gap-1">
-                                <Link2 className="h-3 w-3" />
-                                Mapped
-                              </Badge>
-                            ) : (
-                              <Badge variant="secondary" className="gap-1">
-                                <Unlink className="h-3 w-3" />
-                                Unmapped
-                              </Badge>
-                            )}
-                          </TableCell>
                           <TableCell>
                             <div className="flex gap-1">
                               <Button
@@ -501,20 +429,6 @@ export default function AdminIncome() {
                               >
                                 <Pencil className="h-4 w-4" />
                               </Button>
-                              {!inc.registrationId && (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => {
-                                    setMapIncomeDialog(inc);
-                                    setMapRegistrationId("");
-                                    setMapSearch("");
-                                  }}
-                                  title="Map to student"
-                                >
-                                  <Link2 className="h-4 w-4" />
-                                </Button>
-                              )}
                             </div>
                           </TableCell>
                         </TableRow>
@@ -538,16 +452,16 @@ export default function AdminIncome() {
             <TabsContent value="create">
               <form onSubmit={handleCreate} className="space-y-4 max-w-md">
                 <div>
-                  <Label>Campus</Label>
+                  <Label>{costCenterLabel}</Label>
                   <Select
                     value={createForm.campusId}
                     onValueChange={(v) => setCreateForm((f) => ({ ...f, campusId: v }))}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Select campus (optional)" />
+                      <SelectValue placeholder={`Select ${costCenterLabel.toLowerCase()} (optional)`} />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="__corporate__">Corporate Office</SelectItem>
+                      <SelectItem value="__corporate__">Corporate</SelectItem>
                       {campuses.map((c) => (
                         <SelectItem key={c.id} value={c.id}>
                           {c.name}
@@ -772,7 +686,7 @@ export default function AdminIncome() {
                     </Card>
                     <Card>
                       <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium text-muted-foreground">Unmapped Income</CardTitle>
+                        <CardTitle className="text-sm font-medium text-muted-foreground">Income in Period</CardTitle>
                       </CardHeader>
                       <CardContent>
                         <div className="text-2xl font-bold">
@@ -784,11 +698,11 @@ export default function AdminIncome() {
                             type="button"
                             className="text-primary hover:underline"
                             onClick={() => {
-                              setFilters((f) => ({ ...f, mapped: "false", startDate: reconStartDate, endDate: reconEndDate }));
+                              setFilters((f) => ({ ...f, startDate: reconStartDate, endDate: reconEndDate }));
                               setActiveTab("list");
                             }}
                           >
-                            View & map
+                            View list
                           </button>
                         </p>
                       </CardContent>
@@ -814,139 +728,8 @@ export default function AdminIncome() {
               <p><span className="font-medium">Category:</span> {viewIncomeDialog.category?.name || "-"}</p>
               <p><span className="font-medium">Type:</span> {INCOME_TYPE_LABELS[viewIncomeDialog.incomeType] || viewIncomeDialog.incomeType}</p>
               <p><span className="font-medium">Source:</span> {SOURCE_LABELS[viewIncomeDialog.source] || viewIncomeDialog.source}</p>
-              <p><span className="font-medium">Campus:</span> {viewIncomeDialog.campus?.name || "Corporate Office"}</p>
+              <p><span className="font-medium">{costCenterLabel}:</span> {viewIncomeDialog.campus?.name || "Corporate"}</p>
               <p><span className="font-medium">Particulars:</span> {viewIncomeDialog.particulars || "—"}</p>
-              <p><span className="font-medium">Mapped:</span> {viewIncomeDialog.registrationId ? "Yes" : "No"}</p>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* Map Income Dialog */}
-      <Dialog
-        open={!!mapIncomeDialog}
-        onOpenChange={(open) => {
-          if (!open) {
-            setMapIncomeDialog(null);
-            setMapSearch("");
-            setMapRegistrationId("");
-          }
-        }}
-      >
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Map Income to Student</DialogTitle>
-            <DialogDescription>
-              {mapIncomeDialog && (
-                <>₹ {mapIncomeDialog.amount.toLocaleString("en-IN")} — {mapIncomeDialog.particulars || "Deposit"}</>
-              )}
-            </DialogDescription>
-          </DialogHeader>
-          {mapIncomeDialog && (
-            <div className="space-y-4">
-              <div>
-                <Label>Search student (name, email, phone)</Label>
-                <div className="relative mt-1">
-                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Type to search..."
-                    value={mapSearch}
-                    onChange={(e) => setMapSearch(e.target.value)}
-                    className="pl-8"
-                  />
-                </div>
-              </div>
-              <div>
-                <Label>Income Type</Label>
-                <Select
-                  value={mapIncomeType}
-                  onValueChange={(v: "registration_fee" | "remaining_fee" | "hostel_fee") => setMapIncomeType(v)}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="registration_fee">Registration Fee</SelectItem>
-                    <SelectItem value="remaining_fee">Remaining Fee</SelectItem>
-                    <SelectItem value="hostel_fee">Hostel Fee</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>Select student</Label>
-                <div className="max-h-64 overflow-auto border rounded mt-1">
-                  {suggestions.length > 0 && !mapSearch.trim() && (
-                    <div className="border-b p-2 bg-muted/30">
-                      <p className="text-xs font-medium text-muted-foreground mb-2">Suggested matches (from bank particulars)</p>
-                      <div className="divide-y">
-                        {suggestions.map(({ registration: reg, reason }) => (
-                          <button
-                            key={reg.id}
-                            type="button"
-                            onClick={() => setMapRegistrationId(reg.id)}
-                            className={cn(
-                              "w-full text-left p-3 hover:bg-muted/50 transition-colors",
-                              mapRegistrationId === reg.id && "bg-muted"
-                            )}
-                          >
-                            <div className="font-medium">{reg.name}</div>
-                            <div className="text-sm text-muted-foreground">{reg.email} • {reg.phone}</div>
-                            <div className="text-xs text-primary">{reason}</div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {(!mapSearch.trim() || mapSearch.trim().length < 2) && suggestions.length === 0 ? (
-                    <p className="p-4 text-sm text-muted-foreground text-center">
-                      Type at least 2 characters to search, or wait for auto-suggestions from bank particulars.
-                    </p>
-                  ) : mapSearch.trim().length >= 2 && registrations.length === 0 ? (
-                    <p className="p-4 text-sm text-muted-foreground text-center">
-                      No matches. Try a different search.
-                    </p>
-                  ) : mapSearch.trim().length >= 2 ? (
-                    <div className="divide-y">
-                      {registrations.slice(0, 20).map((reg) => (
-                        <button
-                          key={reg.id}
-                          type="button"
-                          onClick={() => setMapRegistrationId(reg.id)}
-                          className={cn(
-                            "w-full text-left p-3 hover:bg-muted/50 transition-colors",
-                            mapRegistrationId === reg.id && "bg-muted"
-                          )}
-                        >
-                          <div className="font-medium">{reg.name}</div>
-                          <div className="text-sm text-muted-foreground">{reg.email} • {reg.phone}</div>
-                          {reg.program && (
-                            <div className="text-xs text-muted-foreground">{reg.program.name}</div>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setMapIncomeDialog(null)}>Cancel</Button>
-                <Button
-                  onClick={() => {
-                    if (!mapRegistrationId) {
-                      toast({ title: "Select a student", variant: "destructive" });
-                      return;
-                    }
-                    mapMutation.mutate({
-                      incomeId: mapIncomeDialog.id,
-                      registrationId: mapRegistrationId,
-                      incomeType: mapIncomeType,
-                    });
-                  }}
-                  disabled={mapMutation.isPending || !mapRegistrationId}
-                >
-                  {mapMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Map"}
-                </Button>
-              </DialogFooter>
             </div>
           )}
         </DialogContent>
