@@ -30,6 +30,9 @@ export type FinJoeSettings = {
   finjoeExpenseApprovedTemplateSid: string | null;
   finjoeExpenseRejectedTemplateSid: string | null;
   finjoeReEngagementTemplateSid: string | null;
+  notificationEmails: string | null;
+  resendFromEmail: string | null;
+  smsFrom: string | null;
 };
 
 const AUDIT_REQUIREMENTS: AuditRequirements = {
@@ -95,6 +98,9 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
         finjoeExpenseApprovedTemplateSid: settings.expenseApprovedTemplateSid ?? null,
         finjoeExpenseRejectedTemplateSid: settings.expenseRejectedTemplateSid ?? null,
         finjoeReEngagementTemplateSid: settings.reEngagementTemplateSid ?? null,
+        notificationEmails: settings.notificationEmails ?? null,
+        resendFromEmail: settings.resendFromEmail ?? null,
+        smsFrom: settings.smsFrom ?? null,
       };
     },
 

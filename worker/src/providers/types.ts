@@ -9,6 +9,8 @@ export type WabaProviderKind = "twilio" | "360dialog" | "messagebird";
 export interface TwilioProviderConfig {
   accountSid: string;
   authToken: string;
+  /** Optional SMS from number (e.g. +15558171150). Falls back to whatsappFrom without prefix. */
+  smsFrom?: string;
 }
 
 /** Resolved provider credentials for a tenant (from DB or env fallback) */
@@ -16,6 +18,8 @@ export interface WabaProviderCredentials {
   provider: WabaProviderKind;
   /** WhatsApp From number (e.g. whatsapp:+14155238886) */
   whatsappFrom: string;
+  /** SMS From number for fallback (e.g. +15558171150) */
+  smsFrom: string;
   /** Provider-specific config */
   config: TwilioProviderConfig;
 }

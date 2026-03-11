@@ -3,6 +3,7 @@ import { getCredentialsForTenant } from "./providers/resolver.js";
 import {
   sendWhatsApp,
   sendWhatsAppTemplate,
+  sendSms,
   sendTypingIndicator as providerSendTypingIndicator,
 } from "./providers/twilio-provider.js";
 
@@ -76,4 +77,20 @@ export async function sendFinJoeWhatsAppTemplate(
     return null;
   }
   return sendWhatsAppTemplate(credentials, to, templateSid, contentVariables, traceId);
+}
+
+/** Send SMS message. Uses tenant credentials. Fallback when outside WhatsApp 24h window. */
+export async function sendFinJoeSms(
+  to: string,
+  message: string,
+  traceId?: string,
+  tenantId?: string
+) {
+  const tid = tenantId ?? (await import("./tenant.js").then((m) => m.getDefaultTenantId()));
+  const credentials = await getCredentialsForTenant(tid);
+  if (!credentials) {
+    logger.warn("No Twilio credentials for tenant - skipping SMS send", { traceId, tenantId: tid });
+    return null;
+  }
+  return sendSms(credentials, to, message, traceId);
 }

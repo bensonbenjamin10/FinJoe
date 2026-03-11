@@ -5,6 +5,7 @@ import {
   finJoeTasks,
   finJoeMessages,
   finJoeConversations,
+  users,
 } from "../../../shared/schema.js";
 import { eq, and, desc, or } from "drizzle-orm";
 import { sendWith24hRouting, getExpenseApprovalTemplateConfig, notifySubmitterForApprovalRejection } from "../send.js";
@@ -21,6 +22,7 @@ import { parseExpensesFromCsv } from "../csv-parser.js";
 import { fetchSystemContext, fetchSystemData, resolveCategoryFromMessage, resolveCampusFromMessage } from "../context.js";
 import { validateExpenseData, validateRoleChangeData } from "../validation.js";
 import { createFinJoeData } from "../../../lib/finjoe-data.js";
+import { normalizePhone } from "../twilio.js";
 
 const HISTORY_LIMIT = 10;
 
@@ -723,9 +725,16 @@ async function executeFunctionCall(
       const result = await finJoeData.approveExpense(expenseId, contactStudentId);
       if (!result) return { success: false, error: `Could not approve expense #${expenseId}. It may not be pending.` };
       if (result.submittedByContactPhone) {
-        notifySubmitterForApprovalRejection(result.submittedByContactPhone, expenseId, "approved", tenantId, undefined, traceId).catch((err) =>
-          logger.error("Failed to notify submitter of approval", { traceId, expenseId, err: String(err) })
-        );
+        const submitterEmail = await getSubmitterEmail(result.submittedByContactPhone, tenantId);
+        notifySubmitterForApprovalRejection(
+          result.submittedByContactPhone,
+          expenseId,
+          "approved",
+          tenantId,
+          undefined,
+          traceId,
+          submitterEmail
+        ).catch((err) => logger.error("Failed to notify submitter of approval", { traceId, expenseId, err: String(err) }));
       }
       return { success: true, data: { expenseId, approved: true } };
     }
@@ -740,9 +749,16 @@ async function executeFunctionCall(
       const result = await finJoeData.rejectExpense(expenseId, contactStudentId, reason);
       if (!result) return { success: false, error: `Could not reject expense #${expenseId}. It may not be pending.` };
       if (result.submittedByContactPhone) {
-        notifySubmitterForApprovalRejection(result.submittedByContactPhone, expenseId, "rejected", tenantId, reason, traceId).catch((err) =>
-          logger.error("Failed to notify submitter of rejection", { traceId, expenseId, err: String(err) })
-        );
+        const submitterEmail = await getSubmitterEmail(result.submittedByContactPhone, tenantId);
+        notifySubmitterForApprovalRejection(
+          result.submittedByContactPhone,
+          expenseId,
+          "rejected",
+          tenantId,
+          reason,
+          traceId,
+          submitterEmail
+        ).catch((err) => logger.error("Failed to notify submitter of rejection", { traceId, expenseId, err: String(err) }));
       }
       return { success: true, data: { expenseId, rejected: true, reason } };
     }
@@ -810,7 +826,7 @@ async function notifyAdminForRoleRequest(
   const msg = `Role change request #${requestId}: ${name} wants to become ${requestedRole}${campusName ? ` (Campus: ${campusName})` : ""}. Reply APPROVE ROLE ${requestId} or REJECT ROLE ${requestId} to act.`;
   for (const c of financeAndAdmin) {
     try {
-      await sendWith24hRouting(c.phone, msg, null, traceId, tenantId);
+      await sendWith24hRouting(c.phone, msg, null, traceId, tenantId, { critical: true });
     } catch (err) {
       logger.error("Failed to notify admin for role request", { traceId, phone: c.phone, err: String(err) });
     }
@@ -842,9 +858,22 @@ async function notifyFinanceForApproval(
   logger.info("Notifying finance for approval", { traceId, expenseId, count: financeContacts.length });
   for (const c of financeContacts) {
     try {
-      await sendWith24hRouting(c.phone, msg, templateConfig, traceId, tenantId);
+      await sendWith24hRouting(c.phone, msg, templateConfig, traceId, tenantId, { critical: true });
     } catch (err) {
       logger.error("Failed to notify finance", { traceId, phone: c.phone, err: String(err) });
     }
   }
+}
+
+/** Get submitter email from contact's linked user (if any) */
+async function getSubmitterEmail(contactPhone: string, tenantId: string): Promise<string | null> {
+  const phoneNorm = normalizePhone(contactPhone);
+  const [contact] = await db
+    .select({ studentId: finJoeContacts.studentId })
+    .from(finJoeContacts)
+    .where(and(eq(finJoeContacts.tenantId, tenantId), eq(finJoeContacts.phone, phoneNorm)))
+    .limit(1);
+  if (!contact?.studentId) return null;
+  const [user] = await db.select({ email: users.email }).from(users).where(eq(users.id, contact.studentId)).limit(1);
+  return user?.email ?? null;
 }

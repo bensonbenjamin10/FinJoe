@@ -245,6 +245,18 @@ export const finjoeSettings = pgTable("finjoe_settings", {
   expenseApprovedTemplateSid: text("expense_approved_template_sid"),
   expenseRejectedTemplateSid: text("expense_rejected_template_sid"),
   reEngagementTemplateSid: text("re_engagement_template_sid"),
+  notificationEmails: text("notification_emails"),
+  resendFromEmail: text("resend_from_email"),
+  smsFrom: text("sms_from"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Platform settings - single row, account-level defaults (super admin only)
+export const platformSettings = pgTable("platform_settings", {
+  id: varchar("id").primaryKey().default("default"),
+  defaultNotificationEmails: text("default_notification_emails"),
+  defaultResendFromEmail: text("default_resend_from_email"),
+  defaultSmsFrom: text("default_sms_from"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
@@ -350,3 +362,5 @@ export type FinJoeTask = typeof finJoeTasks.$inferSelect;
 export type InsertFinJoeTask = typeof finJoeTasks.$inferInsert;
 export type FinjoeSettings = typeof finjoeSettings.$inferSelect;
 export type InsertFinjoeSettings = typeof finjoeSettings.$inferInsert;
+export type PlatformSettings = typeof platformSettings.$inferSelect;
+export type InsertPlatformSettings = typeof platformSettings.$inferInsert;

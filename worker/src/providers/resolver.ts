@@ -4,7 +4,7 @@
  */
 
 import { db } from "../db.js";
-import { tenants, tenantWabaProviders } from "../../../shared/schema.js";
+import { tenants, tenantWabaProviders, finjoeSettings, platformSettings } from "../../../shared/schema.js";
 import { eq, and } from "drizzle-orm";
 import { logger } from "../logger.js";
 import type { TenantProviderResult, TwilioProviderConfig, WabaProviderCredentials } from "./types.js";
@@ -35,12 +35,15 @@ export async function resolveTenantAndProvider(toNumber: string): Promise<Tenant
   if (row && row.provider === "twilio") {
     const config = row.config as unknown as TwilioProviderConfig;
     if (config?.accountSid && config?.authToken) {
+      const smsFromOverride = config.smsFrom ?? (await getFinJoeSmsFrom(row.tenantId));
+      const smsFrom = await resolveSmsFromAsync(row.whatsappFrom, smsFromOverride);
       return {
         tenantId: row.tenantId,
         credentials: {
           provider: "twilio",
           whatsappFrom: row.whatsappFrom,
-          config: { accountSid: config.accountSid, authToken: config.authToken },
+          smsFrom,
+          config: { accountSid: config.accountSid, authToken: config.authToken, smsFrom: config.smsFrom },
         },
       };
     }
@@ -54,17 +57,42 @@ export async function resolveTenantAndProvider(toNumber: string): Promise<Tenant
 
   if (accountSid && authToken && from) {
     const whatsappFrom = from.startsWith("whatsapp:") ? from : `whatsapp:${from}`;
+    const smsFrom = await resolveSmsFromAsync(whatsappFrom, process.env.TWILIO_SMS_FROM);
     return {
       tenantId,
       credentials: {
         provider: "twilio",
         whatsappFrom,
+        smsFrom,
         config: { accountSid, authToken },
       },
     };
   }
 
   return { tenantId, credentials: null };
+}
+
+/** Resolve SMS from number: override > platform default > env > derive from whatsappFrom */
+async function resolveSmsFromAsync(whatsappFrom: string, smsFromOverride?: string): Promise<string> {
+  if (smsFromOverride && smsFromOverride.trim()) {
+    const s = smsFromOverride.trim();
+    return s.startsWith("+") ? s : `+${s.replace(/\D/g, "")}`;
+  }
+  const [platformRow] = await db
+    .select({ defaultSmsFrom: platformSettings.defaultSmsFrom })
+    .from(platformSettings)
+    .where(eq(platformSettings.id, "default"))
+    .limit(1);
+  if (platformRow?.defaultSmsFrom?.trim()) {
+    const s = platformRow.defaultSmsFrom.trim();
+    return s.startsWith("+") ? s : `+${s.replace(/\D/g, "")}`;
+  }
+  if (process.env.TWILIO_SMS_FROM?.trim()) {
+    const s = process.env.TWILIO_SMS_FROM.trim();
+    return s.startsWith("+") ? s : `+${s.replace(/\D/g, "")}`;
+  }
+  const stripped = whatsappFrom.replace(/^whatsapp:/, "").trim();
+  return stripped.startsWith("+") ? stripped : `+${stripped.replace(/\D/g, "")}`;
 }
 
 /** Get credentials for a tenant (for outbound sends). Uses tenant_waba_providers or env fallback for default tenant. */
@@ -78,10 +106,13 @@ export async function getCredentialsForTenant(tenantId: string): Promise<WabaPro
   if (row) {
     const config = row.config as unknown as TwilioProviderConfig;
     if (config?.accountSid && config?.authToken) {
+      const smsFromOverride = config.smsFrom ?? (await getFinJoeSmsFrom(tenantId));
+      const smsFrom = await resolveSmsFromAsync(row.whatsappFrom, smsFromOverride);
       return {
         provider: "twilio",
         whatsappFrom: row.whatsappFrom,
-        config: { accountSid: config.accountSid, authToken: config.authToken },
+        smsFrom,
+        config: { accountSid: config.accountSid, authToken: config.authToken, smsFrom: config.smsFrom },
       };
     }
   }
@@ -94,11 +125,19 @@ export async function getCredentialsForTenant(tenantId: string): Promise<WabaPro
   const from = process.env.TWILIO_FINJOE_WHATSAPP_FROM || process.env.TWILIO_WHATSAPP_FROM;
   if (accountSid && authToken && from) {
     const whatsappFrom = from.startsWith("whatsapp:") ? from : `whatsapp:${from}`;
+    const smsFromOverride = (await getFinJoeSmsFrom(tenantId)) ?? process.env.TWILIO_SMS_FROM;
+    const smsFrom = await resolveSmsFromAsync(whatsappFrom, smsFromOverride);
     return {
       provider: "twilio",
       whatsappFrom,
+      smsFrom,
       config: { accountSid, authToken },
     };
   }
   return null;
+}
+
+async function getFinJoeSmsFrom(tenantId: string): Promise<string | undefined> {
+  const [row] = await db.select({ smsFrom: finjoeSettings.smsFrom }).from(finjoeSettings).where(eq(finjoeSettings.tenantId, tenantId)).limit(1);
+  return row?.smsFrom ?? undefined;
 }

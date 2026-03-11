@@ -12,6 +12,7 @@ import {
   finJoeContacts,
   finJoeRoleChangeRequests,
   finjoeSettings,
+  platformSettings,
 } from "../shared/schema.js";
 import { createFinJoeData } from "../lib/finjoe-data.js";
 
@@ -344,6 +345,9 @@ export async function registerRoutes(app: Express) {
         expenseApprovedTemplateSid: row.expenseApprovedTemplateSid,
         expenseRejectedTemplateSid: row.expenseRejectedTemplateSid,
         reEngagementTemplateSid: row.reEngagementTemplateSid,
+        notificationEmails: row.notificationEmails,
+        resendFromEmail: row.resendFromEmail,
+        smsFrom: row.smsFrom,
       });
     } catch (e) {
       logger.error("FinJoe settings get error", { requestId: req.requestId, err: String(e) });
@@ -358,12 +362,15 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.body?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { expenseApprovalTemplateSid, expenseApprovedTemplateSid, expenseRejectedTemplateSid, reEngagementTemplateSid } = req.body;
+      const { expenseApprovalTemplateSid, expenseApprovedTemplateSid, expenseRejectedTemplateSid, reEngagementTemplateSid, notificationEmails, resendFromEmail, smsFrom } = req.body;
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (expenseApprovalTemplateSid !== undefined) updates.expenseApprovalTemplateSid = expenseApprovalTemplateSid || null;
       if (expenseApprovedTemplateSid !== undefined) updates.expenseApprovedTemplateSid = expenseApprovedTemplateSid || null;
       if (expenseRejectedTemplateSid !== undefined) updates.expenseRejectedTemplateSid = expenseRejectedTemplateSid || null;
       if (reEngagementTemplateSid !== undefined) updates.reEngagementTemplateSid = reEngagementTemplateSid || null;
+      if (notificationEmails !== undefined) updates.notificationEmails = notificationEmails || null;
+      if (resendFromEmail !== undefined) updates.resendFromEmail = resendFromEmail || null;
+      if (smsFrom !== undefined) updates.smsFrom = smsFrom || null;
       const [existing] = await db.select().from(finjoeSettings).where(eq(finjoeSettings.tenantId, tid)).limit(1);
       let result;
       if (existing) {
@@ -445,6 +452,43 @@ export async function registerRoutes(app: Express) {
       if (e?.code === "23505") return res.status(400).json({ error: "Provider already exists for this tenant" });
       logger.error("WhatsApp provider put error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to save provider" });
+    }
+  });
+
+  // Super Admin: Account-level settings (platform defaults)
+  app.get("/api/admin/account-settings", requireSuperAdmin, async (req, res) => {
+    try {
+      const [row] = await db.select().from(platformSettings).where(eq(platformSettings.id, "default")).limit(1);
+      if (!row) return res.json({ defaultNotificationEmails: null, defaultResendFromEmail: null, defaultSmsFrom: null });
+      res.json({
+        defaultNotificationEmails: row.defaultNotificationEmails,
+        defaultResendFromEmail: row.defaultResendFromEmail,
+        defaultSmsFrom: row.defaultSmsFrom,
+      });
+    } catch (e) {
+      logger.error("Account settings get error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch account settings" });
+    }
+  });
+
+  app.patch("/api/admin/account-settings", requireSuperAdmin, async (req, res) => {
+    try {
+      const { defaultNotificationEmails, defaultResendFromEmail, defaultSmsFrom } = req.body;
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (defaultNotificationEmails !== undefined) updates.defaultNotificationEmails = defaultNotificationEmails || null;
+      if (defaultResendFromEmail !== undefined) updates.defaultResendFromEmail = defaultResendFromEmail || null;
+      if (defaultSmsFrom !== undefined) updates.defaultSmsFrom = defaultSmsFrom || null;
+      const [existing] = await db.select().from(platformSettings).where(eq(platformSettings.id, "default")).limit(1);
+      let result;
+      if (existing) {
+        [result] = await db.update(platformSettings).set(updates as any).where(eq(platformSettings.id, "default")).returning();
+      } else {
+        [result] = await db.insert(platformSettings).values({ id: "default", ...updates } as any).returning();
+      }
+      res.json(result);
+    } catch (e) {
+      logger.error("Account settings update error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to update account settings" });
     }
   });
 

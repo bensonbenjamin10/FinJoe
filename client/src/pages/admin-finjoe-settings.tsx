@@ -45,6 +45,9 @@ type FinJoeSettings = {
   expenseApprovedTemplateSid?: string | null;
   expenseRejectedTemplateSid?: string | null;
   reEngagementTemplateSid?: string | null;
+  notificationEmails?: string | null;
+  resendFromEmail?: string | null;
+  smsFrom?: string | null;
 };
 
 type WhatsAppProvider = {
@@ -101,6 +104,7 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
   });
 
   const [templateForm, setTemplateForm] = useState<FinJoeSettings>({});
+  const [channelsForm, setChannelsForm] = useState<FinJoeSettings>({});
 
   const updateSettingsMutation = useMutation({
     mutationFn: async (data: FinJoeSettings) => {
@@ -115,6 +119,23 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: settingsQueryKey });
       toast({ title: "Settings saved" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const saveChannelsMutation = useMutation({
+    mutationFn: async (data: Pick<FinJoeSettings, "notificationEmails" | "resendFromEmail" | "smsFrom">) => {
+      const body = tenantId ? { ...data, tenantId } : data;
+      const res = await apiRequest("PATCH", "/api/admin/finjoe/settings", body);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to save");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: settingsQueryKey });
+      toast({ title: "Notification channels saved" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -239,6 +260,63 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
               Save WhatsApp Provider
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="font-display">Notification Channels</CardTitle>
+          <CardDescription className="text-base">
+            Configure fallback channels for when users are outside the WhatsApp 24-hour window. SMS and email ensure critical notifications (approvals, rejections) still reach recipients.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-2">
+            <Label>Notification Emails (comma-separated)</Label>
+            <Input
+              placeholder="finance@org.com, admin@org.com"
+              value={channelsForm.notificationEmails ?? settings?.notificationEmails ?? ""}
+              onChange={(e) => setChannelsForm((f) => ({ ...f, notificationEmails: e.target.value }))}
+            />
+            <p className="text-sm text-muted-foreground">
+              Finance/admin emails to receive critical notifications (expense approval requests, role requests) when WhatsApp is unavailable.
+            </p>
+          </div>
+          <div className="grid gap-2">
+            <Label>Resend From Email (optional)</Label>
+            <Input
+              placeholder="FinJoe &lt;notifications@yourdomain.com&gt;"
+              value={channelsForm.resendFromEmail ?? settings?.resendFromEmail ?? ""}
+              onChange={(e) => setChannelsForm((f) => ({ ...f, resendFromEmail: e.target.value }))}
+            />
+            <p className="text-sm text-muted-foreground">
+              Override default from address for emails. Requires RESEND_API_KEY and verified domain in Resend.
+            </p>
+          </div>
+          <div className="grid gap-2">
+            <Label>SMS From Number (optional)</Label>
+            <Input
+              placeholder="+15558171150"
+              value={channelsForm.smsFrom ?? settings?.smsFrom ?? ""}
+              onChange={(e) => setChannelsForm((f) => ({ ...f, smsFrom: e.target.value }))}
+            />
+            <p className="text-sm text-muted-foreground">
+              Twilio number for SMS fallback when outside 24h window. Leave blank to use WhatsApp number or TWILIO_SMS_FROM env.
+            </p>
+          </div>
+          <Button
+            onClick={() =>
+              saveChannelsMutation.mutate({
+                notificationEmails: channelsForm.notificationEmails ?? settings?.notificationEmails ?? null,
+                resendFromEmail: channelsForm.resendFromEmail ?? settings?.resendFromEmail ?? null,
+                smsFrom: channelsForm.smsFrom ?? settings?.smsFrom ?? null,
+              })
+            }
+            disabled={saveChannelsMutation.isPending}
+          >
+            {saveChannelsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+            Save Notification Channels
+          </Button>
         </CardContent>
       </Card>
 

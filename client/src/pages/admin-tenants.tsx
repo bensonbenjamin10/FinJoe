@@ -143,9 +143,14 @@ export default function AdminTenants() {
   return (
     <AdminLayout
       headerActions={
-        <Button variant="outline" size="sm" onClick={() => setLocation("/admin/finjoe")}>
-          Back to FinJoe
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => setLocation("/admin/account-settings")}>
+            Account Settings
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setLocation("/admin/finjoe")}>
+            FinJoe
+          </Button>
+        </div>
       }
       title="Tenant Management"
     >

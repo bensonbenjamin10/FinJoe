@@ -122,3 +122,37 @@ function formatForWhatsApp(phone: string): string {
   }
   return `whatsapp:+91${digits}`;
 }
+
+/** Format phone for Twilio SMS API (no whatsapp: prefix) */
+export function formatForSms(phone: string): string {
+  let digits = phone.replace(/\D/g, "");
+  if (digits.startsWith("91") && digits.length > 10) {
+    digits = digits.substring(2);
+  }
+  return `+91${digits}`;
+}
+
+/** Send SMS message (fallback when outside WhatsApp 24h window) */
+export async function sendSms(
+  credentials: WabaProviderCredentials,
+  to: string,
+  body: string,
+  traceId?: string
+) {
+  const client = createTwilioClient(credentials);
+  const toNumber = formatForSms(to);
+  const from = credentials.smsFrom;
+
+  try {
+    const result = await client.messages.create({
+      from,
+      to: toNumber,
+      body,
+    });
+    logger.info("SMS sent", { traceId, to: toNumber, sid: result.sid });
+    return result;
+  } catch (error) {
+    logger.error("SMS send error", { traceId, to: toNumber, err: String(error) });
+    throw error;
+  }
+}

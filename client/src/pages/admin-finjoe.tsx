@@ -57,10 +57,15 @@ export default function AdminFinJoe() {
   const headerActions = (
     <>
       {isSuperAdmin && (
-        <Button variant="outline" size="sm" onClick={() => setLocation("/admin/tenants")}>
-          <Building2 className="h-4 w-4 mr-2" />
-          Tenants
-        </Button>
+        <>
+          <Button variant="outline" size="sm" onClick={() => setLocation("/admin/account-settings")}>
+            Account Settings
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setLocation("/admin/tenants")}>
+            <Building2 className="h-4 w-4 mr-2" />
+            Tenants
+          </Button>
+        </>
       )}
       {isSuperAdmin && tenants.length > 0 && (
         <div className="flex items-center gap-2">
