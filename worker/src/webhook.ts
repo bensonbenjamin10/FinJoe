@@ -89,7 +89,7 @@ export async function handleWebhook(req: Request, res: Response) {
   const { tenantId, credentials } = await resolveTenantAndProvider(to);
 
   const webhookUrl =
-    process.env.FINJOE_WEBHOOK_URL || "https://finjoe.medpg.online/webhook/finjoe";
+    process.env.FINJOE_WEBHOOK_URL || "https://finjoe.app/webhook/finjoe";
 
   const isValid = credentials
     ? validateTwilioWebhook(req, credentials.config.authToken, webhookUrl)

@@ -6,6 +6,7 @@ import { logger } from "./logger.js";
 import { registerRoutes } from "./routes.js";
 import { setupAuth } from "./auth.js";
 import { setupVite, serveStatic } from "./vite.js";
+import { handleWebhook } from "../worker/src/webhook.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -28,6 +29,28 @@ app.use(
     };
     return JSON.stringify(entry);
   })
+);
+
+// Webhook - must be before body parsers to capture raw body for Twilio signature validation
+// Handles WhatsApp/Twilio webhook directly (single-project deployment)
+app.post(
+  "/webhook/finjoe",
+  express.urlencoded({
+    extended: false,
+    verify: (req: Request, _res, buf) => {
+      (req as Request & { rawBody?: Buffer }).rawBody = buf;
+    },
+  }),
+  async (req: Request, res: Response) => {
+    try {
+      await handleWebhook(req, res);
+    } catch (err) {
+      logger.error("Webhook error", { err: String(err), stack: (err as Error).stack });
+      if (!res.headersSent) {
+        res.status(200).type("text/xml").send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+      }
+    }
+  }
 );
 
 app.use(express.json());
