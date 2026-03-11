@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Plus, Edit, Trash2, MessageCircle } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { FinJoeContact, Campus } from "@shared/schema";
@@ -189,22 +190,19 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
   return (
     <>
     <Card>
-        <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between p-6">
           <div>
             <CardTitle className="flex items-center gap-2">
               <MessageCircle className="h-5 w-5" />
               FinJoe Contacts
             </CardTitle>
-            <CardDescription>
-              Manage who can use Finance Joe via WhatsApp. Add team members by phone number—they can post expenses, income receipts, and get financial insights.
-            </CardDescription>
           </div>
-          <Button onClick={openAdd} className="w-full sm:w-auto min-h-[44px]">
+          <Button onClick={openAdd} className="w-full sm:w-auto">
             <Plus className="h-4 w-4 mr-2" />
             Add Contact
           </Button>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-6">
           {isLoading ? (
             <div className="py-12 text-center text-muted-foreground">Loading...</div>
           ) : contacts.length === 0 ? (
@@ -216,27 +214,27 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Phone</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Campus</TableHead>
-                  <TableHead>Linked user</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="w-[100px]">Actions</TableHead>
+                  <TableHead className="px-6 py-4">Phone</TableHead>
+                  <TableHead className="px-6 py-4">Name</TableHead>
+                  <TableHead className="px-6 py-4">Role</TableHead>
+                  <TableHead className="px-6 py-4">Campus</TableHead>
+                  <TableHead className="px-6 py-4">Linked user</TableHead>
+                  <TableHead className="px-6 py-4">Status</TableHead>
+                  <TableHead className="w-[100px] px-6 py-4">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {contacts.map((c) => (
                   <TableRow key={c.id}>
-                    <TableCell>+{c.phone}</TableCell>
-                    <TableCell>{c.name || "-"}</TableCell>
-                    <TableCell>
+                    <TableCell className="px-6 py-4">+{c.phone}</TableCell>
+                    <TableCell className="px-6 py-4">{c.name || "-"}</TableCell>
+                    <TableCell className="px-6 py-4">
                       <span className="capitalize">{c.role}</span>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="px-6 py-4">
                       {campuses.find((x) => x.id === c.campusId)?.name || "-"}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="px-6 py-4">
                       {c.studentId
                         ? (() => {
                             const u = users.find((x) => x.id === c.studentId);
@@ -244,19 +242,19 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
                           })()
                         : "-"}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="px-6 py-4">
                       {c.isActive ? (
-                        <span className="text-green-600">Active</span>
+                        <Badge variant="success">Active</Badge>
                       ) : (
-                        <span className="text-muted-foreground">Inactive</span>
+                        <Badge variant="secondary">Inactive</Badge>
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="px-6 py-4">
                       <div className="flex gap-2">
-                        <Button variant="ghost" size="icon" className="min-h-[44px] min-w-[44px]" onClick={() => openEdit(c)}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(c)}>
                           <Edit className="h-4 w-4" />
                         </Button>
-                        <Button variant="ghost" size="icon" className="min-h-[44px] min-w-[44px]" onClick={() => setDeleteDialog(c)}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setDeleteDialog(c)}>
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>
                       </div>

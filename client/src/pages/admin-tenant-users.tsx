@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useRoute, useLocation } from "wouter";
+import { useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,9 +21,18 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
-import { Plus, Users, Loader2, Edit, ArrowLeft } from "lucide-react";
-import { AdminLayout } from "@/components/layout/AdminLayout";
+import { Link } from "wouter";
+import { Plus, Users, Loader2, Edit } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { Badge } from "@/components/ui/badge";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { format } from "date-fns";
@@ -46,7 +55,6 @@ type Tenant = {
 
 export default function AdminTenantUsers() {
   const [, params] = useRoute("/admin/tenants/:id/users");
-  const [, setLocation] = useLocation();
   const { toast } = useToast();
   const tenantId = params?.id ?? "";
 
@@ -122,16 +130,25 @@ export default function AdminTenantUsers() {
   };
 
   return (
-    <AdminLayout
-      headerActions={
-        <Button variant="outline" size="sm" onClick={() => setLocation("/admin/tenants")}>
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Tenants
-        </Button>
-      }
-      title={`${tenant?.name ?? "Tenant"} Users`}
-    >
+    <>
       <div className="max-w-4xl">
+        <Breadcrumb className="mb-4">
+          <BreadcrumbList>
+            <BreadcrumbItem>
+              <BreadcrumbLink asChild>
+                <Link href="/admin/tenants">Tenants</Link>
+              </BreadcrumbLink>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage>{tenant?.name ?? "Tenant"}</BreadcrumbPage>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage>Users</BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
         <PageHeader
           title={`${tenant?.name ?? "Tenant"} Users`}
           description="Manage users who can access this tenant's FinJoe admin."
@@ -148,11 +165,8 @@ export default function AdminTenantUsers() {
               <Users className="h-5 w-5" />
               Users
             </CardTitle>
-            <CardDescription>
-              Users with access to this tenant. Admins can manage contacts and settings.
-            </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-6">
             {tenantLoading || usersLoading ? (
               <div className="py-8 flex justify-center">
                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -166,31 +180,31 @@ export default function AdminTenantUsers() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Email</TableHead>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Role</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Created</TableHead>
-                      <TableHead className="w-[100px]">Actions</TableHead>
+                      <TableHead className="px-6 py-4">Email</TableHead>
+                      <TableHead className="px-6 py-4">Name</TableHead>
+                      <TableHead className="px-6 py-4">Role</TableHead>
+                      <TableHead className="px-6 py-4">Status</TableHead>
+                      <TableHead className="px-6 py-4">Created</TableHead>
+                      <TableHead className="w-[100px] px-6 py-4">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {users.map((u) => (
                       <TableRow key={u.id}>
-                        <TableCell>{u.email}</TableCell>
-                        <TableCell>{u.name}</TableCell>
-                        <TableCell>
+                        <TableCell className="px-6 py-4">{u.email}</TableCell>
+                        <TableCell className="px-6 py-4">{u.name}</TableCell>
+                        <TableCell className="px-6 py-4">
                           <span className="capitalize">{u.role}</span>
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="px-6 py-4">
                           {u.isActive ? (
-                            <span className="text-green-600">Active</span>
+                            <Badge variant="success">Active</Badge>
                           ) : (
-                            <span className="text-muted-foreground">Inactive</span>
+                            <Badge variant="secondary">Inactive</Badge>
                           )}
                         </TableCell>
-                        <TableCell>{format(new Date(u.createdAt), "dd MMM yyyy")}</TableCell>
-                        <TableCell>
+                        <TableCell className="px-6 py-4">{format(new Date(u.createdAt), "dd MMM yyyy")}</TableCell>
+                        <TableCell className="px-6 py-4">
                           <Button variant="outline" size="sm" onClick={() => openEditUser(u)}>
                             <Edit className="h-4 w-4 mr-1" />
                             Edit
@@ -321,6 +335,6 @@ export default function AdminTenantUsers() {
           </div>
         </DialogContent>
       </Dialog>
-    </AdminLayout>
+    </>
   );
 }

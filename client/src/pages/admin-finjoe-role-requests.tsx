@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,6 +20,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { CheckCircle, XCircle, UserPlus } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { format } from "date-fns";
@@ -104,15 +105,12 @@ export default function AdminFinJoeRoleRequests({ tenantId }: { tenantId?: strin
 
   return (
     <Card>
-      <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between p-6">
         <div>
           <CardTitle className="flex items-center gap-2">
             <UserPlus className="h-5 w-5" />
             Role Change Requests
           </CardTitle>
-          <CardDescription>
-            Approve or reject requests from people who want to join your organization via Finance Joe on WhatsApp.
-          </CardDescription>
         </div>
         <div className="flex overflow-x-auto gap-2 pb-2 sm:pb-0 sm:overflow-visible shrink-0">
           {filterOptions.map((opt) => (
@@ -130,7 +128,7 @@ export default function AdminFinJoeRoleRequests({ tenantId }: { tenantId?: strin
           ))}
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="p-6">
         {isLoading ? (
           <div className="py-12 text-center text-muted-foreground">Loading...</div>
         ) : requests.length === 0 ? (
@@ -142,45 +140,41 @@ export default function AdminFinJoeRoleRequests({ tenantId }: { tenantId?: strin
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Phone</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Requested Role</TableHead>
-                <TableHead>Campus</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-[120px]">Actions</TableHead>
+                <TableHead className="px-6 py-4">Phone</TableHead>
+                <TableHead className="px-6 py-4">Name</TableHead>
+                <TableHead className="px-6 py-4">Requested Role</TableHead>
+                <TableHead className="px-6 py-4">Campus</TableHead>
+                <TableHead className="px-6 py-4">Status</TableHead>
+                <TableHead className="px-6 py-4">Created</TableHead>
+                <TableHead className="w-[120px] px-6 py-4">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {requests.map((r) => (
                 <TableRow key={r.id}>
-                  <TableCell>+{r.contactPhone}</TableCell>
-                  <TableCell>{r.name || "-"}</TableCell>
-                  <TableCell>
+                  <TableCell className="px-6 py-4">+{r.contactPhone}</TableCell>
+                  <TableCell className="px-6 py-4">{r.name || "-"}</TableCell>
+                  <TableCell className="px-6 py-4">
                     <span className="capitalize">{r.requestedRole.replace(/_/g, " ")}</span>
                   </TableCell>
-                  <TableCell>{r.campusName || "-"}</TableCell>
-                  <TableCell>
-                    <span
-                      className={
-                        r.status === "approved"
-                          ? "text-green-600"
-                          : r.status === "rejected"
-                            ? "text-muted-foreground"
-                            : "text-amber-600"
-                      }
-                    >
-                      {r.status}
-                    </span>
+                  <TableCell className="px-6 py-4">{r.campusName || "-"}</TableCell>
+                  <TableCell className="px-6 py-4">
+                    {r.status === "approved" ? (
+                      <Badge variant="success">Approved</Badge>
+                    ) : r.status === "rejected" ? (
+                      <Badge variant="secondary">Rejected</Badge>
+                    ) : (
+                      <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">Pending</Badge>
+                    )}
                   </TableCell>
-                  <TableCell>{format(new Date(r.createdAt), "dd MMM yyyy, HH:mm")}</TableCell>
-                  <TableCell>
+                  <TableCell className="px-6 py-4">{format(new Date(r.createdAt), "dd MMM yyyy, HH:mm")}</TableCell>
+                  <TableCell className="px-6 py-4">
                     {r.status === "pending" && (
                       <div className="flex gap-2">
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="min-h-[44px] min-w-[44px]"
+                          className="h-8 w-8"
                           onClick={() => approveMutation.mutate(r.id)}
                           disabled={approveMutation.isPending}
                         >
@@ -189,7 +183,7 @@ export default function AdminFinJoeRoleRequests({ tenantId }: { tenantId?: strin
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="min-h-[44px] min-w-[44px]"
+                          className="h-8 w-8"
                           onClick={() => setRejectDialog({ request: r, reason: "" })}
                           disabled={rejectMutation.isPending}
                         >

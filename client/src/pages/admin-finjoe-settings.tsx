@@ -184,7 +184,7 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
   return (
     <div className="space-y-8">
       <Card>
-        <CardHeader>
+        <CardHeader className="p-6">
           <CardTitle className="flex items-center gap-2 font-display">
             <Settings className="h-5 w-5" />
             WhatsApp Provider (Twilio)
@@ -193,7 +193,7 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
             Connect your Twilio WhatsApp Business API. Get credentials from Twilio Console. Use the webhook URL below in Twilio to receive messages.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-4 p-6">
           <div className="rounded-md bg-muted p-4">
             <div className="flex items-start gap-3">
               <AlertCircle className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
@@ -264,13 +264,13 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
       </Card>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="p-6">
           <CardTitle className="font-display">Notification Channels</CardTitle>
           <CardDescription className="text-base">
             Configure fallback channels for when users are outside the WhatsApp 24-hour window. SMS and email ensure critical notifications (approvals, rejections) still reach recipients.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-4 p-6">
           <div className="grid gap-2">
             <Label>Notification Emails (comma-separated)</Label>
             <Input
@@ -321,13 +321,13 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
       </Card>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="p-6">
           <CardTitle className="font-display">WhatsApp Message Templates</CardTitle>
           <CardDescription className="text-base">
             Create these templates in Twilio Console → Content Templates, then paste the SIDs here. Each template controls what Finance Joe sends in specific situations.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-8">
+        <CardContent className="space-y-8 p-6">
           {TEMPLATES.map((t) => (
             <div key={t.id} className="space-y-3 rounded-lg border p-4">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

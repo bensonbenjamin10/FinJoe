@@ -20,9 +20,25 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
-import { Plus, Building2, UserPlus, Loader2, Edit, Trash2, Users } from "lucide-react";
-import { AdminLayout } from "@/components/layout/AdminLayout";
+import {
+  Plus,
+  Building2,
+  UserPlus,
+  Loader2,
+  Edit,
+  Trash2,
+  Users,
+  MoreVertical,
+} from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useLocation } from "wouter";
@@ -141,19 +157,7 @@ export default function AdminTenants() {
   };
 
   return (
-    <AdminLayout
-      headerActions={
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => setLocation("/admin/account-settings")}>
-            Account Settings
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setLocation("/admin/finjoe")}>
-            FinJoe
-          </Button>
-        </div>
-      }
-      title="Tenant Management"
-    >
+    <>
       <div className="max-w-4xl">
         <PageHeader
           title="Tenant Management"
@@ -171,11 +175,8 @@ export default function AdminTenants() {
               <Building2 className="h-5 w-5" />
               Tenants
             </CardTitle>
-            <CardDescription>
-              Each tenant gets its own FinJoe instance with separate contacts and settings.
-            </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-6">
             {isLoading ? (
               <div className="py-8 flex justify-center">
                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -189,75 +190,73 @@ export default function AdminTenants() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Slug</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="w-[280px]">Actions</TableHead>
+                    <TableHead className="px-6 py-4">Name</TableHead>
+                    <TableHead className="px-6 py-4">Slug</TableHead>
+                    <TableHead className="px-6 py-4">Status</TableHead>
+                    <TableHead className="w-[140px] px-6 py-4">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {tenants.map((t) => (
                     <TableRow key={t.id}>
-                      <TableCell>{t.name}</TableCell>
-                      <TableCell className="font-mono text-sm">{t.slug}</TableCell>
-                      <TableCell>
+                      <TableCell className="px-6 py-4">{t.name}</TableCell>
+                      <TableCell className="font-mono text-sm px-6 py-4">{t.slug}</TableCell>
+                      <TableCell className="px-6 py-4">
                         {t.isActive ? (
-                          <span className="text-green-600">Active</span>
+                          <Badge variant="success">Active</Badge>
                         ) : (
-                          <span className="text-muted-foreground">Inactive</span>
+                          <Badge variant="secondary">Inactive</Badge>
                         )}
                       </TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-2">
+                      <TableCell className="px-6 py-4">
+                        <div className="flex items-center gap-2">
                           <Button
-                            variant="outline"
+                            variant="ghost"
                             size="sm"
-                            className="min-h-[44px] sm:min-h-0"
+                            className="h-8 px-2 font-medium"
                             onClick={() => setLocation(`/admin/finjoe?tenantId=${t.id}`)}
                           >
                             Manage
                           </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="min-h-[44px] sm:min-h-0"
-                            onClick={() => setLocation(`/admin/tenants/${t.id}/users`)}
-                          >
-                            <Users className="h-4 w-4 mr-1" />
-                            Users
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="min-h-[44px] sm:min-h-0"
-                            onClick={() => openEditTenant(t)}
-                          >
-                            <Edit className="h-4 w-4 mr-1" />
-                            Edit
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="min-h-[44px] sm:min-h-0"
-                            onClick={() => {
-                              setCreateAdminDialog(t);
-                              setAdminForm({ email: "", password: "", name: "" });
-                            }}
-                          >
-                            <UserPlus className="h-4 w-4 mr-1" />
-                            Add Admin
-                          </Button>
-                          {t.id !== "default" && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="min-h-[44px] sm:min-h-0 text-destructive hover:text-destructive"
-                              onClick={() => setDeleteTenantDialog(t)}
-                            >
-                              <Trash2 className="h-4 w-4 mr-1" />
-                              Deactivate
-                            </Button>
-                          )}
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8">
+                                <MoreVertical className="h-4 w-4" />
+                                <span className="sr-only">Actions</span>
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => setLocation(`/admin/tenants/${t.id}/users`)}>
+                                <Users className="h-4 w-4 mr-2" />
+                                Users
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => openEditTenant(t)}>
+                                <Edit className="h-4 w-4 mr-2" />
+                                Edit
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  setCreateAdminDialog(t);
+                                  setAdminForm({ email: "", password: "", name: "" });
+                                }}
+                              >
+                                <UserPlus className="h-4 w-4 mr-2" />
+                                Add Admin
+                              </DropdownMenuItem>
+                              {t.id !== "default" && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    className="text-destructive focus:text-destructive"
+                                    onClick={() => setDeleteTenantDialog(t)}
+                                  >
+                                    <Trash2 className="h-4 w-4 mr-2" />
+                                    Deactivate
+                                  </DropdownMenuItem>
+                                </>
+                              )}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -449,6 +448,6 @@ export default function AdminTenants() {
           </div>
         </DialogContent>
       </Dialog>
-    </AdminLayout>
+    </>
   );
 }

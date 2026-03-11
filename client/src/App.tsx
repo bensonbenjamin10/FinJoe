@@ -10,6 +10,7 @@ import AdminFinJoe from "@/pages/admin-finjoe";
 import AdminTenants from "@/pages/admin-tenants";
 import AdminTenantUsers from "@/pages/admin-tenant-users";
 import AdminAccountSettings from "@/pages/admin-account-settings";
+import { AdminShell } from "@/components/layout/AdminShell";
 import { ProtectedRoute } from "@/components/protected-route";
 
 function Router() {
@@ -21,22 +22,30 @@ function Router() {
         <Route path="/login" component={Login} />
         <Route path="/admin/tenants/:id/users">
           <ProtectedRoute requireRoles={["super_admin"]}>
-            <AdminTenantUsers />
+            <AdminShell>
+              <AdminTenantUsers />
+            </AdminShell>
           </ProtectedRoute>
         </Route>
         <Route path="/admin/account-settings">
           <ProtectedRoute requireRoles={["super_admin"]}>
-            <AdminAccountSettings />
+            <AdminShell>
+              <AdminAccountSettings />
+            </AdminShell>
           </ProtectedRoute>
         </Route>
         <Route path="/admin/tenants">
           <ProtectedRoute requireRoles={["super_admin"]}>
-            <AdminTenants />
+            <AdminShell>
+              <AdminTenants />
+            </AdminShell>
           </ProtectedRoute>
         </Route>
         <Route path="/admin/finjoe">
           <ProtectedRoute>
-            <AdminFinJoe />
+            <AdminShell>
+              <AdminFinJoe />
+            </AdminShell>
           </ProtectedRoute>
         </Route>
         <Route path="/admin">

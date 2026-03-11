@@ -1,15 +1,13 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Settings, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { AdminLayout } from "@/components/layout/AdminLayout";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { useLocation } from "wouter";
 
 type AccountSettings = {
   defaultNotificationEmails?: string | null;
@@ -19,7 +17,6 @@ type AccountSettings = {
 
 export default function AdminAccountSettings() {
   const { toast } = useToast();
-  const [, setLocation] = useLocation();
   const [form, setForm] = useState<AccountSettings>({});
 
   const { data: settings, isLoading } = useQuery<AccountSettings>({
@@ -49,28 +46,14 @@ export default function AdminAccountSettings() {
 
   if (isLoading) {
     return (
-      <AdminLayout title="Account Settings">
-        <div className="flex justify-center py-12">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        </div>
-      </AdminLayout>
+      <div className="flex justify-center py-12">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
     );
   }
 
   return (
-    <AdminLayout
-      headerActions={
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => setLocation("/admin/tenants")}>
-            Tenants
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setLocation("/admin/finjoe")}>
-            FinJoe
-          </Button>
-        </div>
-      }
-      title="Account Settings"
-    >
+    <>
       <PageHeader
         title="Account-Level Notification Defaults"
         description="Platform-wide defaults. Apply when a tenant has no override configured in their FinJoe settings."
@@ -81,9 +64,6 @@ export default function AdminAccountSettings() {
             <Settings className="h-5 w-5" />
             Notification Defaults
           </CardTitle>
-          <CardDescription className="text-base">
-            These values are used as fallbacks when a tenant has not configured their own notification channels in FinJoe Settings.
-          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-2">
@@ -134,6 +114,6 @@ export default function AdminAccountSettings() {
           </Button>
         </CardContent>
       </Card>
-    </AdminLayout>
+    </>
   );
 }
