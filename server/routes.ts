@@ -459,6 +459,17 @@ export async function registerRoutes(app: Express) {
     }
   });
 
+  app.get("/api/admin/tenants/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const [row] = await db.select().from(tenants).where(eq(tenants.id, req.params.id)).limit(1);
+      if (!row) return res.status(404).json({ error: "Tenant not found" });
+      res.json(row);
+    } catch (e) {
+      logger.error("Tenant get error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch tenant" });
+    }
+  });
+
   app.post("/api/admin/tenants", requireSuperAdmin, async (req, res) => {
     try {
       const { name, slug } = req.body;
@@ -475,6 +486,60 @@ export async function registerRoutes(app: Express) {
     }
   });
 
+  app.patch("/api/admin/tenants/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const { name, slug, isActive } = req.body;
+      const tenantId = req.params.id;
+      const [existing] = await db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
+      if (!existing) return res.status(404).json({ error: "Tenant not found" });
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (name !== undefined) updates.name = name;
+      if (slug !== undefined) {
+        const slugNorm = String(slug).toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+        if (!slugNorm) return res.status(400).json({ error: "Invalid slug" });
+        updates.slug = slugNorm;
+      }
+      if (isActive !== undefined) updates.isActive = isActive;
+      const [updated] = await db.update(tenants).set(updates as any).where(eq(tenants.id, tenantId)).returning();
+      res.json(updated);
+    } catch (e: any) {
+      if (e?.code === "23505") return res.status(400).json({ error: "Tenant slug already exists" });
+      logger.error("Tenant update error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to update tenant" });
+    }
+  });
+
+  app.delete("/api/admin/tenants/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const tenantId = req.params.id;
+      const [existing] = await db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
+      if (!existing) return res.status(404).json({ error: "Tenant not found" });
+      if (tenantId === "default") return res.status(400).json({ error: "Cannot delete default tenant" });
+      await db.update(tenants).set({ isActive: false, updatedAt: new Date() }).where(eq(tenants.id, tenantId));
+      res.status(204).send();
+    } catch (e) {
+      logger.error("Tenant delete error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to delete tenant" });
+    }
+  });
+
+  app.get("/api/admin/tenants/:id/users", requireSuperAdmin, async (req, res) => {
+    try {
+      const tenantId = req.params.id;
+      const [tenant] = await db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
+      if (!tenant) return res.status(404).json({ error: "Tenant not found" });
+      const rows = await db
+        .select({ id: users.id, email: users.email, name: users.name, role: users.role, isActive: users.isActive, createdAt: users.createdAt })
+        .from(users)
+        .where(eq(users.tenantId, tenantId))
+        .orderBy(users.name);
+      res.json(rows);
+    } catch (e) {
+      logger.error("Tenant users list error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch users" });
+    }
+  });
+
   app.post("/api/admin/tenants/:id/create-admin", requireSuperAdmin, async (req, res) => {
     try {
       const { email, password, name } = req.body;
@@ -482,12 +547,6 @@ export async function registerRoutes(app: Express) {
       const tenantId = req.params.id;
       const [tenant] = await db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
       if (!tenant) return res.status(404).json({ error: "Tenant not found" });
-      const [existing] = await db
-        .select()
-        .from(users)
-        .where(and(eq(users.tenantId, tenantId), eq(users.role, "admin")))
-        .limit(1);
-      if (existing) return res.status(400).json({ error: "Tenant already has an admin" });
       const [created] = await db
         .insert(users)
         .values({
@@ -506,6 +565,31 @@ export async function registerRoutes(app: Express) {
       if (e?.code === "23505") return res.status(400).json({ error: "Email already in use" });
       logger.error("Create tenant admin error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to create admin" });
+    }
+  });
+
+  app.patch("/api/admin/users/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const userId = req.params.id;
+      const { name, email, isActive, tenantId, password } = req.body;
+      const [existing] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      if (!existing) return res.status(404).json({ error: "User not found" });
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (name !== undefined) updates.name = name;
+      if (email !== undefined) updates.email = email.toLowerCase();
+      if (isActive !== undefined) updates.isActive = isActive;
+      if (tenantId !== undefined) updates.tenantId = tenantId || null;
+      if (typeof password === "string" && password.trim()) {
+        updates.passwordHash = await hashPassword(password);
+      }
+      const [updated] = await db.update(users).set(updates as any).where(eq(users.id, userId)).returning();
+      if (!updated) return res.status(404).json({ error: "User not found" });
+      const { passwordHash, ...u } = updated;
+      res.json(u);
+    } catch (e: any) {
+      if (e?.code === "23505") return res.status(400).json({ error: "Email already in use" });
+      logger.error("User update error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to update user" });
     }
   });
 

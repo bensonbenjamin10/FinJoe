@@ -8,6 +8,7 @@ import Login from "@/pages/login";
 import Setup from "@/pages/setup";
 import AdminFinJoe from "@/pages/admin-finjoe";
 import AdminTenants from "@/pages/admin-tenants";
+import AdminTenantUsers from "@/pages/admin-tenant-users";
 import { ProtectedRoute } from "@/components/protected-route";
 
 function Router() {
@@ -17,6 +18,11 @@ function Router() {
         <Route path="/" component={Landing} />
         <Route path="/setup" component={Setup} />
         <Route path="/login" component={Login} />
+        <Route path="/admin/tenants/:id/users">
+          <ProtectedRoute requireRoles={["super_admin"]}>
+            <AdminTenantUsers />
+          </ProtectedRoute>
+        </Route>
         <Route path="/admin/tenants">
           <ProtectedRoute requireRoles={["super_admin"]}>
             <AdminTenants />

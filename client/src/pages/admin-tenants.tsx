@@ -19,7 +19,8 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { Plus, Building2, UserPlus, Loader2 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Plus, Building2, UserPlus, Loader2, Edit, Trash2, Users } from "lucide-react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useToast } from "@/hooks/use-toast";
@@ -31,8 +32,11 @@ export default function AdminTenants() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const [createTenantDialog, setCreateTenantDialog] = useState(false);
+  const [editTenantDialog, setEditTenantDialog] = useState<Tenant | null>(null);
+  const [deleteTenantDialog, setDeleteTenantDialog] = useState<Tenant | null>(null);
   const [createAdminDialog, setCreateAdminDialog] = useState<Tenant | null>(null);
   const [tenantForm, setTenantForm] = useState({ name: "", slug: "" });
+  const [editTenantForm, setEditTenantForm] = useState({ name: "", slug: "", isActive: true });
   const [adminForm, setAdminForm] = useState({ email: "", password: "", name: "" });
 
   const { data: tenants = [], isLoading } = useQuery<Tenant[]>({
@@ -58,6 +62,39 @@ export default function AdminTenants() {
       toast({ title: "Tenant created" });
       setCreateTenantDialog(false);
       setTenantForm({ name: "", slug: "" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const updateTenantMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: typeof editTenantForm }) => {
+      const res = await apiRequest("PATCH", `/api/admin/tenants/${id}`, data);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to update");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
+      toast({ title: "Tenant updated" });
+      setEditTenantDialog(null);
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteTenantMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/admin/tenants/${id}`);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to delete");
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
+      toast({ title: "Tenant deactivated" });
+      setDeleteTenantDialog(null);
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -91,6 +128,16 @@ export default function AdminTenants() {
       tenantId: createAdminDialog.id,
       data: adminForm,
     });
+  };
+
+  const handleEditTenant = () => {
+    if (!editTenantDialog) return;
+    updateTenantMutation.mutate({ id: editTenantDialog.id, data: editTenantForm });
+  };
+
+  const openEditTenant = (t: Tenant) => {
+    setEditTenantDialog(t);
+    setEditTenantForm({ name: t.name, slug: t.slug, isActive: t.isActive });
   };
 
   return (
@@ -140,7 +187,7 @@ export default function AdminTenants() {
                     <TableHead>Name</TableHead>
                     <TableHead>Slug</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead className="w-[140px]">Actions</TableHead>
+                    <TableHead className="w-[280px]">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -169,6 +216,24 @@ export default function AdminTenants() {
                             variant="outline"
                             size="sm"
                             className="min-h-[44px] sm:min-h-0"
+                            onClick={() => setLocation(`/admin/tenants/${t.id}/users`)}
+                          >
+                            <Users className="h-4 w-4 mr-1" />
+                            Users
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="min-h-[44px] sm:min-h-0"
+                            onClick={() => openEditTenant(t)}
+                          >
+                            <Edit className="h-4 w-4 mr-1" />
+                            Edit
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="min-h-[44px] sm:min-h-0"
                             onClick={() => {
                               setCreateAdminDialog(t);
                               setAdminForm({ email: "", password: "", name: "" });
@@ -177,6 +242,17 @@ export default function AdminTenants() {
                             <UserPlus className="h-4 w-4 mr-1" />
                             Add Admin
                           </Button>
+                          {t.id !== "default" && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="min-h-[44px] sm:min-h-0 text-destructive hover:text-destructive"
+                              onClick={() => setDeleteTenantDialog(t)}
+                            >
+                              <Trash2 className="h-4 w-4 mr-1" />
+                              Deactivate
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -283,6 +359,87 @@ export default function AdminTenants() {
             >
               {createAdminMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
               Create Admin
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!editTenantDialog} onOpenChange={() => setEditTenantDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Tenant</DialogTitle>
+            <DialogDescription>
+              Update tenant details. Changes take effect immediately.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label>Name</Label>
+              <Input
+                placeholder="Acme Corp"
+                value={editTenantForm.name}
+                onChange={(e) => {
+                  setEditTenantForm((f) => ({
+                    ...f,
+                    name: e.target.value,
+                    slug: f.slug || e.target.value.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, ""),
+                  }));
+                }}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label>Slug</Label>
+              <Input
+                placeholder="acme-corp"
+                value={editTenantForm.slug}
+                onChange={(e) => setEditTenantForm((f) => ({ ...f, slug: e.target.value }))}
+              />
+              <p className="text-xs text-muted-foreground">URL-friendly identifier (lowercase, hyphens only)</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Switch
+                id="edit-tenant-active"
+                checked={editTenantForm.isActive}
+                onCheckedChange={(v) => setEditTenantForm((f) => ({ ...f, isActive: v }))}
+              />
+              <Label htmlFor="edit-tenant-active">Active</Label>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setEditTenantDialog(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleEditTenant}
+              disabled={!editTenantForm.name.trim() || updateTenantMutation.isPending}
+            >
+              {updateTenantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Save
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteTenantDialog} onOpenChange={() => setDeleteTenantDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Deactivate Tenant</DialogTitle>
+            <DialogDescription>
+              Deactivate {deleteTenantDialog?.name}? This will set the tenant as inactive. Users will not be able to
+              access this tenant. You can reactivate it later by editing the tenant.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setDeleteTenantDialog(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteTenantDialog && deleteTenantMutation.mutate(deleteTenantDialog.id)}
+              disabled={deleteTenantMutation.isPending}
+            >
+              {deleteTenantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Deactivate
             </Button>
           </div>
         </DialogContent>
