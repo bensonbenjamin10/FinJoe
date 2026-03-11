@@ -132,7 +132,7 @@ export default function Setup() {
 
   if (checkingStatus) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/10 via-background to-accent/10">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/5 via-background to-primary/10 px-4 py-8">
         <Card className="w-full max-w-md">
           <CardContent className="flex items-center justify-center py-12">
             <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -143,21 +143,23 @@ export default function Setup() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/10 via-background to-accent/10 p-4">
-      <Card className="w-full max-w-2xl">
-        <CardHeader className="text-center space-y-3">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/5 via-background to-primary/10 px-4 py-8 md:py-12">
+      <Card className="w-full max-w-lg shadow-lg">
+        <CardHeader className="text-center space-y-4 px-6 pt-8 md:px-8 md:pt-10">
           <div className="flex justify-center">
-            <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
-              <CheckCircle2 className="w-8 h-8 text-primary" />
+            <div className="w-16 h-16 md:w-20 md:h-20 rounded-full bg-primary/10 flex items-center justify-center">
+              <CheckCircle2 className="w-8 h-8 md:w-10 md:h-10 text-primary" />
             </div>
           </div>
-          <CardTitle className="text-3xl">Welcome to FinJoe</CardTitle>
-          <CardDescription className="text-base">
-            Set up your FinJoe admin account. Create your organization's first admin to manage contacts and the WhatsApp AI.
+          <CardTitle className="font-display text-2xl md:text-3xl">
+            Welcome to FinJoe — Your Finance AI, Ready in Minutes
+          </CardTitle>
+          <CardDescription className="text-base md:text-lg max-w-md mx-auto">
+            Create your admin account to start managing expenses and income via WhatsApp.
           </CardDescription>
         </CardHeader>
 
-        <CardContent>
+        <CardContent className="px-6 pb-8 md:px-8 md:pb-10">
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Name Field */}
             <div className="space-y-2">
@@ -209,8 +211,8 @@ export default function Setup() {
                     <span className="text-muted-foreground">Password strength:</span>
                     <span className={`font-medium ${
                       passwordStrength.score <= 1 ? "text-destructive" :
-                      passwordStrength.score <= 2 ? "text-yellow-600" :
-                      "text-green-600"
+                      passwordStrength.score <= 2 ? "text-amber-600" :
+                      "text-primary"
                     }`}>
                       {passwordStrength.label}
                     </span>
@@ -241,16 +243,16 @@ export default function Setup() {
             </div>
 
             {/* Info Box */}
-            <div className="bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 space-y-2">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
-                <div className="space-y-1 text-sm text-blue-900 dark:text-blue-100">
-                  <p className="font-medium">What happens next?</p>
-                  <ul className="list-disc list-inside space-y-1 text-blue-800 dark:text-blue-200">
-                    <li>Admin account will be created with your credentials</li>
-                    <li>Your organization's FinJoe database will be initialized</li>
-                    <li>You'll be automatically logged in to the FinJoe admin dashboard</li>
-                    <li>This setup wizard will become inaccessible after completion</li>
+            <div className="rounded-lg border border-primary/20 bg-primary/5 p-4 md:p-5">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-primary mt-0.5 flex-shrink-0" />
+                <div className="space-y-1 text-sm text-muted-foreground">
+                  <p className="font-medium text-foreground">What happens next?</p>
+                  <p>After setup, you&apos;ll land in the admin dashboard. This wizard won&apos;t be available again.</p>
+                  <ul className="list-disc list-inside space-y-1 pt-1">
+                    <li>Admin account created with your credentials</li>
+                    <li>Organization&apos;s FinJoe database initialized</li>
+                    <li>You&apos;ll be logged in to the admin dashboard</li>
                   </ul>
                 </div>
               </div>
@@ -259,7 +261,7 @@ export default function Setup() {
             {/* Submit Button */}
             <Button
               type="submit"
-              className="w-full"
+              className="w-full min-h-[48px]"
               size="lg"
               disabled={initializeMutation.isPending}
               data-testid="button-initialize-setup"

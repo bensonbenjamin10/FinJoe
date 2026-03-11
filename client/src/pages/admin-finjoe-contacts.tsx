@@ -179,7 +179,7 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
   if (!tenantId) {
     return (
       <Card>
-        <CardContent className="py-8 text-center text-muted-foreground">
+        <CardContent className="py-12 text-center text-muted-foreground">
           Select a tenant to manage contacts.
         </CardContent>
       </Card>
@@ -189,7 +189,7 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
   return (
     <>
     <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
+        <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <CardTitle className="flex items-center gap-2">
               <MessageCircle className="h-5 w-5" />
@@ -199,19 +199,20 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
               Manage who can use Finance Joe via WhatsApp. Add team members by phone number—they can post expenses, income receipts, and get financial insights.
             </CardDescription>
           </div>
-          <Button onClick={openAdd}>
+          <Button onClick={openAdd} className="w-full sm:w-auto min-h-[44px]">
             <Plus className="h-4 w-4 mr-2" />
             Add Contact
           </Button>
         </CardHeader>
         <CardContent>
           {isLoading ? (
-            <div className="py-8 text-center text-muted-foreground">Loading...</div>
+            <div className="py-12 text-center text-muted-foreground">Loading...</div>
           ) : contacts.length === 0 ? (
-            <div className="py-8 text-center text-muted-foreground">
-              No contacts yet. Add team members to let them chat with Finance Joe on WhatsApp for expenses, income, and finance questions.
+            <div className="py-12 text-center text-muted-foreground">
+              No contacts yet. Add your first WhatsApp contact to get started.
             </div>
           ) : (
+            <div className="overflow-x-auto -mx-4 sm:mx-0">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -252,10 +253,10 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-2">
-                        <Button variant="ghost" size="icon" onClick={() => openEdit(c)}>
+                        <Button variant="ghost" size="icon" className="min-h-[44px] min-w-[44px]" onClick={() => openEdit(c)}>
                           <Edit className="h-4 w-4" />
                         </Button>
-                        <Button variant="ghost" size="icon" onClick={() => setDeleteDialog(c)}>
+                        <Button variant="ghost" size="icon" className="min-h-[44px] min-w-[44px]" onClick={() => setDeleteDialog(c)}>
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>
                       </div>
@@ -264,6 +265,7 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
         </CardContent>
       </Card>

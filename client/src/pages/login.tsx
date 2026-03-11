@@ -74,17 +74,17 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center px-4 py-12">
-      <Card className="w-full max-w-md" data-testid="card-login">
-        <CardHeader className="space-y-1">
-          <CardTitle className="text-2xl font-bold text-center">
+    <div className="min-h-screen bg-background flex items-center justify-center px-4 py-8 md:py-12">
+      <Card className="w-full max-w-md shadow-lg" data-testid="card-login">
+        <CardHeader className="space-y-2 px-6 pt-8 md:px-8 md:pt-10">
+          <CardTitle className="font-display text-2xl font-bold text-center md:text-3xl">
             FinJoe Admin
           </CardTitle>
-          <CardDescription className="text-center">
-            Sign in to manage your organization's FinJoe WhatsApp contacts and settings
+          <CardDescription className="text-center text-base">
+            Sign in to manage your organization&apos;s Finance Joe — contacts, settings, and WhatsApp integration.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-6 pb-8 md:px-8 md:pb-10">
           {error && (
             <Alert variant="destructive" className="mb-4" data-testid="alert-error">
               <AlertDescription>{error}</AlertDescription>
@@ -133,7 +133,7 @@ export default function Login() {
 
               <Button
                 type="submit"
-                className="w-full"
+                className="w-full min-h-[48px]"
                 disabled={loginMutation.isPending}
                 data-testid="button-login"
               >
@@ -153,7 +153,7 @@ export default function Login() {
           </Form>
 
           <div className="mt-6 text-center text-sm text-muted-foreground">
-            Contact your admin if you need access.
+            Need access? Contact your organization admin.
           </div>
         </CardContent>
       </Card>

@@ -20,6 +20,8 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Plus, Building2, UserPlus, Loader2 } from "lucide-react";
+import { AdminLayout } from "@/components/layout/AdminLayout";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useLocation } from "wouter";
@@ -92,29 +94,34 @@ export default function AdminTenants() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b px-4 py-3 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Tenant Management</h1>
+    <AdminLayout
+      headerActions={
         <Button variant="outline" size="sm" onClick={() => setLocation("/admin/finjoe")}>
           Back to FinJoe
         </Button>
-      </header>
-      <div className="container max-w-4xl py-6">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <Building2 className="h-5 w-5" />
-                Tenants
-              </CardTitle>
-              <CardDescription>
-                Create and manage organizations. Each tenant has its own contacts, settings, and WhatsApp provider.
-              </CardDescription>
-            </div>
+      }
+      title="Tenant Management"
+    >
+      <div className="max-w-4xl">
+        <PageHeader
+          title="Tenant Management"
+          description="Create and manage organizations. Each tenant has its own FinJoe instance with separate contacts and WhatsApp settings."
+          actions={
             <Button onClick={() => setCreateTenantDialog(true)}>
               <Plus className="h-4 w-4 mr-2" />
               Create Tenant
             </Button>
+          }
+        />
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Building2 className="h-5 w-5" />
+              Tenants
+            </CardTitle>
+            <CardDescription>
+              Each tenant gets its own FinJoe instance with separate contacts and settings.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             {isLoading ? (
@@ -126,6 +133,7 @@ export default function AdminTenants() {
                 No tenants yet. Create one to get started.
               </div>
             ) : (
+              <div className="overflow-x-auto -mx-4 sm:mx-0">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -148,10 +156,11 @@ export default function AdminTenants() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap gap-2">
                           <Button
                             variant="outline"
                             size="sm"
+                            className="min-h-[44px] sm:min-h-0"
                             onClick={() => setLocation(`/admin/finjoe?tenantId=${t.id}`)}
                           >
                             Manage
@@ -159,6 +168,7 @@ export default function AdminTenants() {
                           <Button
                             variant="outline"
                             size="sm"
+                            className="min-h-[44px] sm:min-h-0"
                             onClick={() => {
                               setCreateAdminDialog(t);
                               setAdminForm({ email: "", password: "", name: "" });
@@ -173,6 +183,7 @@ export default function AdminTenants() {
                   ))}
                 </TableBody>
               </Table>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -276,6 +287,6 @@ export default function AdminTenants() {
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </AdminLayout>
   );
 }

@@ -13,28 +13,28 @@ const TEMPLATES = [
   {
     id: "expense-approval",
     name: "Expense Approval Request",
-    description: "Notify finance when an expense needs approval (outside 24h window)",
+    description: "Sent to finance when an expense needs manual approval (outside the 24h auto-approve window). Include {{1}} for expense ID and {{2}} for amount.",
     field: "expenseApprovalTemplateSid" as const,
     template: `Hello, a new expense request requires your approval. Expense reference #{{1}} for amount {{2}} is pending review. Please reply with APPROVE {{1}} to approve or REJECT {{1}} followed by a reason to reject. Thank you.`,
   },
   {
     id: "expense-approved",
     name: "Expense Approved",
-    description: "Notify submitter when an expense is approved (outside 24h window)",
+    description: "Sent to the submitter when their expense is approved. Include {{1}} for expense ID.",
     field: "expenseApprovedTemplateSid" as const,
     template: `Good news! Your expense submission has been approved. Expense reference #{{1}} is now processed. Thank you for following the expense workflow.`,
   },
   {
     id: "expense-rejected",
     name: "Expense Rejected",
-    description: "Notify submitter when an expense is rejected (outside 24h window)",
+    description: "Sent to the submitter when their expense is rejected. Include {{1}} for expense ID and {{2}} for the rejection reason.",
     field: "expenseRejectedTemplateSid" as const,
     template: `Your expense request reference #{{1}} has been rejected. The reason provided: {{2}} Please review the feedback, make the necessary corrections, and resubmit your expense. Contact your finance team if you need assistance.`,
   },
   {
     id: "re-engagement",
     name: "Re-engagement",
-    description: "Re-engage users outside 24h window",
+    description: "Sent to re-engage users who haven't messaged Finance Joe in over 24 hours. No placeholders required.",
     field: "reEngagementTemplateSid" as const,
     template: `Hello from Finance Joe! I'm here to help with expenses, income receipts, and any finance questions. Reply to get started or ask me anything.`,
   },
@@ -161,15 +161,15 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+          <CardTitle className="flex items-center gap-2 font-display">
             <Settings className="h-5 w-5" />
             WhatsApp Provider (Twilio)
           </CardTitle>
-          <CardDescription>
-            Connect your Twilio WhatsApp Business API. Get credentials from Twilio Console. The webhook URL for incoming messages is shown below.
+          <CardDescription className="text-base">
+            Connect your Twilio WhatsApp Business API. Get credentials from Twilio Console. Use the webhook URL below in Twilio to receive messages.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -244,17 +244,17 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
 
       <Card>
         <CardHeader>
-          <CardTitle>Template SIDs</CardTitle>
-          <CardDescription>
-            Create these templates in Twilio Console → Content Templates, then paste the SIDs here.
+          <CardTitle className="font-display">WhatsApp Message Templates</CardTitle>
+          <CardDescription className="text-base">
+            Create these templates in Twilio Console → Content Templates, then paste the SIDs here. Each template controls what Finance Joe sends in specific situations.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-6">
+        <CardContent className="space-y-8">
           {TEMPLATES.map((t) => (
-            <div key={t.id} className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label>{t.name}</Label>
-                <Button variant="outline" size="sm" onClick={() => handleCopyTemplate(t.template)}>
+            <div key={t.id} className="space-y-3 rounded-lg border p-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <Label className="font-medium">{t.name}</Label>
+                <Button variant="outline" size="sm" className="w-full sm:w-auto min-h-[44px] sm:min-h-0" onClick={() => handleCopyTemplate(t.template)}>
                   <Copy className="h-4 w-4 mr-2" />
                   Copy template
                 </Button>

@@ -19,13 +19,6 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { CheckCircle, XCircle, UserPlus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -102,9 +95,16 @@ export default function AdminFinJoeRoleRequests({ tenantId }: { tenantId?: strin
     );
   }
 
+  const filterOptions = [
+    { value: "pending", label: "Pending" },
+    { value: "approved", label: "Approved" },
+    { value: "rejected", label: "Rejected" },
+    { value: "all", label: "All" },
+  ];
+
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between">
+      <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <CardTitle className="flex items-center gap-2">
             <UserPlus className="h-5 w-5" />
@@ -114,26 +114,31 @@ export default function AdminFinJoeRoleRequests({ tenantId }: { tenantId?: strin
             Approve or reject requests from people who want to join your organization via Finance Joe on WhatsApp.
           </CardDescription>
         </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-[140px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="pending">Pending</SelectItem>
-            <SelectItem value="approved">Approved</SelectItem>
-            <SelectItem value="rejected">Rejected</SelectItem>
-            <SelectItem value="all">All</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className="flex overflow-x-auto gap-2 pb-2 sm:pb-0 sm:overflow-visible shrink-0">
+          {filterOptions.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setStatusFilter(opt.value)}
+              className={`px-4 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors ${
+                statusFilter === opt.value
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-muted/80"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
       </CardHeader>
       <CardContent>
         {isLoading ? (
-          <div className="py-8 text-center text-muted-foreground">Loading...</div>
+          <div className="py-12 text-center text-muted-foreground">Loading...</div>
         ) : requests.length === 0 ? (
-          <div className="py-8 text-center text-muted-foreground">
-            No role requests found.
+          <div className="py-12 text-center text-muted-foreground">
+            {statusFilter === "pending" ? "No pending requests." : "No role requests found."}
           </div>
         ) : (
+          <div className="overflow-x-auto -mx-4 sm:mx-0">
           <Table>
             <TableHeader>
               <TableRow>
@@ -175,6 +180,7 @@ export default function AdminFinJoeRoleRequests({ tenantId }: { tenantId?: strin
                         <Button
                           variant="ghost"
                           size="icon"
+                          className="min-h-[44px] min-w-[44px]"
                           onClick={() => approveMutation.mutate(r.id)}
                           disabled={approveMutation.isPending}
                         >
@@ -183,6 +189,7 @@ export default function AdminFinJoeRoleRequests({ tenantId }: { tenantId?: strin
                         <Button
                           variant="ghost"
                           size="icon"
+                          className="min-h-[44px] min-w-[44px]"
                           onClick={() => setRejectDialog({ request: r, reason: "" })}
                           disabled={rejectMutation.isPending}
                         >
@@ -195,6 +202,7 @@ export default function AdminFinJoeRoleRequests({ tenantId }: { tenantId?: strin
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </CardContent>
 
