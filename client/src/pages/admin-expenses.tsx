@@ -60,29 +60,125 @@ import type {
   Campus,
 } from "@shared/schema";
 
-function ExpenseImportWizard({ tenantId, onSuccess }: { tenantId: string | null; onSuccess: () => void }) {
+type PreviewRow = { date: string; particulars: string; amount: number; majorHead?: string; branch?: string; categoryMatch: string };
+type IncomePreviewRow = { date: string; particulars: string; amount: number; categoryMatch: string };
+
+function ImportWizard({
+  tenantId,
+  expenseCategories,
+  incomeCategories,
+  campuses,
+  costCenterLabel,
+  onSuccess,
+}: {
+  tenantId: string | null;
+  expenseCategories: ExpenseCategory[];
+  incomeCategories: Array<{ id: string; name: string; slug: string }>;
+  campuses: Campus[];
+  costCenterLabel: string;
+  onSuccess: () => void;
+}) {
+  const addCategoryMutation = useMutation({
+    mutationFn: async (proposed: { name: string; slug: string; type: "expense" | "income"; rowIndices?: number[] }) => {
+      if (proposed.type === "expense") {
+        const res = await apiRequest("POST", "/api/admin/expense-categories", {
+          name: proposed.name,
+          slug: proposed.slug,
+          cashflowLabel: proposed.name,
+          tenantId,
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || "Failed to create category");
+        }
+        return res.json();
+      } else {
+        const res = await apiRequest("POST", "/api/admin/income-categories", {
+          name: proposed.name,
+          slug: proposed.slug,
+          tenantId,
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || "Failed to create category");
+        }
+        return res.json();
+      }
+    },
+    onSuccess: (created, proposed) => {
+      if (proposed.type === "expense") {
+        setExpenseOverrides((prev) => {
+          const next = { ...prev };
+          for (const i of proposed.rowIndices ?? []) {
+            next[String(i)] = created.id;
+          }
+          return next;
+        });
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/expense-categories"] });
+      } else {
+        setIncomeOverrides((prev) => {
+          const next = { ...prev };
+          for (const i of proposed.rowIndices ?? []) {
+            next[String(i)] = created.id;
+          }
+          return next;
+        });
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/income-categories"] });
+      }
+      toast({ title: "Category created", description: `${proposed.name} added and applied to ${(proposed.rowIndices ?? []).length} rows` });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
   const { toast } = useToast();
+  const [step, setStep] = useState(1);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<{
-    preview: Array<{ date: string; particulars: string; amount: number; majorHead: string; branch: string; categoryMatch: string }>;
+    preview: PreviewRow[];
     totalRows: number;
     totalAmount: number;
-    incomePreview?: Array<{ date: string; particulars: string; amount: number; categoryMatch: string }>;
+    incomePreview?: IncomePreviewRow[];
     incomeTotalRows?: number;
     incomeTotalAmount?: number;
     skippedZero?: number;
+    suggestedExpenseMappings?: Record<string, string>;
+    suggestedIncomeMappings?: Record<string, string>;
+    proposedNewCategories?: Array<{ name: string; slug: string; reason: string; type: "expense" | "income"; rowIndices?: number[] }>;
   } | null>(null);
+  const [expenseOverrides, setExpenseOverrides] = useState<Record<string, string>>({});
+  const [incomeOverrides, setIncomeOverrides] = useState<Record<string, string>>({});
+  const [costCenterOverrides, setCostCenterOverrides] = useState<Record<string, string | null>>({});
+
+  const slugToExpCatId = Object.fromEntries(expenseCategories.map((c) => [c.slug, c.id]));
+  const slugToIncCatId = Object.fromEntries(incomeCategories.map((c) => [c.slug, c.id]));
 
   const previewMutation = useMutation({
     mutationFn: async (f: File) => {
       const form = new FormData();
       form.append("file", f);
       if (tenantId) form.append("tenantId", tenantId);
-      const res = await fetch("/api/admin/expenses/import/preview", { method: "POST", body: form, credentials: "include" });
-      if (!res.ok) throw new Error((await res.json()).error || "Preview failed");
+      const res = await fetch("/api/admin/expenses/import/analyze", { method: "POST", body: form, credentials: "include" });
+      if (!res.ok) throw new Error((await res.json()).error || "Analysis failed");
       return res.json();
     },
-    onSuccess: (data) => setPreview(data),
+    onSuccess: (data) => {
+      setPreview(data);
+      const slugToExp = Object.fromEntries(expenseCategories.map((c) => [c.slug, c.id]));
+      const slugToInc = Object.fromEntries(incomeCategories.map((c) => [c.slug, c.id]));
+      const expOverrides: Record<string, string> = {};
+      const incOverrides: Record<string, string> = {};
+      for (const [idx, slug] of Object.entries(data.suggestedExpenseMappings ?? {})) {
+        const id = slugToExp[slug];
+        if (id) expOverrides[idx] = id;
+      }
+      for (const [idx, slug] of Object.entries(data.suggestedIncomeMappings ?? {})) {
+        const id = slugToInc[slug];
+        if (id) incOverrides[idx] = id;
+      }
+      setExpenseOverrides(expOverrides);
+      setIncomeOverrides(incOverrides);
+      setCostCenterOverrides({});
+      setStep(2);
+    },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
@@ -91,6 +187,9 @@ function ExpenseImportWizard({ tenantId, onSuccess }: { tenantId: string | null;
       const form = new FormData();
       form.append("file", f);
       if (tenantId) form.append("tenantId", tenantId);
+      form.append("expenseOverrides", JSON.stringify(expenseOverrides));
+      form.append("incomeOverrides", JSON.stringify(incomeOverrides));
+      form.append("costCenterOverrides", JSON.stringify(costCenterOverrides));
       const res = await fetch("/api/admin/expenses/import/execute", { method: "POST", body: form, credentials: "include" });
       if (!res.ok) throw new Error((await res.json()).error || "Import failed");
       return res.json();
@@ -102,97 +201,219 @@ function ExpenseImportWizard({ tenantId, onSuccess }: { tenantId: string | null;
       toast({ title: "Import complete", description: msg });
       setFile(null);
       setPreview(null);
+      setStep(1);
       onSuccess();
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const expRows = preview?.preview ?? [];
+  const incRows = preview?.incomePreview ?? [];
+
   return (
-    <div className="space-y-4">
-      <div>
-        <Label>Upload CSV</Label>
-        <Input
-          type="file"
-          accept=".csv"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) {
-              setFile(f);
-              setPreview(null);
-              previewMutation.mutate(f);
-            }
-          }}
-        />
+    <div className="space-y-6">
+      {/* Stepper */}
+      <div className="flex items-center gap-2 text-sm">
+        <div className={cn("flex items-center gap-1", step >= 1 && "text-primary font-medium")}>
+          <span className="flex h-6 w-6 items-center justify-center rounded-full border text-xs">{step > 1 ? "1" : "1"}</span>
+          Upload
+        </div>
+        <div className="h-px w-8 bg-border" />
+        <div className={cn("flex items-center gap-1", step >= 2 && "text-primary font-medium")}>
+          <span className="flex h-6 w-6 items-center justify-center rounded-full border text-xs">2</span>
+          Review & Map
+        </div>
+        <div className="h-px w-8 bg-border" />
+        <div className={cn("flex items-center gap-1", step >= 3 && "text-primary font-medium")}>
+          <span className="flex h-6 w-6 items-center justify-center rounded-full border text-xs">3</span>
+          Import
+        </div>
       </div>
-      {previewMutation.isPending && <p className="text-sm text-muted-foreground">Analyzing...</p>}
-      {preview && (
-        <div className="space-y-2">
-          <p className="text-sm font-medium">
-            {preview.totalRows} expense rows (withdrawals), total ₹ {preview.totalAmount.toLocaleString("en-IN")}
+
+      {/* Step 1: Upload */}
+      {step === 1 && (
+        <div className="space-y-4">
+          <div>
+            <Label>Upload CSV</Label>
+            <Input
+              type="file"
+              accept=".csv"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) {
+                  setFile(f);
+                  previewMutation.mutate(f);
+                }
+              }}
+            />
+          </div>
+          {previewMutation.isPending && <p className="text-sm text-muted-foreground">Analyzing CSV with AI...</p>}
+        </div>
+      )}
+
+      {/* Step 2: Review & Map */}
+      {step === 2 && preview && (
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            {preview.totalRows} expenses (₹ {preview.totalAmount.toLocaleString("en-IN")})
+            {preview.incomeTotalRows && preview.incomeTotalRows > 0 && (
+              <span className="ml-2 text-green-600 dark:text-green-400">
+                • {preview.incomeTotalRows} income (₹ {(preview.incomeTotalAmount ?? 0).toLocaleString("en-IN")})
+              </span>
+            )}
           </p>
-          {preview.incomeTotalRows !== undefined && preview.incomeTotalRows > 0 && (
-            <p className="text-sm font-medium text-green-700 dark:text-green-400">
-              {preview.incomeTotalRows} income rows (deposits), total ₹ {preview.incomeTotalAmount?.toLocaleString("en-IN") ?? 0}
-            </p>
+          {preview.proposedNewCategories && preview.proposedNewCategories.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-sm font-medium">AI-suggested new categories</p>
+              <div className="flex flex-wrap gap-2">
+                {preview.proposedNewCategories.map((proposed, idx) => {
+                  const rowCount = proposed.rowIndices?.length ?? 0;
+                  const slugExists = proposed.type === "expense"
+                    ? expenseCategories.some((c) => c.slug === proposed.slug)
+                    : incomeCategories.some((c) => c.slug === proposed.slug);
+                  return (
+                    <div
+                      key={idx}
+                      className="flex items-center gap-2 rounded-md border bg-muted/50 px-3 py-2 text-sm"
+                    >
+                      <span className="font-medium">{proposed.name}</span>
+                      <span className="text-muted-foreground">({rowCount} rows)</span>
+                      <span className="text-muted-foreground">— {proposed.reason}</span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={slugExists || addCategoryMutation.isPending}
+                        onClick={() => addCategoryMutation.mutate(proposed)}
+                      >
+                        {addCategoryMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                        {slugExists ? "Already exists" : "Add and apply"}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           )}
-          {preview.skippedZero !== undefined && preview.skippedZero > 0 && (
-            <p className="text-xs text-muted-foreground">Skipped: {preview.skippedZero} zero/empty rows</p>
-          )}
-          <div className="max-h-48 overflow-auto border rounded p-2">
+          <div className="max-h-80 overflow-auto border rounded">
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>Type</TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead>Particulars</TableHead>
                   <TableHead>Amount</TableHead>
+                  <TableHead>{costCenterLabel}</TableHead>
                   <TableHead>Category</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {preview.preview.slice(0, 10).map((r, i) => (
-                  <TableRow key={i}>
+                {expRows.map((r, i) => (
+                  <TableRow key={`exp-${i}`}>
+                    <TableCell><Badge variant="outline">Expense</Badge></TableCell>
                     <TableCell>{r.date}</TableCell>
-                    <TableCell>{r.particulars}</TableCell>
+                    <TableCell className="max-w-[200px] truncate" title={r.particulars}>{r.particulars}</TableCell>
                     <TableCell>₹ {r.amount.toLocaleString("en-IN")}</TableCell>
-                    <TableCell>{r.categoryMatch}</TableCell>
+                    <TableCell>
+                      <Select
+                        value={
+                          costCenterOverrides[String(i)] !== undefined
+                            ? (costCenterOverrides[String(i)] ?? "__corporate__")
+                            : (r.branch ? campuses.find((c) => c.name.toLowerCase() === r.branch?.toLowerCase() || c.slug?.toLowerCase() === r.branch?.toLowerCase())?.id ?? "__corporate__" : "__corporate__")
+                        }
+                        onValueChange={(v) => setCostCenterOverrides((o) => ({ ...o, [String(i)]: v === "__corporate__" ? null : v }))}
+                      >
+                        <SelectTrigger className="h-8 w-[140px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__corporate__">Corporate</SelectItem>
+                          {campuses.map((c) => (
+                            <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell>
+                      <Select
+                        value={expenseOverrides[String(i)] ?? slugToExpCatId[r.categoryMatch] ?? expenseCategories[0]?.id}
+                        onValueChange={(v) => setExpenseOverrides((o) => ({ ...o, [String(i)]: v }))}
+                      >
+                        <SelectTrigger className="h-8 w-[160px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {expenseCategories.map((c) => (
+                            <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {incRows.map((r, i) => (
+                  <TableRow key={`inc-${i}`}>
+                    <TableCell><Badge className="bg-green-600">Income</Badge></TableCell>
+                    <TableCell>{r.date}</TableCell>
+                    <TableCell className="max-w-[200px] truncate" title={r.particulars}>{r.particulars}</TableCell>
+                    <TableCell className="text-green-600">₹ {r.amount.toLocaleString("en-IN")}</TableCell>
+                    <TableCell>—</TableCell>
+                    <TableCell>
+                      <Select
+                        value={incomeOverrides[String(i)] ?? slugToIncCatId[r.categoryMatch] ?? incomeCategories[0]?.id ?? (incomeCategories.length === 0 ? "__skip__" : "")}
+                        onValueChange={(v) => setIncomeOverrides((o) => ({ ...o, [String(i)]: v === "__skip__" ? "" : v }))}
+                      >
+                        <SelectTrigger className="h-8 w-[160px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {incomeCategories.length === 0 ? (
+                            <SelectItem value="__skip__" disabled>Add categories in Income page</SelectItem>
+                          ) : (
+                            incomeCategories.map((c) => (
+                              <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                            ))
+                          )}
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           </div>
-          {preview.incomePreview && preview.incomePreview.length > 0 && (
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground">Income (deposits) preview</p>
-              <div className="max-h-32 overflow-auto border rounded p-2">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Particulars</TableHead>
-                      <TableHead>Amount</TableHead>
-                      <TableHead>Category</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {preview.incomePreview.slice(0, 5).map((r, i) => (
-                      <TableRow key={i}>
-                        <TableCell>{r.date}</TableCell>
-                        <TableCell>{r.particulars}</TableCell>
-                        <TableCell className="text-green-600">₹ {r.amount.toLocaleString("en-IN")}</TableCell>
-                        <TableCell>{r.categoryMatch}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </div>
-          )}
-          <Button
-            onClick={() => file && executeMutation.mutate(file)}
-            disabled={executeMutation.isPending || !file}
-          >
-            {executeMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Import"}
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
+            <Button onClick={() => setStep(3)}>Continue to Summary</Button>
+          </div>
+        </div>
+      )}
+
+      {/* Step 3: Summary & Import */}
+      {step === 3 && preview && (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Import Summary</CardTitle>
+              <CardDescription>Review and confirm the import</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <p><strong>{preview.totalRows}</strong> expenses • ₹ {preview.totalAmount.toLocaleString("en-IN")}</p>
+              {preview.incomeTotalRows && preview.incomeTotalRows > 0 && (
+                <p className="text-green-600 dark:text-green-400">
+                  <strong>{preview.incomeTotalRows}</strong> income • ₹ {(preview.incomeTotalAmount ?? 0).toLocaleString("en-IN")}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setStep(2)}>Back</Button>
+            <Button
+              onClick={() => file && executeMutation.mutate(file)}
+              disabled={executeMutation.isPending || !file}
+            >
+              {executeMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Import"}
+            </Button>
+          </div>
         </div>
       )}
     </div>
@@ -556,6 +777,16 @@ export default function AdminExpenses() {
       return res.json();
     },
     enabled: !!tenantId,
+  });
+
+  const { data: incomeCategoriesForImport = [] } = useQuery<Array<{ id: string; name: string; slug: string }>>({
+    queryKey: ["/api/admin/income-categories", "import", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/income-categories${tenantId ? `?tenantId=${tenantId}` : ""}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!tenantId && canImportExpenses,
   });
 
   const { data: pettyCashFunds = [] } = useQuery<any[]>({
@@ -1331,8 +1562,12 @@ export default function AdminExpenses() {
                       Download Template
                     </Button>
                   </div>
-                  <ExpenseImportWizard
+                  <ImportWizard
                     tenantId={tenantId}
+                    expenseCategories={categoriesForAdmin.filter((c) => c.isActive)}
+                    incomeCategories={incomeCategoriesForImport}
+                    campuses={campuses}
+                    costCenterLabel={costCenterLabel}
                     onSuccess={() => {
                       queryClient.invalidateQueries({ queryKey: ["/api/admin/expenses"] });
                       queryClient.invalidateQueries({ queryKey: ["/api/admin/income"] });

@@ -4,6 +4,7 @@ import passport from "passport";
 import { eq, and, desc, or, sql, inArray, isNull } from "drizzle-orm";
 import { db } from "./db.js";
 import { parseBankStatementCsv, isValidDateString } from "../lib/bank-statement-parser.js";
+import { analyzeImportSuggestions } from "../lib/import-analyzer.js";
 import { hashPassword, requireAdmin, requireSuperAdmin, getTenantId } from "./auth.js";
 import { logger } from "./logger.js";
 import {
@@ -1116,6 +1117,51 @@ export async function registerRoutes(app: Express) {
     }
   });
 
+  app.post("/api/admin/expenses/import/analyze", requireAdmin, upload.single("file"), async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const file = (req as any).file;
+      if (!file?.buffer) return res.status(400).json({ error: "No file uploaded" });
+
+      const expCats = await db.select({ id: expenseCategories.id, name: expenseCategories.name, slug: expenseCategories.slug }).from(expenseCategories).where(and(eq(expenseCategories.isActive, true), or(eq(expenseCategories.tenantId, tid), isNull(expenseCategories.tenantId))));
+      const incCats = await db.select({ id: incomeCategories.id, name: incomeCategories.name, slug: incomeCategories.slug }).from(incomeCategories).where(and(eq(incomeCategories.tenantId, tid), eq(incomeCategories.isActive, true)));
+      const expSlugs = expCats.map((c) => c.slug);
+      const incSlugs = incCats.length > 0 ? incCats.map((c) => c.slug) : ["other"];
+
+      const { expenses: expRows, income: incRows, skippedZero } = parseBankStatementCsv(file.buffer, expSlugs, incSlugs);
+
+      const totalExpAmount = expRows.reduce((s, r) => s + r.amount, 0);
+      const totalIncAmount = incRows.reduce((s, r) => s + r.amount, 0);
+
+      const { suggestedExpenseMappings, suggestedIncomeMappings, proposedNewCategories } = await analyzeImportSuggestions(
+        expRows,
+        incRows,
+        expCats,
+        incCats.length > 0 ? incCats : [{ id: "", name: "Other", slug: "other" }]
+      );
+
+      res.json({
+        preview: expRows.map((r) => ({ date: r.date, particulars: r.particulars, amount: r.amount, majorHead: r.majorHead ?? "", branch: r.branch ?? "", categoryMatch: r.categoryMatch })),
+        totalRows: expRows.length,
+        totalAmount: totalExpAmount,
+        incomePreview: incRows.map((r) => ({ date: r.date, particulars: r.particulars, amount: r.amount, categoryMatch: r.categoryMatch })),
+        incomeTotalRows: incRows.length,
+        incomeTotalAmount: totalIncAmount,
+        skippedZero,
+        suggestedExpenseMappings,
+        suggestedIncomeMappings,
+        proposedNewCategories,
+      });
+    } catch (e) {
+      logger.error("Import analyze error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to analyze CSV" });
+    }
+  });
+
   app.post("/api/admin/expenses/import/execute", requireAdmin, upload.single("file"), async (req, res) => {
     try {
       const tenantId = getTenantId(req);
@@ -1126,9 +1172,27 @@ export async function registerRoutes(app: Express) {
       const file = (req as any).file;
       if (!file?.buffer) return res.status(400).json({ error: "No file uploaded" });
 
+      let expenseOverrides: Record<string, string> = {};
+      let incomeOverrides: Record<string, string> = {};
+      let costCenterOverrides: Record<string, string | null> = {};
+      try {
+        if (req.body?.expenseOverrides && typeof req.body.expenseOverrides === "string") {
+          expenseOverrides = JSON.parse(req.body.expenseOverrides) || {};
+        }
+        if (req.body?.incomeOverrides && typeof req.body.incomeOverrides === "string") {
+          incomeOverrides = JSON.parse(req.body.incomeOverrides) || {};
+        }
+        if (req.body?.costCenterOverrides && typeof req.body.costCenterOverrides === "string") {
+          costCenterOverrides = JSON.parse(req.body.costCenterOverrides) || {};
+        }
+      } catch (_) {}
+
       const expCats = await db.select({ id: expenseCategories.id, slug: expenseCategories.slug }).from(expenseCategories).where(and(eq(expenseCategories.isActive, true), or(eq(expenseCategories.tenantId, tid), isNull(expenseCategories.tenantId))));
       const incCats = await db.select({ id: incomeCategories.id, slug: incomeCategories.slug }).from(incomeCategories).where(and(eq(incomeCategories.tenantId, tid), eq(incomeCategories.isActive, true)));
       const costCentersList = await db.select({ id: costCenters.id, name: costCenters.name, slug: costCenters.slug }).from(costCenters).where(and(eq(costCenters.tenantId, tid), eq(costCenters.isActive, true)));
+      const validExpCatIds = new Set(expCats.map((c) => c.id));
+      const validIncCatIds = new Set(incCats.map((c) => c.id));
+      const validCcIds = new Set(costCentersList.map((c) => c.id));
 
       const expSlugToId = Object.fromEntries(expCats.map((c) => [c.slug, c.id]));
       const incSlugToId = Object.fromEntries(incCats.map((c) => [c.slug, c.id]));
@@ -1150,11 +1214,16 @@ export async function registerRoutes(app: Express) {
         return d;
       };
 
-      for (const r of expRows) {
+      for (let i = 0; i < expRows.length; i++) {
+        const r = expRows[i];
         if (!isValidDateString(r.date)) continue;
-        const categoryId = expSlugToId[r.categoryMatch] ?? expCats[0]?.id;
+        const overrideCat = expenseOverrides[String(i)];
+        const categoryId = (overrideCat && validExpCatIds.has(overrideCat) ? overrideCat : null) ?? expSlugToId[r.categoryMatch] ?? expCats[0]?.id;
         if (!categoryId) continue;
-        const ccId = branchToCcId(r.branch);
+        const overrideCc = costCenterOverrides[String(i)];
+        const ccId = overrideCc !== undefined
+          ? (overrideCc === null || overrideCc === "__corporate__" ? null : validCcIds.has(overrideCc) ? overrideCc : null)
+          : branchToCcId(r.branch);
         await db.insert(expenses).values({
           tenantId: tid,
           costCenterId: ccId,
@@ -1169,9 +1238,11 @@ export async function registerRoutes(app: Express) {
       }
 
       const defaultIncCatId = incCats[0]?.id;
-      for (const r of incRows) {
+      for (let i = 0; i < incRows.length; i++) {
+        const r = incRows[i];
         if (!isValidDateString(r.date)) continue;
-        const categoryId = incSlugToId[r.categoryMatch] ?? defaultIncCatId;
+        const overrideCat = incomeOverrides[String(i)];
+        const categoryId = (overrideCat && validIncCatIds.has(overrideCat) ? overrideCat : null) ?? incSlugToId[r.categoryMatch] ?? defaultIncCatId;
         if (!categoryId) continue;
         await db.insert(incomeRecords).values({
           tenantId: tid,
