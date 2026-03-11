@@ -46,16 +46,41 @@ function parseAmount(val: string | undefined): number | null {
 
 function parseDate(val: string | undefined): string | null {
   if (!val?.trim()) return null;
-  const s = val.trim();
+  const s = String(val).trim();
+  // YYYY-MM-DD (ISO)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
   // DD-MM-YYYY or DD/MM/YYYY
   const ddmmyyyy = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
   if (ddmmyyyy) {
     const [, d, m, y] = ddmmyyyy;
     return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
   }
-  // YYYY-MM-DD
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // DD.MM.YYYY
+  const ddmmyyyy2 = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (ddmmyyyy2) {
+    const [, d, m, y] = ddmmyyyy2;
+    return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+  // Excel serial date (days since 1900-01-01)
+  const excelSerial = /^\d+$/.test(s) ? parseInt(s, 10) : NaN;
+  if (!isNaN(excelSerial) && excelSerial > 0) {
+    const d = new Date((excelSerial - 25569) * 86400 * 1000);
+    if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  }
+
+  // Try native Date parse for formats like "11 Mar 2026", "Mar 11, 2026"
+  const parsed = new Date(s);
+  if (!isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10);
+  }
   return null;
+}
+
+/** Returns true if the date string produces a valid Date */
+export function isValidDateString(dateStr: string): boolean {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
+  const d = new Date(dateStr + "T12:00:00Z");
+  return !isNaN(d.getTime());
 }
 
 /** Keyword-to-category slug mapping for expense categorization */

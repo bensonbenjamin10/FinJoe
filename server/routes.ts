@@ -3,7 +3,7 @@ import multer from "multer";
 import passport from "passport";
 import { eq, and, desc, or, sql, inArray, isNull } from "drizzle-orm";
 import { db } from "./db.js";
-import { parseBankStatementCsv } from "../lib/bank-statement-parser.js";
+import { parseBankStatementCsv, isValidDateString } from "../lib/bank-statement-parser.js";
 import { hashPassword, requireAdmin, requireSuperAdmin, getTenantId } from "./auth.js";
 import { logger } from "./logger.js";
 import {
@@ -1144,7 +1144,14 @@ export async function registerRoutes(app: Express) {
       let imported = 0;
       let incomeImported = 0;
 
+      const toDate = (dateStr: string): Date => {
+        const d = new Date(dateStr + "T12:00:00Z");
+        if (isNaN(d.getTime())) throw new RangeError(`Invalid date: ${dateStr}`);
+        return d;
+      };
+
       for (const r of expRows) {
+        if (!isValidDateString(r.date)) continue;
         const categoryId = expSlugToId[r.categoryMatch] ?? expCats[0]?.id;
         if (!categoryId) continue;
         const ccId = branchToCcId(r.branch);
@@ -1153,7 +1160,7 @@ export async function registerRoutes(app: Express) {
           costCenterId: ccId,
           categoryId,
           amount: r.amount,
-          expenseDate: new Date(r.date),
+          expenseDate: toDate(r.date),
           description: r.particulars || "Bank import",
           status: "draft",
           source: "bank_import",
@@ -1163,6 +1170,7 @@ export async function registerRoutes(app: Express) {
 
       const defaultIncCatId = incCats[0]?.id;
       for (const r of incRows) {
+        if (!isValidDateString(r.date)) continue;
         const categoryId = incSlugToId[r.categoryMatch] ?? defaultIncCatId;
         if (!categoryId) continue;
         await db.insert(incomeRecords).values({
@@ -1170,7 +1178,7 @@ export async function registerRoutes(app: Express) {
           costCenterId: null,
           categoryId,
           amount: r.amount,
-          incomeDate: new Date(r.date),
+          incomeDate: toDate(r.date),
           particulars: r.particulars || "Bank import",
           incomeType: "other",
           source: "bank_import",
