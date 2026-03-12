@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Settings, Loader2, Copy, AlertCircle, Mail, MessageSquare, RefreshCw, Plus } from "lucide-react";
+import { Settings, Loader2, Copy, AlertCircle, Mail, MessageSquare, RefreshCw, Plus, Send } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -146,10 +146,13 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
       return data as { created: Record<string, string>; errors: string[] };
     },
     onSuccess: (data) => {
+      if (Object.keys(data.created).length > 0) {
+        setTemplateForm((prev) => ({ ...prev, ...data.created }));
+      }
       const count = Object.keys(data.created).length;
       const msg =
         count > 0
-          ? "Templates created and submitted for approval. Approvals typically take 24–48 hours. Use Sync from Twilio once approved."
+          ? "Templates created. Click Submit for approval, then Sync from Twilio once approved (24–48 hours)."
           : "No templates were created.";
       toast({
         title: count > 0 ? "Templates created" : "Create templates",
@@ -157,6 +160,43 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
       });
     },
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
+  });
+
+  const submitForApprovalMutation = useMutation({
+    mutationFn: async () => {
+      const sids = {
+        expenseApprovalTemplateSid: templateForm.expenseApprovalTemplateSid ?? settings?.expenseApprovalTemplateSid ?? "",
+        expenseApprovedTemplateSid: templateForm.expenseApprovedTemplateSid ?? settings?.expenseApprovedTemplateSid ?? "",
+        expenseRejectedTemplateSid: templateForm.expenseRejectedTemplateSid ?? settings?.expenseRejectedTemplateSid ?? "",
+        reEngagementTemplateSid: templateForm.reEngagementTemplateSid ?? settings?.reEngagementTemplateSid ?? "",
+      };
+      const body = tenantId ? { tenantId, sids } : { sids };
+      const res = await fetch("/api/admin/finjoe/submit-for-approval", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = (data as { error?: string }).error;
+        const details = (data as { details?: string[] }).details;
+        throw new Error(details?.length ? `${err}: ${details.join("; ")}` : err || "Failed to submit for approval");
+      }
+      return data as { submitted: string[]; errors: string[] };
+    },
+    onSuccess: (data) => {
+      const count = data.submitted.length;
+      const msg =
+        count > 0
+          ? "Templates submitted for approval. Approvals typically take 24–48 hours. Use Sync from Twilio once approved."
+          : "No templates were submitted.";
+      toast({
+        title: count > 0 ? "Submitted for approval" : "Submit for approval",
+        description: data.errors.length > 0 ? `${msg} Some errors: ${data.errors.join("; ")}` : msg,
+      });
+    },
+    onError: (e: Error) => toast({ title: "Submit failed", description: e.message, variant: "destructive" }),
   });
 
   const syncTemplatesMutation = useMutation({
@@ -501,7 +541,7 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
         <CardHeader className="p-6">
           <CardTitle className="font-display">WhatsApp Message Templates</CardTitle>
           <CardDescription className="text-base">
-            Use <strong>Create templates</strong> to create the 4 FinJoe templates in Twilio and submit for approval. Once approved (typically 24–48 hours), use <strong>Sync from Twilio</strong> to pull SIDs. Or paste SIDs manually. Each template controls what Finance Joe sends in specific situations.
+            Step 1: <strong>Create templates</strong> to create the 4 FinJoe templates in Twilio. Step 2: <strong>Submit for approval</strong> to send them to WhatsApp. Step 3: Once approved (24–48 hours), use <strong>Sync from Twilio</strong> to pull SIDs. Or paste SIDs manually. Each template controls what Finance Joe sends in specific situations.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-8 p-6">
@@ -531,6 +571,23 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
             >
               {createTemplatesMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Plus className="h-4 w-4 mr-2" />}
               Create templates
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => submitForApprovalMutation.mutate()}
+              disabled={
+                submitForApprovalMutation.isPending ||
+                !provider?.accountSid ||
+                !(
+                  (templateForm.expenseApprovalTemplateSid ?? settings?.expenseApprovalTemplateSid) ||
+                  (templateForm.expenseApprovedTemplateSid ?? settings?.expenseApprovedTemplateSid) ||
+                  (templateForm.expenseRejectedTemplateSid ?? settings?.expenseRejectedTemplateSid) ||
+                  (templateForm.reEngagementTemplateSid ?? settings?.reEngagementTemplateSid)
+                )
+              }
+            >
+              {submitForApprovalMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Send className="h-4 w-4 mr-2" />}
+              Submit for approval
             </Button>
             <Button
               variant="outline"

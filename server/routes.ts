@@ -23,7 +23,7 @@ import {
   incomeTypes,
 } from "../shared/schema.js";
 import { createFinJoeData } from "../lib/finjoe-data.js";
-import { createTemplatesInTwilio } from "../lib/twilio-content-create.js";
+import { createTemplatesInTwilio, submitTemplatesForApproval } from "../lib/twilio-content-create.js";
 import { fetchApprovedTemplatesFromTwilio } from "../lib/twilio-content-sync.js";
 import { sendFinJoeEmail } from "../worker/src/email.js";
 import { sendFinJoeSms } from "../worker/src/twilio.js";
@@ -554,6 +554,34 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("FinJoe create-templates error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to create templates in Twilio" });
+    }
+  });
+
+  app.post("/api/admin/finjoe/submit-for-approval", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const credentials = await getCredentialsForTenant(tid);
+      if (!credentials?.config?.accountSid || !credentials.config.authToken) {
+        return res.status(400).json({ error: "Twilio credentials not configured for this tenant. Configure WhatsApp provider first." });
+      }
+      const sids = req.body?.sids ?? {};
+      if (typeof sids !== "object") return res.status(400).json({ error: "sids must be an object" });
+      const { submitted, errors } = await submitTemplatesForApproval(
+        credentials.config.accountSid,
+        credentials.config.authToken,
+        sids
+      );
+      if (submitted.length === 0 && errors.length > 0) {
+        return res.status(500).json({ error: "Failed to submit templates for approval", details: errors });
+      }
+      res.json({ submitted, errors });
+    } catch (e) {
+      logger.error("FinJoe submit-for-approval error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to submit templates for approval" });
     }
   });
 
