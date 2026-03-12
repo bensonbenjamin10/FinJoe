@@ -33,6 +33,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
 import {
   Building2,
+  LayoutDashboard,
   MessageCircle,
   Settings,
   LogOut,
@@ -81,6 +82,7 @@ export function AdminShell({ children }: AdminShellProps) {
   };
 
   const navItems = [
+    { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
     ...(isSuperAdmin
       ? [
           { href: "/admin/tenants", label: "Tenants", icon: Building2 },
@@ -100,7 +102,7 @@ export function AdminShell({ children }: AdminShellProps) {
         <SidebarHeader className="border-b border-sidebar-border">
           <div className="flex h-14 items-center gap-2 px-2">
             <SidebarTrigger className="md:hidden" />
-            <Link href="/admin/finjoe" className="font-display text-lg font-semibold text-foreground hover:text-primary transition-colors">
+            <Link href="/admin/dashboard" className="font-display text-lg font-semibold text-foreground hover:text-primary transition-colors">
               FinJoe
             </Link>
           </div>

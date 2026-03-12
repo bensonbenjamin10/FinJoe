@@ -23,12 +23,21 @@ import {
   incomeTypes,
 } from "../shared/schema.js";
 import { createFinJoeData } from "../lib/finjoe-data.js";
+import { createTemplatesInTwilio } from "../lib/twilio-content-create.js";
 import { fetchApprovedTemplatesFromTwilio } from "../lib/twilio-content-sync.js";
 import { sendFinJoeEmail } from "../worker/src/email.js";
 import { sendFinJoeSms } from "../worker/src/twilio.js";
 import { getCredentialsForTenant } from "../worker/src/providers/resolver.js";
+import { getAnalytics, getPredictions } from "./analytics.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+function escapeCsv(s: string): string {
+  if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
 
 export async function registerRoutes(app: Express) {
   const http = await import("http");
@@ -520,6 +529,31 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("FinJoe settings update error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to update settings" });
+    }
+  });
+
+  app.post("/api/admin/finjoe/create-templates", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const credentials = await getCredentialsForTenant(tid);
+      if (!credentials?.config?.accountSid || !credentials.config.authToken) {
+        return res.status(400).json({ error: "Twilio credentials not configured for this tenant. Configure WhatsApp provider first." });
+      }
+      const { created, errors } = await createTemplatesInTwilio(
+        credentials.config.accountSid,
+        credentials.config.authToken
+      );
+      if (errors.length > 0 && Object.keys(created).length === 0) {
+        return res.status(500).json({ error: "Failed to create templates", details: errors });
+      }
+      res.json({ created, errors });
+    } catch (e) {
+      logger.error("FinJoe create-templates error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to create templates in Twilio" });
     }
   });
 
@@ -1039,6 +1073,53 @@ export async function registerRoutes(app: Express) {
     }
   });
 
+  app.get("/api/admin/analytics", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { startDate, endDate, costCenterId, granularity } = req.query;
+      if (!startDate || !endDate || typeof startDate !== "string" || typeof endDate !== "string") {
+        return res.status(400).json({ error: "startDate and endDate required" });
+      }
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
+        return res.status(400).json({ error: "startDate and endDate must be YYYY-MM-DD" });
+      }
+      if (startDate > endDate) return res.status(400).json({ error: "startDate must be before or equal to endDate" });
+      const filters = {
+        tenantId: tid,
+        startDate,
+        endDate,
+        costCenterId: (costCenterId as string) ?? undefined,
+        granularity: (granularity as "day" | "week" | "month") ?? "day",
+      };
+      const data = await getAnalytics(filters);
+      res.json(data);
+    } catch (e) {
+      logger.error("Analytics error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch analytics" });
+    }
+  });
+
+  app.get("/api/admin/analytics/predictions", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const horizonDays = req.query?.horizonDays ? parseInt(String(req.query.horizonDays), 10) : 30;
+      const data = await getPredictions({ tenantId: tid, horizonDays: isNaN(horizonDays) ? 30 : horizonDays });
+      res.json(data);
+    } catch (e) {
+      logger.error("Predictions error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch predictions" });
+    }
+  });
+
   // Expense categories
   app.get("/api/admin/expense-categories", requireAdmin, async (req, res) => {
     try {
@@ -1420,6 +1501,155 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("Expenses list error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to fetch expenses" });
+    }
+  });
+
+  app.get("/api/admin/expenses/export", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { startDate, endDate } = req.query;
+      if (!startDate || !endDate || typeof startDate !== "string" || typeof endDate !== "string") {
+        return res.status(400).json({ error: "startDate and endDate required" });
+      }
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
+        return res.status(400).json({ error: "startDate and endDate must be YYYY-MM-DD" });
+      }
+      const rows = await db
+        .select({
+          id: expenses.id,
+          tenantId: expenses.tenantId,
+          costCenterId: expenses.costCenterId,
+          categoryId: expenses.categoryId,
+          amount: expenses.amount,
+          expenseDate: expenses.expenseDate,
+          description: expenses.description,
+          particulars: expenses.particulars,
+          status: expenses.status,
+          invoiceNumber: expenses.invoiceNumber,
+          invoiceDate: expenses.invoiceDate,
+          vendorName: expenses.vendorName,
+          costCenterName: costCenters.name,
+          categoryName: expenseCategories.name,
+        })
+        .from(expenses)
+        .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
+        .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
+        .where(
+          and(
+            eq(expenses.tenantId, tid),
+            sql`${expenses.expenseDate} >= ${startDate}::date`,
+            sql`${expenses.expenseDate} <= ${endDate}::date`
+          )
+        )
+        .orderBy(expenses.expenseDate, expenses.createdAt);
+      const byCategoryMonth: Record<string, { category: string; month: string; amount: number; count: number }> = {};
+      for (const r of rows) {
+        const cat = r.categoryName || "Uncategorized";
+        const month = new Date(r.expenseDate).toISOString().slice(0, 7);
+        const key = `${cat}|${month}`;
+        if (!byCategoryMonth[key]) byCategoryMonth[key] = { category: cat, month, amount: 0, count: 0 };
+        byCategoryMonth[key].amount += r.amount ?? 0;
+        byCategoryMonth[key].count += 1;
+      }
+      const lines = ["Category,Month,Amount,Count"];
+      const sorted = Object.values(byCategoryMonth).sort((a, b) => a.category.localeCompare(b.category) || a.month.localeCompare(b.month));
+      for (const v of sorted) {
+        lines.push(`${escapeCsv(v.category)},${v.month},${v.amount},${v.count}`);
+      }
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename=cashflow-summary-${startDate}-${endDate}.csv`);
+      res.send(lines.join("\n"));
+    } catch (e) {
+      logger.error("Expense export error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to export" });
+    }
+  });
+
+  app.get("/api/admin/expenses/export/detailed", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { startDate, endDate } = req.query;
+      if (!startDate || !endDate || typeof startDate !== "string" || typeof endDate !== "string") {
+        return res.status(400).json({ error: "startDate and endDate required" });
+      }
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
+        return res.status(400).json({ error: "startDate and endDate must be YYYY-MM-DD" });
+      }
+      const rows = await db
+        .select({
+          id: expenses.id,
+          amount: expenses.amount,
+          expenseDate: expenses.expenseDate,
+          description: expenses.description,
+          particulars: expenses.particulars,
+          status: expenses.status,
+          invoiceNumber: expenses.invoiceNumber,
+          invoiceDate: expenses.invoiceDate,
+          vendorName: expenses.vendorName,
+          gstin: expenses.gstin,
+          taxType: expenses.taxType,
+          voucherNumber: expenses.voucherNumber,
+          payoutMethod: expenses.payoutMethod,
+          payoutRef: expenses.payoutRef,
+          payoutAt: expenses.payoutAt,
+          costCenterName: costCenters.name,
+          categoryName: expenseCategories.name,
+        })
+        .from(expenses)
+        .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
+        .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
+        .where(
+          and(
+            eq(expenses.tenantId, tid),
+            sql`${expenses.expenseDate} >= ${startDate}::date`,
+            sql`${expenses.expenseDate} <= ${endDate}::date`
+          )
+        )
+        .orderBy(expenses.expenseDate, expenses.createdAt);
+      const lines = [
+        "Date,Cost Center,Category,Amount,Description,Particulars,Vendor,Invoice Number,Invoice Date,GSTIN,Tax Type,Voucher Number,Status,Payout Method,Payout Ref,Payout At",
+      ];
+      for (const r of rows) {
+        const date = r.expenseDate ? new Date(r.expenseDate).toISOString().slice(0, 10) : "";
+        const invDate = r.invoiceDate ? new Date(r.invoiceDate).toISOString().slice(0, 10) : "";
+        const payoutAt = r.payoutAt ? new Date(r.payoutAt).toISOString().slice(0, 10) : "";
+        lines.push(
+          [
+            date,
+            escapeCsv(r.costCenterName ?? ""),
+            escapeCsv(r.categoryName ?? ""),
+            r.amount ?? 0,
+            escapeCsv(r.description ?? r.particulars ?? ""),
+            escapeCsv(r.particulars ?? ""),
+            escapeCsv(r.vendorName ?? ""),
+            escapeCsv(r.invoiceNumber ?? ""),
+            invDate,
+            escapeCsv(r.gstin ?? ""),
+            escapeCsv(r.taxType ?? ""),
+            escapeCsv(r.voucherNumber ?? ""),
+            r.status ?? "",
+            escapeCsv(r.payoutMethod ?? ""),
+            escapeCsv(r.payoutRef ?? ""),
+            payoutAt,
+          ].join(",")
+        );
+      }
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename=expenses-detailed-${startDate}-${endDate}.csv`);
+      res.send(lines.join("\n"));
+    } catch (e) {
+      logger.error("Expense detailed export error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to export" });
     }
   });
 

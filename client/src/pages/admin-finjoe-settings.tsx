@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Settings, Loader2, Copy, AlertCircle, Mail, MessageSquare, RefreshCw } from "lucide-react";
+import { Settings, Loader2, Copy, AlertCircle, Mail, MessageSquare, RefreshCw, Plus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -126,6 +126,37 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
       toast({ title: "Settings saved" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const createTemplatesMutation = useMutation({
+    mutationFn: async () => {
+      const body = tenantId ? { tenantId } : {};
+      const res = await fetch("/api/admin/finjoe/create-templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = (data as { error?: string; details?: string[] }).error;
+        const details = (data as { details?: string[] }).details;
+        throw new Error(details?.length ? `${err}: ${details.join("; ")}` : err || "Failed to create templates");
+      }
+      return data as { created: Record<string, string>; errors: string[] };
+    },
+    onSuccess: (data) => {
+      const count = Object.keys(data.created).length;
+      const msg =
+        count > 0
+          ? "Templates created and submitted for approval. Approvals typically take 24–48 hours. Use Sync from Twilio once approved."
+          : "No templates were created.";
+      toast({
+        title: count > 0 ? "Templates created" : "Create templates",
+        description: data.errors.length > 0 ? `${msg} Some errors: ${data.errors.join("; ")}` : msg,
+      });
+    },
+    onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
 
   const syncTemplatesMutation = useMutation({
@@ -470,7 +501,7 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
         <CardHeader className="p-6">
           <CardTitle className="font-display">WhatsApp Message Templates</CardTitle>
           <CardDescription className="text-base">
-            Create templates via the script (<code className="text-xs bg-muted px-1 rounded">scripts/create-finjoe-templates.mjs</code>), submit for approval in Twilio, then use <strong>Sync from Twilio</strong> to pull approved SIDs. Or paste SIDs manually. Each template controls what Finance Joe sends in specific situations.
+            Use <strong>Create templates</strong> to create the 4 FinJoe templates in Twilio and submit for approval. Once approved (typically 24–48 hours), use <strong>Sync from Twilio</strong> to pull SIDs. Or paste SIDs manually. Each template controls what Finance Joe sends in specific situations.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-8 p-6">
@@ -495,8 +526,16 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
           <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
+              onClick={() => createTemplatesMutation.mutate()}
+              disabled={createTemplatesMutation.isPending || !provider?.accountSid}
+            >
+              {createTemplatesMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Plus className="h-4 w-4 mr-2" />}
+              Create templates
+            </Button>
+            <Button
+              variant="outline"
               onClick={() => syncTemplatesMutation.mutate()}
-              disabled={syncTemplatesMutation.isPending}
+              disabled={syncTemplatesMutation.isPending || !provider?.accountSid}
             >
               {syncTemplatesMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
               Sync from Twilio

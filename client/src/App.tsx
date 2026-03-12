@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Landing from "@/pages/landing";
 import Login from "@/pages/login";
 import Setup from "@/pages/setup";
+import AdminDashboard from "@/pages/admin-dashboard";
 import AdminFinJoe from "@/pages/admin-finjoe";
 import AdminExpenses from "@/pages/admin-expenses";
 import AdminIncome from "@/pages/admin-income";
@@ -43,6 +44,13 @@ function Router() {
             </AdminShell>
           </ProtectedRoute>
         </Route>
+        <Route path="/admin/dashboard">
+          <ProtectedRoute>
+            <AdminShell>
+              <AdminDashboard />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
         <Route path="/admin/finjoe">
           <ProtectedRoute>
             <AdminShell>
@@ -65,7 +73,7 @@ function Router() {
           </ProtectedRoute>
         </Route>
         <Route path="/admin">
-          <Redirect to="/admin/finjoe" />
+          <Redirect to="/admin/dashboard" />
         </Route>
       </Switch>
     </div>
