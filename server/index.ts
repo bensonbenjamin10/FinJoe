@@ -7,6 +7,7 @@ import { registerRoutes } from "./routes.js";
 import { setupAuth } from "./auth.js";
 import { setupVite, serveStatic } from "./vite.js";
 import { handleWebhook } from "../worker/src/webhook.js";
+import { runWeeklyInsights } from "../worker/src/weekly-insights.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -52,6 +53,22 @@ app.post(
     }
   }
 );
+
+// Cron: weekly insights (same as worker - for single-service deployment)
+app.get("/cron/weekly-insights", async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.query?.secret !== secret) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  try {
+    const result = await runWeeklyInsights();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error("Weekly insights cron error", { err: String(err) });
+    res.status(500).json({ error: "Failed to run weekly insights" });
+  }
+});
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));

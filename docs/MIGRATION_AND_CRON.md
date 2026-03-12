@@ -42,13 +42,70 @@ curl "https://your-worker-url/cron/weekly-insights?secret=YOUR_CRON_SECRET"
 0 9 * * 1 curl -s "https://your-worker-url/cron/weekly-insights?secret=YOUR_CRON_SECRET"
 ```
 
-### 4. Schedule with external services
+### 4. Railway (recommended)
 
-- **cron-job.org** – Create a job, set URL to `https://your-worker-url/cron/weekly-insights?secret=YOUR_CRON_SECRET`, schedule as weekly
-- **Railway** – Use cron job add-on or a separate cron service
-- **GitHub Actions** – `workflow_dispatch` or `schedule` trigger calling the endpoint
+#### Option A: Railway CLI
 
-### 5. Local testing
+From the repo root:
+
+```bash
+# 1. Login and link project
+railway login
+railway link
+
+# 2. Add cron service
+railway add --service finjoe-cron
+
+# 3. Link to the cron service
+railway service link finjoe-cron
+
+# 4. Set variables (replace YOUR_WORKER_URL with worker's Railway domain)
+railway variable set CRON_SECRET=$(openssl rand -hex 16)
+railway variable set FINJOE_WORKER_URL=https://YOUR_WORKER_URL
+
+# 5. In Railway Dashboard: finjoe-cron → Settings → Config
+#    Set "Config File Path" to: railway.cron.json
+
+# 6. Deploy
+railway up
+```
+
+Or run the setup script:
+```bash
+./scripts/railway-cron-setup.sh   # Linux/macOS
+.\scripts\railway-cron-setup.ps1 # Windows PowerShell
+```
+
+The `railway.cron.json` config sets `cronSchedule: "0 9 * * 1"` (Monday 9am UTC) and `startCommand: "node scripts/run-weekly-insights.mjs"`.
+
+#### Option B: Railway Dashboard
+
+Add a **Cron Service** in your Railway project:
+
+1. **New service** – In your project, click **+ New** → **GitHub Repo** (same repo) or **Empty Service**.
+2. **Source** – If new from repo: same repo as your app. Set **Root Directory** to `/` (or leave default).
+3. **Build** – Build command: `npm install` (or reuse your main build). The script needs no build.
+4. **Start command** – Set to:
+   ```
+   node scripts/run-weekly-insights.mjs
+   ```
+5. **Cron Schedule** – In the service **Settings**, find **Cron Schedule** and set:
+   ```
+   0 9 * * 1
+   ```
+   (Runs every Monday at 9:00 AM UTC.)
+6. **Variables** – Add:
+   - `CRON_SECRET` – Same value as on your worker (generate a random string).
+   - `FINJOE_WORKER_URL` – Your worker’s public URL, e.g. `https://finjoe-worker-production.up.railway.app` (from the worker service’s **Settings** → **Networking** → **Generate Domain**).
+   - `DATABASE_URL` – Not required for the cron service (it only calls the worker over HTTP).
+7. **Deploy** – Deploy the service. It will run on the schedule and exit after each run.
+
+### 5. Other schedulers
+
+- **cron-job.org** – Create a job, set URL to `https://your-worker-url/cron/weekly-insights?secret=YOUR_CRON_SECRET`, schedule weekly.
+- **GitHub Actions** – `workflow_dispatch` or `schedule` trigger that calls the endpoint.
+
+### 6. Local testing
 
 With the worker running (`npm run worker:dev`):
 
