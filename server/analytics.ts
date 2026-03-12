@@ -279,7 +279,8 @@ export async function getPredictions(filters: PredictionsFilters) {
     const key = new Date(r.expenseDate).toISOString().slice(0, 10);
     dailyExpenses[key] = (dailyExpenses[key] ?? 0) + (r.amount ?? 0);
   }
-  const dailyExpenseValues = Object.values(dailyExpenses);
+  const sortedExpenseDates = Object.keys(dailyExpenses).sort();
+  const dailyExpenseValues = sortedExpenseDates.map((d) => dailyExpenses[d] ?? 0);
   const avgDailyExpense =
     dailyExpenseValues.length > 0 ? dailyExpenseValues.reduce((a, b) => a + b, 0) / dailyExpenseValues.length : 0;
 
