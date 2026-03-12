@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Settings, Loader2, Copy, AlertCircle, Mail, MessageSquare, RefreshCw, Plus, Send } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
@@ -145,6 +146,8 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
   const [costCenterForm, setCostCenterForm] = useState<Pick<FinJoeSettings, "costCenterLabel" | "costCenterType">>({});
   const [testEmailTo, setTestEmailTo] = useState("");
   const [testSmsTo, setTestSmsTo] = useState("");
+  const [testWhatsAppTo, setTestWhatsAppTo] = useState("");
+  const [testWhatsAppTemplate, setTestWhatsAppTemplate] = useState<"re_engagement" | "expense_approval" | "expense_approved" | "expense_rejected">("re_engagement");
 
   const updateSettingsMutation = useMutation({
     mutationFn: async (data: FinJoeSettings) => {
@@ -312,6 +315,41 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
     },
     onSuccess: () => toast({ title: "Test SMS sent", description: "Check the recipient phone." }),
     onError: (e: Error) => toast({ title: "Test SMS failed", description: e.message, variant: "destructive" }),
+  });
+
+  const testWhatsAppMutation = useMutation({
+    mutationFn: async () => {
+      const phone = testWhatsAppTo.trim();
+      if (!phone || phone.replace(/\D/g, "").length < 10) throw new Error("Enter a valid phone number (e.g. +919876543210)");
+      const sids = {
+        expenseApprovalTemplateSid: templateForm.expenseApprovalTemplateSid ?? settings?.expenseApprovalTemplateSid ?? "",
+        expenseApprovedTemplateSid: templateForm.expenseApprovedTemplateSid ?? settings?.expenseApprovedTemplateSid ?? "",
+        expenseRejectedTemplateSid: templateForm.expenseRejectedTemplateSid ?? settings?.expenseRejectedTemplateSid ?? "",
+        reEngagementTemplateSid: templateForm.reEngagementTemplateSid ?? settings?.reEngagementTemplateSid ?? "",
+      };
+      const sid = sids[
+        testWhatsAppTemplate === "re_engagement"
+          ? "reEngagementTemplateSid"
+          : testWhatsAppTemplate === "expense_approval"
+            ? "expenseApprovalTemplateSid"
+            : testWhatsAppTemplate === "expense_approved"
+              ? "expenseApprovedTemplateSid"
+              : "expenseRejectedTemplateSid"
+      ];
+      if (!sid?.trim()) throw new Error(`No template SID for ${testWhatsAppTemplate}. Create, submit, and sync first.`);
+      const body = tenantId ? { tenantId, to: phone, template: testWhatsAppTemplate, sids } : { to: phone, template: testWhatsAppTemplate, sids };
+      const res = await fetch("/api/admin/finjoe/test-whatsapp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to send test WhatsApp");
+      return data;
+    },
+    onSuccess: () => toast({ title: "Test WhatsApp sent", description: "Check the recipient phone." }),
+    onError: (e: Error) => toast({ title: "Test WhatsApp failed", description: e.message, variant: "destructive" }),
   });
 
   const saveProviderMutation = useMutation({
@@ -573,6 +611,38 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
                     title="Send test SMS"
                   >
                     {testSmsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageSquare className="h-4 w-4 mr-1" />}
+                    Send
+                  </Button>
+                </div>
+              </div>
+              <div className="flex-1 space-y-2">
+                <Label className="text-xs">Test WhatsApp template (phone + template required)</Label>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Input
+                    placeholder="+919876543210"
+                    value={testWhatsAppTo}
+                    onChange={(e) => setTestWhatsAppTo(e.target.value)}
+                    className="flex-1"
+                  />
+                  <Select value={testWhatsAppTemplate} onValueChange={(v) => setTestWhatsAppTemplate(v as typeof testWhatsAppTemplate)}>
+                    <SelectTrigger className="w-full sm:w-[180px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="re_engagement">Re-engagement</SelectItem>
+                      <SelectItem value="expense_approval">Expense Approval</SelectItem>
+                      <SelectItem value="expense_approved">Expense Approved</SelectItem>
+                      <SelectItem value="expense_rejected">Expense Rejected</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => testWhatsAppMutation.mutate()}
+                    disabled={testWhatsAppMutation.isPending || !testWhatsAppTo.trim()}
+                    title="Send test WhatsApp template"
+                  >
+                    {testWhatsAppMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageSquare className="h-4 w-4 mr-1" />}
                     Send
                   </Button>
                 </div>

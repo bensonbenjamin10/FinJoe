@@ -26,7 +26,7 @@ import { createFinJoeData } from "../lib/finjoe-data.js";
 import { createTemplatesInTwilio, submitTemplatesForApproval } from "../lib/twilio-content-create.js";
 import { fetchApprovedTemplatesFromTwilio, fetchTemplateStatusesFromTwilio } from "../lib/twilio-content-sync.js";
 import { sendFinJoeEmail } from "../worker/src/email.js";
-import { sendFinJoeSms } from "../worker/src/twilio.js";
+import { sendFinJoeSms, sendFinJoeWhatsAppTemplate } from "../worker/src/twilio.js";
 import { getCredentialsForTenant } from "../worker/src/providers/resolver.js";
 import { getAnalytics, getPredictions } from "./analytics.js";
 
@@ -683,6 +683,48 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("Test SMS error", { requestId: req.requestId, err: (e as Error).message });
       res.status(500).json({ error: (e as Error).message || "Failed to send test SMS" });
+    }
+  });
+
+  app.post("/api/admin/finjoe/test-whatsapp", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const to = typeof req.body?.to === "string" ? req.body.to.trim() : null;
+      if (!to || to.replace(/\D/g, "").length < 10) return res.status(400).json({ error: "Valid phone number required (e.g. +919876543210)" });
+      const templateKey = typeof req.body?.template === "string" ? req.body.template : "re_engagement";
+      const templateToField: Record<string, string> = {
+        re_engagement: "reEngagementTemplateSid",
+        expense_approval: "expenseApprovalTemplateSid",
+        expense_approved: "expenseApprovedTemplateSid",
+        expense_rejected: "expenseRejectedTemplateSid",
+      };
+      const field = templateToField[templateKey] ?? templateToField.re_engagement;
+      const sidsOverride = req.body?.sids && typeof req.body.sids === "object" ? req.body.sids : null;
+      let templateSid: string | null = sidsOverride?.[field] ?? null;
+      if (!templateSid) {
+        const [row] = await db.select().from(finjoeSettings).where(eq(finjoeSettings.tenantId, tid)).limit(1);
+        templateSid = row ? (row as Record<string, string | null>)[field] : null;
+      }
+      if (!templateSid?.trim()) return res.status(400).json({ error: `No template SID configured for ${templateKey}. Create, submit, and sync templates first.` });
+      const sid = String(templateSid).trim();
+      const contentVars: Record<string, string> =
+        templateKey === "expense_approval"
+          ? { "1": "EXP001", "2": "₹50,000 - Vendor Name" }
+          : templateKey === "expense_approved"
+            ? { "1": "EXP001" }
+            : templateKey === "expense_rejected"
+              ? { "1": "EXP001", "2": "Sample reason" }
+              : {};
+      const result = await sendFinJoeWhatsAppTemplate(to, sid, contentVars, `test-whatsapp-${Date.now()}`, tid);
+      if (result) res.json({ ok: true, message: "Test WhatsApp template sent" });
+      else res.status(500).json({ error: "Failed to send test WhatsApp. Check Twilio credentials and template approval status." });
+    } catch (e) {
+      logger.error("Test WhatsApp error", { requestId: req.requestId, err: (e as Error).message });
+      res.status(500).json({ error: (e as Error).message || "Failed to send test WhatsApp" });
     }
   });
 
