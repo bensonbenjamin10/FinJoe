@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 /**
- * Update rejected FinJoe templates via PUT, fix content, resubmit.
+ * Update FinJoe templates via PUT: fetch SIDs from Twilio Content API by friendly_name,
+ * fix content, resubmit for approval.
+ *
  * Requires: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
+ * Optional: Load .env (node --env-file=.env)
+ *
+ * After running, use Sync from Twilio in Admin FinJoe Settings to update finjoe_settings
+ * when templates are approved.
  */
 
 import { readFileSync, existsSync } from "fs";
@@ -33,32 +39,44 @@ if (!accountSid || !authToken) {
 
 const auth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
 
-const updates = [
-  {
-    sid: "HX958e56e3bb46afb9bd4283bbd99feba4",
-    name: "finjoe_expense_approval",
+const templateDefs = {
+  finjoe_expense_approval: {
     body: "Hello, a new expense request requires your approval. Expense reference #{{1}} for amount {{2}} is pending review. Please reply with APPROVE {{1}} to approve or REJECT {{1}} followed by a reason to reject. Thank you.",
     variables: { "1": "EXP001", "2": "₹50,000 - Vendor Name" },
   },
-  {
-    sid: "HX99a42ff09fc387f35f7e51b4ed1b9fff",
-    name: "finjoe_expense_approved",
+  finjoe_expense_approved: {
     body: "Good news! Your expense submission has been approved. Expense reference #{{1}} is now processed. Thank you for following the expense workflow.",
     variables: { "1": "EXP001" },
   },
-  {
-    sid: "HXd374a54337d010fcf254d49a0169e5c4",
-    name: "finjoe_expense_rejected",
+  finjoe_expense_rejected: {
     body: "Your expense request reference #{{1}} has been rejected. The reason provided: {{2}} Please review the feedback, make the necessary corrections, and resubmit your expense. Contact your finance team if you need assistance.",
     variables: { "1": "EXP001", "2": "Reason not provided" },
   },
-  {
-    sid: "HX271d1de51f9a1c03b97f3db1e74dacc8",
-    name: "finjoe_re_engagement",
+  finjoe_re_engagement: {
     body: "Hello from FinJoe! We are here to help you with expense submissions, approvals, and any finance-related questions. Reply to this message to get started or ask for assistance.",
     variables: {},
   },
-];
+};
+
+async function listContent() {
+  const all = [];
+  let url = "https://content.twilio.com/v1/Content?PageSize=500";
+  while (url) {
+    const res = await fetch(url, {
+      headers: { Authorization: `Basic ${auth}` },
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`List failed: ${res.status} ${err}`);
+    }
+    const data = await res.json();
+    const contents = data.contents ?? data;
+    if (Array.isArray(contents)) all.push(...contents);
+    else if (contents?.contents) all.push(...contents.contents);
+    url = data.meta?.next_page_url ?? null;
+  }
+  return all;
+}
 
 async function updateTemplate(sid, body, variables) {
   const res = await fetch(`https://content.twilio.com/v1/Content/${sid}`, {
@@ -99,16 +117,30 @@ async function submitForApproval(sid, name) {
 }
 
 async function main() {
-  for (const u of updates) {
+  const contents = await listContent();
+  const byName = {};
+  for (const c of contents) {
+    const name = c.friendly_name ?? c.friendlyName;
+    if (name && name.startsWith("finjoe_")) byName[name] = c.sid;
+  }
+
+  for (const [name, def] of Object.entries(templateDefs)) {
+    const sid = byName[name];
+    if (!sid) {
+      console.log(`Skipping ${name}: not found in Twilio. Create it with create-finjoe-templates.mjs`);
+      continue;
+    }
     try {
-      await updateTemplate(u.sid, u.body, u.variables);
-      console.log(`Updated ${u.name} (${u.sid})`);
-      await submitForApproval(u.sid, u.name);
+      await updateTemplate(sid, def.body, def.variables);
+      console.log(`Updated ${name} (${sid})`);
+      await submitForApproval(sid, name);
       console.log(`  Resubmitted for WhatsApp approval`);
     } catch (err) {
-      console.error(`Error for ${u.name}:`, err.message);
+      console.error(`Error for ${name}:`, err.message);
     }
   }
+
+  console.log("\nWhen templates are approved, use Sync from Twilio in Admin FinJoe Settings to update finjoe_settings.");
 }
 
 main().catch((err) => {

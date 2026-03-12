@@ -4,6 +4,7 @@
  * submit for approval, and update finjoe_settings in the database.
  *
  * Requires: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, DATABASE_URL
+ * Optional: --tenant=<slug> or TENANT_ID env (tenant id or slug). Default: default tenant.
  * Optional: Load .env (node --env-file=.env)
  */
 
@@ -31,6 +32,11 @@ for (const p of [join(rootDir, ".env"), join(rootDir, ".env.local")]) {
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const databaseUrl = process.env.DATABASE_URL;
+
+const tenantArg = process.argv.find((a) => a.startsWith("--tenant="));
+const tenantFromArg = tenantArg ? tenantArg.slice("--tenant=".length).trim() : null;
+const tenantFromEnv = process.env.TENANT_ID?.trim() || null;
+const tenantSlugOrId = tenantFromArg || tenantFromEnv || "default";
 
 if (!accountSid || !authToken) {
   console.error("Missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN");
@@ -128,24 +134,38 @@ async function main() {
 
   const pool = new Pool({ connectionString: databaseUrl });
   try {
-    const result = await pool.query("SELECT id FROM finjoe_settings LIMIT 1");
+    let tenantId = tenantSlugOrId;
+    const slugRow = await pool.query("SELECT id FROM tenants WHERE slug = $1 LIMIT 1", [tenantSlugOrId]);
+    if (slugRow.rows?.[0]) {
+      tenantId = slugRow.rows[0].id;
+    } else {
+      const idRow = await pool.query("SELECT id FROM tenants WHERE id = $1 LIMIT 1", [tenantSlugOrId]);
+      if (!idRow.rows?.[0]) {
+        console.error(`Tenant not found: ${tenantSlugOrId} (use slug or id)`);
+        return;
+      }
+    }
+
+    const result = await pool.query("SELECT id FROM finjoe_settings WHERE tenant_id = $1 LIMIT 1", [tenantId]);
     const row = result.rows?.[0];
     if (!row) {
       await pool.query(
         `INSERT INTO finjoe_settings (
+          tenant_id,
           expense_approval_template_sid,
           expense_approved_template_sid,
           expense_rejected_template_sid,
           re_engagement_template_sid
-        ) VALUES ($1, $2, $3, $4)`,
+        ) VALUES ($1, $2, $3, $4, $5)`,
         [
+          tenantId,
           sids.finjoe_expense_approval || null,
           sids.finjoe_expense_approved || null,
           sids.finjoe_expense_rejected || null,
           sids.finjoe_re_engagement || null,
         ]
       );
-      console.log("\nInserted finjoe_settings with template SIDs");
+      console.log(`\nInserted finjoe_settings for tenant ${tenantId} with template SIDs`);
     } else {
       await pool.query(
         `UPDATE finjoe_settings SET
@@ -154,16 +174,16 @@ async function main() {
           expense_rejected_template_sid = COALESCE($3, expense_rejected_template_sid),
           re_engagement_template_sid = COALESCE($4, re_engagement_template_sid),
           updated_at = NOW()
-        WHERE id = $5`,
+        WHERE tenant_id = $5`,
         [
           sids.finjoe_expense_approval || null,
           sids.finjoe_expense_approved || null,
           sids.finjoe_expense_rejected || null,
           sids.finjoe_re_engagement || null,
-          row.id,
+          tenantId,
         ]
       );
-      console.log("\nUpdated finjoe_settings with template SIDs");
+      console.log(`\nUpdated finjoe_settings for tenant ${tenantId} with template SIDs`);
     }
   } finally {
     await pool.end();

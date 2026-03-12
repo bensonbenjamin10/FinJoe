@@ -23,8 +23,10 @@ import {
   incomeTypes,
 } from "../shared/schema.js";
 import { createFinJoeData } from "../lib/finjoe-data.js";
+import { fetchApprovedTemplatesFromTwilio } from "../lib/twilio-content-sync.js";
 import { sendFinJoeEmail } from "../worker/src/email.js";
 import { sendFinJoeSms } from "../worker/src/twilio.js";
+import { getCredentialsForTenant } from "../worker/src/providers/resolver.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -518,6 +520,39 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("FinJoe settings update error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to update settings" });
+    }
+  });
+
+  app.post("/api/admin/finjoe/sync-templates", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const credentials = await getCredentialsForTenant(tid);
+      if (!credentials?.config?.accountSid || !credentials.config.authToken) {
+        return res.status(400).json({ error: "Twilio credentials not configured for this tenant. Configure WhatsApp provider first." });
+      }
+      const { synced, skipped } = await fetchApprovedTemplatesFromTwilio(
+        credentials.config.accountSid,
+        credentials.config.authToken
+      );
+      const [existing] = await db.select().from(finjoeSettings).where(eq(finjoeSettings.tenantId, tid)).limit(1);
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (synced.expenseApprovalTemplateSid !== undefined) updates.expenseApprovalTemplateSid = synced.expenseApprovalTemplateSid;
+      if (synced.expenseApprovedTemplateSid !== undefined) updates.expenseApprovedTemplateSid = synced.expenseApprovedTemplateSid;
+      if (synced.expenseRejectedTemplateSid !== undefined) updates.expenseRejectedTemplateSid = synced.expenseRejectedTemplateSid;
+      if (synced.reEngagementTemplateSid !== undefined) updates.reEngagementTemplateSid = synced.reEngagementTemplateSid;
+      if (existing) {
+        await db.update(finjoeSettings).set(updates as any).where(eq(finjoeSettings.tenantId, tid));
+      } else {
+        await db.insert(finjoeSettings).values({ tenantId: tid, ...updates } as any);
+      }
+      res.json({ synced, skipped });
+    } catch (e) {
+      logger.error("FinJoe sync-templates error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to sync templates from Twilio" });
     }
   });
 

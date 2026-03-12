@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Settings, Loader2, Copy, AlertCircle, Mail, MessageSquare } from "lucide-react";
+import { Settings, Loader2, Copy, AlertCircle, Mail, MessageSquare, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -126,6 +126,31 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
       toast({ title: "Settings saved" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const syncTemplatesMutation = useMutation({
+    mutationFn: async () => {
+      const body = tenantId ? { tenantId } : {};
+      const res = await fetch("/api/admin/finjoe/sync-templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to sync templates");
+      return data as { synced: Record<string, string>; skipped: string[] };
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: settingsQueryKey });
+      if (Object.keys(data.synced).length > 0) {
+        setTemplateForm((prev) => ({ ...prev, ...data.synced }));
+      }
+      const count = Object.keys(data.synced).length;
+      const msg = count > 0 ? `Synced ${count} template(s) from Twilio.` : "No approved templates found.";
+      toast({ title: "Sync complete", description: data.skipped.length > 0 ? `${msg} Skipped: ${data.skipped.join(", ")}` : msg });
+    },
+    onError: (e: Error) => toast({ title: "Sync failed", description: e.message, variant: "destructive" }),
   });
 
   const saveChannelsMutation = useMutation({
@@ -445,7 +470,7 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
         <CardHeader className="p-6">
           <CardTitle className="font-display">WhatsApp Message Templates</CardTitle>
           <CardDescription className="text-base">
-            Create these templates in Twilio Console → Content Templates, then paste the SIDs here. Each template controls what Finance Joe sends in specific situations.
+            Create templates via the script (<code className="text-xs bg-muted px-1 rounded">scripts/create-finjoe-templates.mjs</code>), submit for approval in Twilio, then use <strong>Sync from Twilio</strong> to pull approved SIDs. Or paste SIDs manually. Each template controls what Finance Joe sends in specific situations.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-8 p-6">
@@ -467,20 +492,30 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
               />
             </div>
           ))}
-          <Button
-            onClick={() =>
-              updateSettingsMutation.mutate({
-                expenseApprovalTemplateSid: templateForm.expenseApprovalTemplateSid ?? settings?.expenseApprovalTemplateSid,
-                expenseApprovedTemplateSid: templateForm.expenseApprovedTemplateSid ?? settings?.expenseApprovedTemplateSid,
-                expenseRejectedTemplateSid: templateForm.expenseRejectedTemplateSid ?? settings?.expenseRejectedTemplateSid,
-                reEngagementTemplateSid: templateForm.reEngagementTemplateSid ?? settings?.reEngagementTemplateSid,
-              })
-            }
-            disabled={updateSettingsMutation.isPending}
-          >
-            {updateSettingsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-            Save Templates
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={() => syncTemplatesMutation.mutate()}
+              disabled={syncTemplatesMutation.isPending}
+            >
+              {syncTemplatesMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+              Sync from Twilio
+            </Button>
+            <Button
+              onClick={() =>
+                updateSettingsMutation.mutate({
+                  expenseApprovalTemplateSid: templateForm.expenseApprovalTemplateSid ?? settings?.expenseApprovalTemplateSid,
+                  expenseApprovedTemplateSid: templateForm.expenseApprovedTemplateSid ?? settings?.expenseApprovedTemplateSid,
+                  expenseRejectedTemplateSid: templateForm.expenseRejectedTemplateSid ?? settings?.expenseRejectedTemplateSid,
+                  reEngagementTemplateSid: templateForm.reEngagementTemplateSid ?? settings?.reEngagementTemplateSid,
+                })
+              }
+              disabled={updateSettingsMutation.isPending}
+            >
+              {updateSettingsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Save Templates
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>
