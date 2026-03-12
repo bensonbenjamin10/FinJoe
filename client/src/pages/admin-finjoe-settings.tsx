@@ -183,18 +183,25 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
         const details = (data as { details?: string[] }).details;
         throw new Error(details?.length ? `${err}: ${details.join("; ")}` : err || "Failed to submit for approval");
       }
-      return data as { submitted: string[]; errors: string[] };
+      return data as { submitted: string[]; alreadySubmitted?: string[]; errors: string[] };
     },
     onSuccess: (data) => {
       const count = data.submitted.length;
-      const msg =
-        count > 0
-          ? "Templates submitted for approval. Approvals typically take 24–48 hours. Use Sync from Twilio once approved."
-          : "No templates were submitted.";
-      toast({
-        title: count > 0 ? "Submitted for approval" : "Submit for approval",
-        description: data.errors.length > 0 ? `${msg} Some errors: ${data.errors.join("; ")}` : msg,
-      });
+      const alreadyCount = data.alreadySubmitted?.length ?? 0;
+      let msg: string;
+      let title: string;
+      if (count > 0) {
+        title = "Submitted for approval";
+        msg = "Templates submitted for approval. Approvals typically take 24–48 hours. Use Sync from Twilio once approved.";
+      } else if (alreadyCount > 0) {
+        title = "Already submitted";
+        msg = "These templates were already submitted. Use Sync from Twilio once approved.";
+      } else {
+        title = "Submit for approval";
+        msg = "No templates were submitted.";
+      }
+      if (data.errors.length > 0) msg += ` Some errors: ${data.errors.join("; ")}`;
+      toast({ title, description: msg });
     },
     onError: (e: Error) => toast({ title: "Submit failed", description: e.message, variant: "destructive" }),
   });

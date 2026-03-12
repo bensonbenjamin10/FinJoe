@@ -570,15 +570,15 @@ export async function registerRoutes(app: Express) {
       }
       const sids = req.body?.sids ?? {};
       if (typeof sids !== "object") return res.status(400).json({ error: "sids must be an object" });
-      const { submitted, errors } = await submitTemplatesForApproval(
+      const { submitted, alreadySubmitted, errors } = await submitTemplatesForApproval(
         credentials.config.accountSid,
         credentials.config.authToken,
         sids
       );
-      if (submitted.length === 0 && errors.length > 0) {
+      if (submitted.length === 0 && alreadySubmitted.length === 0 && errors.length > 0) {
         return res.status(500).json({ error: "Failed to submit templates for approval", details: errors });
       }
-      res.json({ submitted, errors });
+      res.json({ submitted, alreadySubmitted, errors });
     } catch (e) {
       logger.error("FinJoe submit-for-approval error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to submit templates for approval" });

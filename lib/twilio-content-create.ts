@@ -11,6 +11,7 @@ export type CreateResult = {
 
 export type SubmitResult = {
   submitted: string[];
+  alreadySubmitted: string[];
   errors: string[];
 };
 
@@ -60,6 +61,9 @@ export async function createTemplatesInTwilio(
  * Submit templates for WhatsApp approval. SIDs must already exist in Twilio.
  * sids: map of form field -> Content SID (e.g. expenseApprovalTemplateSid -> HX...)
  */
+/** Twilio error 92009: template already submitted for approval */
+const TWILIO_ALREADY_SUBMITTED_CODE = 92009;
+
 export async function submitTemplatesForApproval(
   accountSid: string,
   authToken: string,
@@ -67,21 +71,19 @@ export async function submitTemplatesForApproval(
 ): Promise<SubmitResult> {
   const auth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
   const submitted: string[] = [];
+  const alreadySubmitted: string[] = [];
   const errors: string[] = [];
 
   for (const [field, sid] of Object.entries(sids)) {
     const name = FIELD_TO_FRIENDLY_NAME[field];
     if (!name || !sid?.trim()) continue;
-    try {
-      await submitForApproval(auth, sid.trim(), name);
-      submitted.push(name);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      errors.push(`${name}: ${msg}`);
-    }
+    const result = await submitForApproval(auth, sid.trim(), name);
+    if (result === "submitted") submitted.push(name);
+    else if (result === "already_submitted") alreadySubmitted.push(name);
+    else errors.push(`${name}: ${result}`);
   }
 
-  return { submitted, errors };
+  return { submitted, alreadySubmitted, errors };
 }
 
 async function createTemplate(
@@ -110,7 +112,8 @@ async function createTemplate(
   return data.sid;
 }
 
-async function submitForApproval(auth: string, sid: string, name: string): Promise<void> {
+/** Returns "submitted" | "already_submitted" | error message string */
+async function submitForApproval(auth: string, sid: string, name: string): Promise<"submitted" | "already_submitted" | string> {
   const res = await fetch(
     `https://content.twilio.com/v1/Content/${sid}/ApprovalRequests/whatsapp`,
     {
@@ -122,8 +125,15 @@ async function submitForApproval(auth: string, sid: string, name: string): Promi
       body: JSON.stringify({ name, category: "UTILITY" }),
     }
   );
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Approval submit failed: ${res.status} ${err}`);
+  if (res.ok) return "submitted";
+  const errText = await res.text();
+  if (res.status === 400) {
+    try {
+      const errJson = JSON.parse(errText) as { code?: number };
+      if (errJson.code === TWILIO_ALREADY_SUBMITTED_CODE) return "already_submitted";
+    } catch {
+      /* ignore parse errors */
+    }
   }
+  return `Approval submit failed: ${res.status} ${errText}`;
 }
