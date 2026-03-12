@@ -60,6 +60,7 @@ railway add --service finjoe-cron
 railway service link finjoe-cron
 
 # 4. Set variables (replace YOUR_WORKER_URL with worker's Railway domain)
+railway variable set MODE=cron
 railway variable set CRON_SECRET=$(openssl rand -hex 16)
 railway variable set FINJOE_WORKER_URL=https://YOUR_WORKER_URL
 
@@ -76,7 +77,7 @@ Or run the setup script:
 .\scripts\railway-cron-setup.ps1 # Windows PowerShell
 ```
 
-The `railway.cron.json` config sets `cronSchedule: "0 9 * * 1"` (Monday 9am UTC) and `startCommand: "node scripts/run-weekly-insights.mjs"`.
+The `railway.cron.json` config sets `cronSchedule: "0 9 * * 1"` (Monday 9am UTC) and `startCommand: "node start.mjs"`. The cron service must have `MODE=cron` set so the entry point runs the weekly insights script instead of the server.
 
 #### Option B: Railway Dashboard
 
@@ -95,8 +96,9 @@ Add a **Cron Service** in your Railway project:
    ```
    (Runs every Monday at 9:00 AM UTC.)
 6. **Variables** – Add:
+   - `MODE=cron` – Required so the entry point runs the cron script instead of the server.
    - `CRON_SECRET` – Same value as on your worker (generate a random string).
-   - `FINJOE_WORKER_URL` – Your worker’s public URL, e.g. `https://finjoe-worker-production.up.railway.app` (from the worker service’s **Settings** → **Networking** → **Generate Domain**).
+   - `FINJOE_WORKER_URL` – Your worker’s public URL, e.g. `https://finjoe.app` (or your worker’s domain).
    - `DATABASE_URL` – Not required for the cron service (it only calls the worker over HTTP).
 7. **Deploy** – Deploy the service. It will run on the schedule and exit after each run.
 
