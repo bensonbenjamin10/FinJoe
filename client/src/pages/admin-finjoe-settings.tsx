@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Settings, Loader2, Copy, AlertCircle } from "lucide-react";
+import { Settings, Loader2, Copy, AlertCircle, Mail, MessageSquare } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -108,6 +108,8 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
   const [templateForm, setTemplateForm] = useState<FinJoeSettings>({});
   const [channelsForm, setChannelsForm] = useState<FinJoeSettings>({});
   const [costCenterForm, setCostCenterForm] = useState<Pick<FinJoeSettings, "costCenterLabel" | "costCenterType">>({});
+  const [testEmailTo, setTestEmailTo] = useState("");
+  const [testSmsTo, setTestSmsTo] = useState("");
 
   const updateSettingsMutation = useMutation({
     mutationFn: async (data: FinJoeSettings) => {
@@ -141,6 +143,34 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
       toast({ title: "Notification channels saved" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const testEmailMutation = useMutation({
+    mutationFn: async () => {
+      const emailTo = testEmailTo.trim();
+      const fallback = (channelsForm.notificationEmails ?? settings?.notificationEmails ?? "").split(",").map((e) => e.trim()).find((e) => e && e.includes("@"));
+      const body = tenantId ? { tenantId, ...(emailTo ? { to: emailTo } : fallback ? { to: fallback } : {}) } : {};
+      const res = await fetch("/api/admin/finjoe/test-email", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to send test email");
+      return data;
+    },
+    onSuccess: () => toast({ title: "Test email sent", description: "Check the recipient inbox." }),
+    onError: (e: Error) => toast({ title: "Test email failed", description: e.message, variant: "destructive" }),
+  });
+
+  const testSmsMutation = useMutation({
+    mutationFn: async () => {
+      const phone = testSmsTo.trim();
+      if (!phone || phone.replace(/\D/g, "").length < 10) throw new Error("Enter a valid phone number (at least 10 digits)");
+      const body = tenantId ? { tenantId, to: phone } : { to: phone };
+      const res = await fetch("/api/admin/finjoe/test-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to send test SMS");
+      return data;
+    },
+    onSuccess: () => toast({ title: "Test SMS sent", description: "Check the recipient phone." }),
+    onError: (e: Error) => toast({ title: "Test SMS failed", description: e.message, variant: "destructive" }),
   });
 
   const saveProviderMutation = useMutation({
@@ -360,6 +390,54 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
             {saveChannelsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
             Save Notification Channels
           </Button>
+
+          <div className="border-t pt-4 mt-6 space-y-4">
+            <p className="text-sm font-medium text-muted-foreground">Test configuration</p>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <div className="flex-1 space-y-2">
+                <Label className="text-xs">Test email (optional; uses first notification email if blank)</Label>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="email@example.com"
+                    value={testEmailTo}
+                    onChange={(e) => setTestEmailTo(e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => testEmailMutation.mutate()}
+                    disabled={testEmailMutation.isPending}
+                    title="Send test email"
+                  >
+                    {testEmailMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4 mr-1" />}
+                    Send
+                  </Button>
+                </div>
+              </div>
+              <div className="flex-1 space-y-2">
+                <Label className="text-xs">Test SMS (phone number required)</Label>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="+919876543210"
+                    value={testSmsTo}
+                    onChange={(e) => setTestSmsTo(e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => testSmsMutation.mutate()}
+                    disabled={testSmsMutation.isPending || !testSmsTo.trim()}
+                    title="Send test SMS"
+                  >
+                    {testSmsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageSquare className="h-4 w-4 mr-1" />}
+                    Send
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
         </CardContent>
       </Card>
 

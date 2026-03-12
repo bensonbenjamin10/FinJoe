@@ -23,6 +23,8 @@ import {
   incomeTypes,
 } from "../shared/schema.js";
 import { createFinJoeData } from "../lib/finjoe-data.js";
+import { sendFinJoeEmail } from "../worker/src/email.js";
+import { sendFinJoeSms } from "../worker/src/twilio.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -516,6 +518,52 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("FinJoe settings update error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to update settings" });
+    }
+  });
+
+  app.post("/api/admin/finjoe/test-email", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      let to = typeof req.body?.to === "string" ? req.body.to.trim() : null;
+      if (!to || !to.includes("@")) {
+        const [row] = await db.select({ notificationEmails: finjoeSettings.notificationEmails }).from(finjoeSettings).where(eq(finjoeSettings.tenantId, tid)).limit(1);
+        const tenantEmails = (row?.notificationEmails ?? "").split(",").map((e) => e.trim()).filter((e) => e && e.includes("@"));
+        if (tenantEmails.length > 0) to = tenantEmails[0];
+        else {
+          const [platformRow] = await db.select({ defaultNotificationEmails: platformSettings.defaultNotificationEmails }).from(platformSettings).where(eq(platformSettings.id, "default")).limit(1);
+          const platformEmails = (platformRow?.defaultNotificationEmails ?? "").split(",").map((e) => e.trim()).filter((e) => e && e.includes("@"));
+          to = platformEmails[0] ?? null;
+        }
+      }
+      if (!to || !to.includes("@")) return res.status(400).json({ error: "Provide an email address or configure notification emails first" });
+      const sent = await sendFinJoeEmail([to], "FinJoe test email", "<p>This is a test email from FinJoe. Your email configuration is working.</p>", { tenantId: tid }, `test-email-${Date.now()}`);
+      if (sent) res.json({ ok: true, message: "Test email sent" });
+      else res.status(500).json({ error: "Failed to send test email. Check RESEND_API_KEY and domain verification." });
+    } catch (e) {
+      logger.error("Test email error", { requestId: req.requestId, err: (e as Error).message });
+      res.status(500).json({ error: (e as Error).message || "Failed to send test email" });
+    }
+  });
+
+  app.post("/api/admin/finjoe/test-sms", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const to = typeof req.body?.to === "string" ? req.body.to.trim() : null;
+      if (!to || to.length < 10) return res.status(400).json({ error: "Valid phone number required (e.g. +919876543210)" });
+      const result = await sendFinJoeSms(to, "FinJoe test SMS. Your SMS configuration is working.", `test-sms-${Date.now()}`, tid);
+      if (result) res.json({ ok: true, message: "Test SMS sent" });
+      else res.status(500).json({ error: "Failed to send test SMS. Check Twilio credentials and SMS from number." });
+    } catch (e) {
+      logger.error("Test SMS error", { requestId: req.requestId, err: (e as Error).message });
+      res.status(500).json({ error: (e as Error).message || "Failed to send test SMS" });
     }
   });
 
