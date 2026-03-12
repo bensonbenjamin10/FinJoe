@@ -40,14 +40,6 @@ export type SyncResult = {
   templateStatuses?: Partial<Record<keyof SyncedTemplates, TemplateStatusEntry>>;
 };
 
-function isWhatsAppApproved(approvalRequests: Record<string, unknown> | undefined): boolean {
-  if (!approvalRequests || typeof approvalRequests !== "object") return false;
-  const whatsapp = approvalRequests.whatsapp as Record<string, unknown> | undefined;
-  if (!whatsapp || typeof whatsapp !== "object") return false;
-  const status = String(whatsapp.status ?? "").toLowerCase();
-  return status === "approved";
-}
-
 function getWhatsAppStatus(approvalRequests: Record<string, unknown> | undefined): TemplateStatus {
   if (!approvalRequests || typeof approvalRequests !== "object") return "unsubmitted";
   const whatsapp = approvalRequests.whatsapp as Record<string, unknown> | undefined;
@@ -59,9 +51,40 @@ function getWhatsAppStatus(approvalRequests: Record<string, unknown> | undefined
   return raw ? (raw as TemplateStatus) : "unsubmitted";
 }
 
+/** Extract status from record - check approvalRequests and approvals (API may use either) */
+function getStatusFromRecord(record: Record<string, unknown>): TemplateStatus {
+  const approvalRequests = (record.approvalRequests ?? record.approval_requests) as Record<string, unknown> | undefined;
+  const status = getWhatsAppStatus(approvalRequests);
+  if (status !== "unsubmitted") return status;
+  const approvals = (record.approvals ?? record.approval_content) as Record<string, unknown> | undefined;
+  return getWhatsAppStatus(approvals as Record<string, unknown> | undefined);
+}
+
+/** Fetch approval status directly from Twilio ApprovalRequests endpoint (source of truth) */
+async function fetchApprovalStatusForContent(
+  accountSid: string,
+  authToken: string,
+  contentSid: string
+): Promise<TemplateStatus> {
+  const auth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+  const res = await fetch(`https://content.twilio.com/v1/Content/${contentSid}/ApprovalRequests`, {
+    method: "GET",
+    headers: { Authorization: `Basic ${auth}` },
+  });
+  if (!res.ok) return "unsubmitted";
+  const data = (await res.json()) as { whatsapp?: { status?: string } };
+  const raw = String(data?.whatsapp?.status ?? "").toLowerCase();
+  const valid: TemplateStatus[] = ["approved", "pending", "rejected", "paused", "disabled"];
+  if (valid.includes(raw as TemplateStatus)) return raw as TemplateStatus;
+  if (raw === "received") return "pending";
+  return raw ? (raw as TemplateStatus) : "unsubmitted";
+}
+
 /**
  * Fetch ContentAndApprovals from Twilio, filter for approved WhatsApp templates,
  * and map friendly_name to finjoe_settings fields.
+ * Handles duplicates (same friendly_name, multiple SIDs): prefers approved over unsubmitted.
+ * Falls back to per-template ApprovalRequests fetch when contentAndApprovals lacks status.
  */
 export async function fetchApprovedTemplatesFromTwilio(
   accountSid: string,
@@ -70,33 +93,63 @@ export async function fetchApprovedTemplatesFromTwilio(
   const client = twilio(accountSid, authToken);
   const records = await client.content.v1.contentAndApprovals.list({ limit: 2000, pageSize: 500 });
 
-  const synced: Partial<SyncedTemplates> = {};
-  const skipped: string[] = [];
+  // Collect candidates per field: { sid, status }[] (handles duplicates)
+  const candidates = new Map<keyof SyncedTemplates, { sid: string; status: TemplateStatus }[]>();
 
   for (const record of records) {
     const friendlyName = record.friendlyName ?? "";
     const field = FRIENDLY_NAME_TO_FIELD[friendlyName];
-    if (!field) continue;
+    if (!field || !record.sid) continue;
 
-    const approvalRequests = record.approvalRequests as Record<string, unknown> | undefined;
-    if (!isWhatsAppApproved(approvalRequests)) {
-      const status = (approvalRequests?.whatsapp as Record<string, unknown>)?.status ?? "unsubmitted";
-      skipped.push(`${friendlyName} (${String(status)})`);
-      continue;
+    let status = getStatusFromRecord(record as Record<string, unknown>);
+    if (status === "unsubmitted") {
+      status = await fetchApprovalStatusForContent(accountSid, authToken, record.sid);
     }
 
-    if (record.sid) {
-      synced[field] = record.sid;
+    const list = candidates.get(field) ?? [];
+    list.push({ sid: record.sid, status });
+    candidates.set(field, list);
+  }
+
+  const synced: Partial<SyncedTemplates> = {};
+  const skipped: string[] = [];
+
+  for (const [field, list] of candidates) {
+    const friendlyName = FIELD_TO_FRIENDLY_NAME[field];
+    const approved = list.find((c) => c.status === "approved");
+    const best = approved ?? list[list.length - 1];
+    if (best.status === "approved") {
+      synced[field] = best.sid;
+    } else {
+      skipped.push(`${friendlyName} (${best.status})`);
     }
   }
 
-  const templateStatuses = buildTemplateStatuses(records);
+  const templateStatuses = buildTemplateStatusesFromCandidates(candidates);
   return { synced, skipped, templateStatuses };
+}
+
+function buildTemplateStatusesFromCandidates(
+  candidates: Map<keyof SyncedTemplates, { sid: string; status: TemplateStatus }[]>
+): Partial<Record<keyof SyncedTemplates, TemplateStatusEntry>> {
+  const statuses: Partial<Record<keyof SyncedTemplates, TemplateStatusEntry>> = {};
+  for (const field of Object.keys(FIELD_TO_FRIENDLY_NAME) as (keyof SyncedTemplates)[]) {
+    const list = candidates.get(field);
+    if (!list?.length) {
+      statuses[field] = { status: "unsubmitted", sid: null };
+      continue;
+    }
+    const approved = list.find((c) => c.status === "approved");
+    const best = approved ?? list[list.length - 1];
+    statuses[field] = { status: best.status, sid: best.sid };
+  }
+  return statuses;
 }
 
 /**
  * Fetch template statuses (approved, pending, rejected, etc.) for all FinJoe templates from Twilio.
  * Does not modify the database. Use for display-only status checks.
+ * Falls back to per-template ApprovalRequests fetch when contentAndApprovals lacks status.
  */
 export async function fetchTemplateStatusesFromTwilio(
   accountSid: string,
@@ -104,28 +157,23 @@ export async function fetchTemplateStatusesFromTwilio(
 ): Promise<Partial<Record<keyof SyncedTemplates, TemplateStatusEntry>>> {
   const client = twilio(accountSid, authToken);
   const records = await client.content.v1.contentAndApprovals.list({ limit: 2000, pageSize: 500 });
-  return buildTemplateStatuses(records);
-}
 
-function buildTemplateStatuses(
-  records: { friendlyName?: string | null; sid?: string | null; approvalRequests?: unknown }[]
-): Partial<Record<keyof SyncedTemplates, TemplateStatusEntry>> {
-  const statuses: Partial<Record<keyof SyncedTemplates, TemplateStatusEntry>> = {};
+  const candidates = new Map<keyof SyncedTemplates, { sid: string; status: TemplateStatus }[]>();
+
   for (const record of records) {
     const friendlyName = record.friendlyName ?? "";
     const field = FRIENDLY_NAME_TO_FIELD[friendlyName];
-    if (!field) continue;
-    const approvalRequests = record.approvalRequests as Record<string, unknown> | undefined;
-    statuses[field] = {
-      status: getWhatsAppStatus(approvalRequests),
-      sid: record.sid ?? null,
-    };
-  }
-  // Ensure all 4 fields have an entry (use unsubmitted for not found)
-  for (const field of Object.keys(FIELD_TO_FRIENDLY_NAME) as (keyof SyncedTemplates)[]) {
-    if (!statuses[field]) {
-      statuses[field] = { status: "unsubmitted", sid: null };
+    if (!field || !record.sid) continue;
+
+    let status = getStatusFromRecord(record as Record<string, unknown>);
+    if (status === "unsubmitted") {
+      status = await fetchApprovalStatusForContent(accountSid, authToken, record.sid);
     }
+
+    const list = candidates.get(field) ?? [];
+    list.push({ sid: record.sid, status });
+    candidates.set(field, list);
   }
-  return statuses;
+
+  return buildTemplateStatusesFromCandidates(candidates);
 }
