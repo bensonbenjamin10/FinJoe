@@ -32,6 +32,8 @@ import { getAnalytics, getPredictions } from "./analytics.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
+const EXPORT_ROW_LIMIT = parseInt(process.env.EXPORT_ROW_LIMIT ?? "10000", 10) || 10000;
+
 function escapeCsv(s: string): string {
   if (s.includes(",") || s.includes('"') || s.includes("\n")) {
     return `"${s.replace(/"/g, '""')}"`;
@@ -1191,7 +1193,11 @@ export async function registerRoutes(app: Express) {
       const data = await getAnalytics(filters);
       res.json(data);
     } catch (e) {
-      logger.error("Analytics error", { requestId: req.requestId, err: String(e) });
+      const msg = e instanceof Error ? e.message : String(e);
+      const isValidation =
+        msg === "startDate and endDate must be YYYY-MM-DD" || msg === "startDate must be before or equal to endDate";
+      if (isValidation) return res.status(400).json({ error: msg });
+      logger.error("Analytics error", { requestId: req.requestId, err: msg });
       res.status(500).json({ error: "Failed to fetch analytics" });
     }
   });
@@ -1203,8 +1209,9 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.query?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const horizonDays = req.query?.horizonDays ? parseInt(String(req.query.horizonDays), 10) : 30;
-      const data = await getPredictions({ tenantId: tid, horizonDays: isNaN(horizonDays) ? 30 : horizonDays });
+      const parsed = req.query?.horizonDays ? parseInt(String(req.query.horizonDays), 10) : 30;
+      const horizonDays = Math.min(90, Math.max(1, isNaN(parsed) ? 30 : parsed));
+      const data = await getPredictions({ tenantId: tid, horizonDays });
       res.json(data);
     } catch (e) {
       logger.error("Predictions error", { requestId: req.requestId, err: String(e) });
@@ -1611,6 +1618,9 @@ export async function registerRoutes(app: Express) {
       if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
         return res.status(400).json({ error: "startDate and endDate must be YYYY-MM-DD" });
       }
+      if (startDate > endDate) {
+        return res.status(400).json({ error: "startDate must be before or equal to endDate" });
+      }
       const rows = await db
         .select({
           id: expenses.id,
@@ -1638,7 +1648,8 @@ export async function registerRoutes(app: Express) {
             sql`${expenses.expenseDate} <= ${endDate}::date`
           )
         )
-        .orderBy(expenses.expenseDate, expenses.createdAt);
+        .orderBy(expenses.expenseDate, expenses.createdAt)
+        .limit(EXPORT_ROW_LIMIT);
       const byCategoryMonth: Record<string, { category: string; month: string; amount: number; count: number }> = {};
       for (const r of rows) {
         const cat = r.categoryName || "Uncategorized";
@@ -1653,9 +1664,12 @@ export async function registerRoutes(app: Express) {
       for (const v of sorted) {
         lines.push(`${escapeCsv(v.category)},${v.month},${v.amount},${v.count}`);
       }
-      res.setHeader("Content-Type", "text/csv");
+      if (rows.length === EXPORT_ROW_LIMIT) {
+        lines.push(`"Note: Export truncated to ${EXPORT_ROW_LIMIT} rows. Narrow date range for full data."`);
+      }
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", `attachment; filename=cashflow-summary-${startDate}-${endDate}.csv`);
-      res.send(lines.join("\n"));
+      res.send("\uFEFF" + lines.join("\n"));
     } catch (e) {
       logger.error("Expense export error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to export" });
@@ -1676,6 +1690,9 @@ export async function registerRoutes(app: Express) {
       const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
       if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
         return res.status(400).json({ error: "startDate and endDate must be YYYY-MM-DD" });
+      }
+      if (startDate > endDate) {
+        return res.status(400).json({ error: "startDate must be before or equal to endDate" });
       }
       const rows = await db
         .select({
@@ -1707,7 +1724,8 @@ export async function registerRoutes(app: Express) {
             sql`${expenses.expenseDate} <= ${endDate}::date`
           )
         )
-        .orderBy(expenses.expenseDate, expenses.createdAt);
+        .orderBy(expenses.expenseDate, expenses.createdAt)
+        .limit(EXPORT_ROW_LIMIT);
       const lines = [
         "Date,Cost Center,Category,Amount,Description,Particulars,Vendor,Invoice Number,Invoice Date,GSTIN,Tax Type,Voucher Number,Status,Payout Method,Payout Ref,Payout At",
       ];
@@ -1736,9 +1754,12 @@ export async function registerRoutes(app: Express) {
           ].join(",")
         );
       }
-      res.setHeader("Content-Type", "text/csv");
+      if (rows.length === EXPORT_ROW_LIMIT) {
+        lines.push(`"Note: Export truncated to ${EXPORT_ROW_LIMIT} rows. Narrow date range for full data."`);
+      }
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", `attachment; filename=expenses-detailed-${startDate}-${endDate}.csv`);
-      res.send(lines.join("\n"));
+      res.send("\uFEFF" + lines.join("\n"));
     } catch (e) {
       logger.error("Expense detailed export error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to export" });

@@ -14,6 +14,14 @@ import {
   finJoeRoleChangeRequests,
 } from "../shared/schema.js";
 
+function toDateKey(d: Date, tz: "utc" | "local" = "local"): string {
+  if (tz === "utc") return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export type AnalyticsFilters = {
   tenantId: string;
   startDate: string;
@@ -53,6 +61,14 @@ function buildIncomeConditions(tid: string, filters: AnalyticsFilters) {
 }
 
 export async function getAnalytics(filters: AnalyticsFilters) {
+  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+  if (!dateRegex.test(filters.startDate) || !dateRegex.test(filters.endDate)) {
+    throw new Error("startDate and endDate must be YYYY-MM-DD");
+  }
+  if (filters.startDate > filters.endDate) {
+    throw new Error("startDate must be before or equal to endDate");
+  }
+
   const tid = filters.tenantId;
   const whereExpense = buildExpenseConditions(tid, filters);
   const whereIncome = buildIncomeConditions(tid, filters);
@@ -163,7 +179,7 @@ export async function getAnalytics(filters: AnalyticsFilters) {
   for (const r of expenseRows) {
     const d = new Date(r.expenseDate);
     let key: string;
-    if (granularity === "day") key = d.toISOString().slice(0, 10);
+    if (granularity === "day") key = toDateKey(d, "local");
     else if (granularity === "week") key = getWeekKey(d);
     else key = d.toISOString().slice(0, 7);
     if (!seriesMap[key]) seriesMap[key] = { expenses: 0, income: 0 };
@@ -172,7 +188,7 @@ export async function getAnalytics(filters: AnalyticsFilters) {
   for (const r of incomeRows) {
     const d = new Date(r.incomeDate);
     let key: string;
-    if (granularity === "day") key = d.toISOString().slice(0, 10);
+    if (granularity === "day") key = toDateKey(d, "local");
     else if (granularity === "week") key = getWeekKey(d);
     else key = d.toISOString().slice(0, 7);
     if (!seriesMap[key]) seriesMap[key] = { expenses: 0, income: 0 };
@@ -276,7 +292,7 @@ export async function getPredictions(filters: PredictionsFilters) {
 
   const dailyExpenses: Record<string, number> = {};
   for (const r of expenseRows) {
-    const key = new Date(r.expenseDate).toISOString().slice(0, 10);
+    const key = toDateKey(new Date(r.expenseDate), "local");
     dailyExpenses[key] = (dailyExpenses[key] ?? 0) + (r.amount ?? 0);
   }
   const sortedExpenseDates = Object.keys(dailyExpenses).sort();
@@ -286,12 +302,34 @@ export async function getPredictions(filters: PredictionsFilters) {
 
   const dailyIncome: Record<string, number> = {};
   for (const r of incomeRows) {
-    const key = new Date(r.incomeDate).toISOString().slice(0, 10);
+    const key = toDateKey(new Date(r.incomeDate), "local");
     dailyIncome[key] = (dailyIncome[key] ?? 0) + (r.amount ?? 0);
   }
   const dailyIncomeValues = Object.values(dailyIncome);
   const avgDailyIncome =
     dailyIncomeValues.length > 0 ? dailyIncomeValues.reduce((a, b) => a + b, 0) / dailyIncomeValues.length : 0;
+
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = toDateKey(yesterday, "local");
+  // Cumulative cash position as of yesterday: all-time income minus all paid expenses through yesterday
+  const [incomeSum] = await db
+    .select({ total: sql<number>`coalesce(sum(${incomeRecords.amount}), 0)::int` })
+    .from(incomeRecords)
+    .where(
+      and(eq(incomeRecords.tenantId, tid), sql`${incomeRecords.incomeDate} <= ${yesterdayStr}::date`)
+    );
+  const [paidExpenseSum] = await db
+    .select({ total: sql<number>`coalesce(sum(${expenses.amount}), 0)::int` })
+    .from(expenses)
+    .where(
+      and(
+        eq(expenses.tenantId, tid),
+        eq(expenses.status, "paid"),
+        sql`${expenses.expenseDate} <= ${yesterdayStr}::date`
+      )
+    );
+  const startingBalance = (incomeSum?.total ?? 0) - (paidExpenseSum?.total ?? 0);
 
   const expenseForecast: Array<{ date: string; amount: number }> = [];
   const incomeForecast: Array<{ date: string; amount: number }> = [];
@@ -299,7 +337,7 @@ export async function getPredictions(filters: PredictionsFilters) {
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  let runningNet = 0;
+  let runningNet = startingBalance;
 
   for (let i = 0; i < horizonDays; i++) {
     const d = new Date(today);
@@ -348,17 +386,23 @@ export async function getPredictions(filters: PredictionsFilters) {
     }
   }
 
-  if (dailyExpenseValues.length >= 14) {
-    const last7 = dailyExpenseValues.slice(-7);
-    const prev7 = dailyExpenseValues.slice(-14, -7);
-    const last7Avg = last7.reduce((a, b) => a + b, 0) / 7;
-    const prev7Avg = prev7.reduce((a, b) => a + b, 0) / 7;
-    if (prev7Avg > 0 && last7Avg > prev7Avg * 1.5) {
-      alerts.push({
-        type: "expense_spike",
-        message: `Expense spike detected: last 7 days (${Math.round(last7Avg)}/day avg) is >150% of prior 7 days`,
-      });
-    }
+  let last7Sum = 0;
+  let prev7Sum = 0;
+  for (let i = 1; i <= 7; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    last7Sum += dailyExpenses[toDateKey(d, "local")] ?? 0;
+  }
+  for (let i = 8; i <= 14; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    prev7Sum += dailyExpenses[toDateKey(d, "local")] ?? 0;
+  }
+  if (prev7Sum >= 1000 && last7Sum > prev7Sum * 1.5) {
+    alerts.push({
+      type: "expense_spike",
+      message: `Expense spike detected: last 7 calendar days (${Math.round(last7Sum)} total) is >150% of prior 7 days`,
+    });
   }
 
   return {
@@ -368,5 +412,6 @@ export async function getPredictions(filters: PredictionsFilters) {
     alerts,
     avgDailyExpense: Math.round(avgDailyExpense),
     avgDailyIncome: Math.round(avgDailyIncome),
+    startingBalance,
   };
 }

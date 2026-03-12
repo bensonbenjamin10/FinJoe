@@ -42,13 +42,13 @@ import {
   Loader2,
   AlertTriangle,
 } from "lucide-react";
-import { format, subDays } from "date-fns";
-import { cn } from "@/lib/utils";
+import { format, isValid, subDays } from "date-fns";
 import { useAuth } from "@/hooks/use-auth";
 import { useCostCenterLabel } from "@/hooks/use-cost-center-label";
 import { StatCard } from "@/components/stat-card";
-import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
-import type { Tenant, Campus } from "@shared/schema";
+import { QueryErrorState } from "@/components/query-error-state";
+import { ChartContainer } from "@/components/ui/chart";
+import type { Campus } from "@shared/schema";
 
 const DATE_PRESETS = [
   { label: "Last 7 days", days: 7 },
@@ -87,9 +87,11 @@ type PredictionsData = {
   alerts: Array<{ type: string; message: string }>;
   avgDailyExpense: number;
   avgDailyIncome: number;
+  startingBalance?: number;
 };
 
 function formatCurrency(n: number) {
+  if (!Number.isFinite(n)) return "—";
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n);
 }
 
@@ -127,7 +129,7 @@ export default function AdminDashboard() {
   analyticsParams.append("granularity", presetDays <= 7 ? "day" : presetDays <= 30 ? "day" : "week");
   if (costCenterFilter && costCenterFilter !== "all") analyticsParams.append("costCenterId", costCenterFilter);
 
-  const { data: analytics, isLoading: analyticsLoading } = useQuery<AnalyticsData>({
+  const { data: analytics, isLoading: analyticsLoading, isError: analyticsError, refetch: refetchAnalytics } = useQuery<AnalyticsData>({
     queryKey: ["/api/admin/analytics", analyticsParams.toString()],
     queryFn: async () => {
       const res = await fetch(`/api/admin/analytics?${analyticsParams.toString()}`, { credentials: "include" });
@@ -137,7 +139,7 @@ export default function AdminDashboard() {
     enabled: !!tenantId,
   });
 
-  const { data: predictions, isLoading: predictionsLoading } = useQuery<PredictionsData>({
+  const { data: predictions, isLoading: predictionsLoading, isError: predictionsError, refetch: refetchPredictions } = useQuery<PredictionsData>({
     queryKey: ["/api/admin/analytics/predictions", tenantId],
     queryFn: async () => {
       const res = await fetch(`/api/admin/analytics/predictions?tenantId=${tenantId}&horizonDays=30`, {
@@ -213,6 +215,11 @@ export default function AdminDashboard() {
         <div className="flex items-center justify-center py-16">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
+      ) : analyticsError ? (
+        <QueryErrorState
+          message="Failed to load analytics. Please try again."
+          onRetry={() => refetchAnalytics()}
+        />
       ) : analytics ? (
         <>
           {/* Row 1: KPI cards */}
@@ -269,7 +276,7 @@ export default function AdminDashboard() {
                         expenses: { label: "Expenses", color: "#ef4444" },
                         income: { label: "Income", color: "#10b981" },
                       }}
-                      className="h-full w-full"
+                      className="h-full w-full aspect-auto"
                     >
                       <AreaChart data={analytics.timeSeries}>
                         <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
@@ -279,9 +286,11 @@ export default function AdminDashboard() {
                           content={({ active, payload }) => {
                             if (!active || !payload?.length) return null;
                             const p = payload[0].payload;
+                            const d = new Date(p.date);
+                            if (!isValid(d)) return <div className="rounded-lg border bg-background p-2 shadow-sm">{p.date ?? "—"}</div>;
                             return (
                               <div className="rounded-lg border bg-background p-2 shadow-sm">
-                                <div className="text-xs text-muted-foreground">{format(new Date(p.date), "PPP")}</div>
+                                <div className="text-xs text-muted-foreground">{format(d, "PPP")}</div>
                                 <div className="font-medium mt-1">{formatCurrency(p.expenses)} expenses</div>
                                 <div className="font-medium">{formatCurrency(p.income)} income</div>
                               </div>
@@ -313,7 +322,7 @@ export default function AdminDashboard() {
                       config={Object.fromEntries(
                         analytics.expensesByCategory.slice(0, 6).map((c, i) => [c.name, { color: CHART_COLORS[i % CHART_COLORS.length] }])
                       )}
-                      className="h-full w-full"
+                      className="h-full w-full aspect-auto"
                     >
                       <PieChart>
                         <Pie
@@ -356,7 +365,7 @@ export default function AdminDashboard() {
                       config={Object.fromEntries(
                         analytics.expensesByCostCenter.map((c, i) => [c.name, { color: CHART_COLORS[i % CHART_COLORS.length] }])
                       )}
-                      className="h-full w-full"
+                      className="h-full w-full aspect-auto"
                     >
                       <BarChart data={analytics.expensesByCostCenter} layout="vertical" margin={{ left: 20 }}>
                         <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
@@ -391,8 +400,8 @@ export default function AdminDashboard() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {analytics.expensesByCategory.slice(0, 8).map((row) => (
-                        <TableRow key={row.name}>
+                      {analytics.expensesByCategory.slice(0, 8).map((row, i) => (
+                        <TableRow key={`${row.name}-${i}`}>
                           <TableCell>{row.name}</TableCell>
                           <TableCell className="text-right font-medium">{formatCurrency(row.amount)}</TableCell>
                           <TableCell className="text-right text-muted-foreground">{row.count}</TableCell>
@@ -424,11 +433,18 @@ export default function AdminDashboard() {
                   <div className="h-[280px] flex items-center justify-center">
                     <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                   </div>
+                ) : predictionsError ? (
+                  <div className="h-[280px] flex flex-col items-center justify-center gap-4">
+                    <p className="text-muted-foreground text-sm">Failed to load forecast. Please try again.</p>
+                    <Button variant="outline" size="sm" onClick={() => refetchPredictions()}>
+                      Retry
+                    </Button>
+                  </div>
                 ) : predictions?.cashflowForecast && predictions.cashflowForecast.length > 0 ? (
                   <div className="h-[280px]">
                     <ChartContainer
                       config={{ netPosition: { label: "Net Position", color: "#0ea5e9" } }}
-                      className="h-full w-full"
+                      className="h-full w-full aspect-auto"
                     >
                       <AreaChart data={predictions.cashflowForecast}>
                         <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
@@ -438,9 +454,11 @@ export default function AdminDashboard() {
                           content={({ active, payload }) => {
                             if (!active || !payload?.length) return null;
                             const p = payload[0].payload;
+                            const d = new Date(p.date);
+                            if (!isValid(d)) return <div className="rounded-lg border bg-background p-2 shadow-sm">{p.date ?? "—"}</div>;
                             return (
                               <div className="rounded-lg border bg-background p-2 shadow-sm">
-                                <div className="text-xs text-muted-foreground">{format(new Date(p.date), "PPP")}</div>
+                                <div className="text-xs text-muted-foreground">{format(d, "PPP")}</div>
                                 <div className="font-medium mt-1">{formatCurrency(p.netPosition)} net</div>
                               </div>
                             );
@@ -467,6 +485,13 @@ export default function AdminDashboard() {
                 {predictionsLoading ? (
                   <div className="py-8 flex items-center justify-center">
                     <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  </div>
+                ) : predictionsError ? (
+                  <div className="py-8 flex flex-col items-center justify-center gap-4">
+                    <p className="text-muted-foreground text-sm">Failed to load alerts. Please try again.</p>
+                    <Button variant="outline" size="sm" onClick={() => refetchPredictions()}>
+                      Retry
+                    </Button>
                   </div>
                 ) : predictions?.alerts && predictions.alerts.length > 0 ? (
                   <ul className="space-y-2">

@@ -8,22 +8,20 @@ interface StatCardProps {
   value: string;
   label: string;
   testId?: string;
-  /** Optional sparkline data (e.g. last 7 values) */
-  sparklineData?: number[];
   /** Trend percentage vs previous period (e.g. 12.5 for +12.5%) */
   trend?: number;
   /** Comparison text (e.g. "vs last 30 days") */
   comparison?: string;
 }
 
-export function StatCard({ icon: Icon, value, label, testId, sparklineData, trend, comparison }: StatCardProps) {
+export function StatCard({ icon: Icon, value, label, testId, trend, comparison }: StatCardProps) {
   return (
     <Card className="text-center" data-testid={testId}>
       <CardContent className="pt-6 pb-6">
         <Icon className="h-10 w-10 text-primary mx-auto mb-3" />
         <div className="text-3xl font-bold text-foreground mb-1">{value}</div>
         <div className="text-sm text-muted-foreground">{label}</div>
-        {(trend !== undefined || comparison || (sparklineData && sparklineData.length > 0)) && (
+        {(trend !== undefined || comparison) && (
           <div className="mt-2 flex items-center justify-center gap-1.5 text-xs">
             {trend !== undefined && (
               <span
