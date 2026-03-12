@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Settings, Loader2, Copy, AlertCircle, Mail, MessageSquare, RefreshCw, Plus, Send } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -68,6 +69,26 @@ function getProviderQueryKey(tenantId?: string | null) {
   return tenantId ? ["/api/admin/finjoe/whatsapp-provider", tenantId] : ["/api/admin/finjoe/whatsapp-provider"];
 }
 
+function getTemplateStatusesQueryKey(tenantId?: string | null) {
+  return tenantId ? ["/api/admin/finjoe/template-statuses", tenantId] : ["/api/admin/finjoe/template-statuses"];
+}
+
+type TemplateStatus = "approved" | "pending" | "rejected" | "paused" | "disabled" | "unsubmitted";
+
+function TemplateStatusBadge({ status }: { status?: TemplateStatus | null }) {
+  if (!status || status === "unsubmitted") return <Badge variant="outline">Not submitted</Badge>;
+  const config: Record<TemplateStatus, { label: string; variant: "success" | "secondary" | "destructive" | "outline" }> = {
+    approved: { label: "Approved", variant: "success" },
+    pending: { label: "Pending", variant: "secondary" },
+    rejected: { label: "Rejected", variant: "destructive" },
+    paused: { label: "Paused", variant: "destructive" },
+    disabled: { label: "Disabled", variant: "destructive" },
+    unsubmitted: { label: "Not submitted", variant: "outline" },
+  };
+  const { label, variant } = config[status] ?? config.unsubmitted;
+  return <Badge variant={variant}>{label}</Badge>;
+}
+
 export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenantId?: string | null }) {
   const { toast } = useToast();
   const { user } = useAuth();
@@ -81,6 +102,7 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
 
   const settingsQueryKey = getQueryKey(tenantId);
   const providerQueryKey = getProviderQueryKey(tenantId);
+  const templateStatusesQueryKey = getTemplateStatusesQueryKey(tenantId);
 
   const { data: settings, isLoading: settingsLoading } = useQuery<FinJoeSettings | null>({
     queryKey: settingsQueryKey,
@@ -103,6 +125,19 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
       return res.json();
     },
     enabled: !!tenantId,
+  });
+
+  const { data: templateStatusesData, refetch: refetchTemplateStatuses, isFetching: templateStatusesFetching } = useQuery<{
+    templateStatuses?: Partial<Record<string, { status: TemplateStatus; sid: string | null }>>;
+  } | null>({
+    queryKey: templateStatusesQueryKey,
+    queryFn: async () => {
+      const url = tenantId ? `/api/admin/finjoe/template-statuses?tenantId=${tenantId}` : "/api/admin/finjoe/template-statuses";
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!tenantId && !!provider?.accountSid,
   });
 
   const [templateForm, setTemplateForm] = useState<FinJoeSettings>({});
@@ -146,6 +181,7 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
       return data as { created: Record<string, string>; errors: string[] };
     },
     onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: templateStatusesQueryKey });
       if (Object.keys(data.created).length > 0) {
         setTemplateForm((prev) => ({ ...prev, ...data.created }));
       }
@@ -202,6 +238,7 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
       }
       if (data.errors.length > 0) msg += ` Some errors: ${data.errors.join("; ")}`;
       toast({ title, description: msg });
+      queryClient.invalidateQueries({ queryKey: templateStatusesQueryKey });
     },
     onError: (e: Error) => toast({ title: "Submit failed", description: e.message, variant: "destructive" }),
   });
@@ -221,6 +258,7 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: settingsQueryKey });
+      queryClient.invalidateQueries({ queryKey: templateStatusesQueryKey });
       if (Object.keys(data.synced).length > 0) {
         setTemplateForm((prev) => ({ ...prev, ...data.synced }));
       }
@@ -555,7 +593,10 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
           {TEMPLATES.map((t) => (
             <div key={t.id} className="space-y-3 rounded-lg border p-4">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <Label className="font-medium">{t.name}</Label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Label className="font-medium">{t.name}</Label>
+                  <TemplateStatusBadge status={templateStatusesData?.templateStatuses?.[t.field]?.status} />
+                </div>
                 <Button variant="outline" size="sm" className="w-full sm:w-auto min-h-[44px] sm:min-h-0" onClick={() => handleCopyTemplate(t.template)}>
                   <Copy className="h-4 w-4 mr-2" />
                   Copy template
@@ -595,6 +636,15 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
             >
               {submitForApprovalMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Send className="h-4 w-4 mr-2" />}
               Submit for approval
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => refetchTemplateStatuses()}
+              disabled={templateStatusesFetching || !provider?.accountSid}
+              title="Fetch approved, pending, or rejected status for each template from Twilio"
+            >
+              {templateStatusesFetching ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+              Refresh status
             </Button>
             <Button
               variant="outline"
