@@ -24,10 +24,16 @@ export type ParsedIncomeRow = {
 
 const DATE_HEADERS = ["date", "transaction date", "value date", "txn date"];
 const PARTICULARS_HEADERS = ["particulars", "description", "narration", "remarks", "transaction details"];
-const WITHDRAWAL_HEADERS = ["withdrawals", "withdrawal", "debit", "debits", "dr", "debit amt", "withdrawal amt"];
-const DEPOSIT_HEADERS = ["deposits", "deposit", "credit", "credits", "cr", "credit amt", "deposit amt"];
+const WITHDRAWAL_HEADERS = [
+  "withdrawals", "withdrawal", "debit", "debits", "dr", "debit amt", "withdrawal amt",
+  "debit amount", "withdrawal amount", "withdrawals amt", "debit amt.",
+];
+const DEPOSIT_HEADERS = [
+  "deposits", "deposit", "credit", "credits", "cr", "credit amt", "deposit amt",
+  "credit amount", "deposit amount", "deposits amt", "credit amt.",
+];
 const AMOUNT_HEADERS = ["amount", "transaction amount", "value"];
-const TYPE_HEADERS = ["transaction type", "type", "cr/dr", "debit/credit"];
+const TYPE_HEADERS = ["transaction type", "type", "cr/dr", "debit/credit", "txn type", "transaction type", "dr/cr"];
 const BRANCH_HEADERS = ["branch", "location", "cost center", "campus", "major head"];
 
 function findColumn(row: Record<string, string>, headers: string[]): string | undefined {

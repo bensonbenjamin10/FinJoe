@@ -19,9 +19,10 @@ import {
   type ConversationTurn,
 } from "./gemini.js";
 import { parseExpensesFromCsv } from "../csv-parser.js";
-import { fetchSystemContext, fetchSystemData, resolveCategoryFromMessage, resolveCampusFromMessage } from "../context.js";
+import { fetchSystemContext, fetchSystemData, resolveCategoryFromMessage, resolveCampusFromMessage, resolveIncomeCategoryFromMessage } from "../context.js";
 import { validateExpenseData, validateRoleChangeData } from "../validation.js";
 import { createFinJoeData } from "../../../lib/finjoe-data.js";
+import { parseExpenseQuery } from "../../../lib/expense-query-ai.js";
 import { normalizePhone } from "../twilio.js";
 
 const HISTORY_LIMIT = 10;
@@ -126,9 +127,10 @@ export async function processWithAgent(
   const ctx = { traceId, conversationId, messageId };
 
   const { context: systemContext, costCenterLabel } = await fetchSystemContext(tenantId);
-  const { campuses, categories } = await fetchSystemData(tenantId);
+  const { campuses, categories, incomeCategories } = await fetchSystemData(tenantId);
   const validCampusIds = campuses.map((c) => c.id);
   const validCategoryIds = categories.map((c) => c.id);
+  const validIncomeCategoryIds = incomeCategories.map((c) => c.id);
 
   const convContext = await getConversationContext(conversationId);
   const media = await db.select().from(finJoeMedia).where(eq(finJoeMedia.messageId, messageId));
@@ -195,6 +197,7 @@ export async function processWithAgent(
     costCenterLabel,
     campuses,
     categories,
+    incomeCategories,
     pendingExpense: convContext.pendingExpense
       ? {
           extracted: convContext.pendingExpense.extracted,
@@ -229,8 +232,10 @@ export async function processWithAgent(
           contactCampusId: contactCampusId ?? null,
           convContext: updatedConvContext,
           validCategoryIds,
+          validIncomeCategoryIds,
           validCampusIds,
           categories,
+          incomeCategories,
           campuses,
           tenantId,
         },
@@ -256,7 +261,7 @@ export async function processWithAgent(
       } else if (fc.name === "store_pending_role_change" && result.data) {
         updatedConvContext = { ...updatedConvContext, pendingRoleChange: result.data as PendingRoleChange };
         await setConversationContext(conversationId, updatedConvContext);
-      } else if (fc.name === "create_expense" || fc.name === "bulk_create_expenses" || fc.name === "create_role_change_request") {
+      } else if (fc.name === "create_expense" || fc.name === "create_income" || fc.name === "bulk_create_expenses" || fc.name === "create_role_change_request") {
         const cleared = clearPendingFromContext(updatedConvContext);
         await setConversationContext(conversationId, cleared);
         updatedConvContext = { ...updatedConvContext, ...cleared };
@@ -274,6 +279,7 @@ export async function processWithAgent(
         costCenterLabel,
         campuses,
         categories,
+        incomeCategories,
         pendingExpense: updatedConvContext.pendingExpense
           ? { extracted: updatedConvContext.pendingExpense.extracted, missingFields: updatedConvContext.pendingExpense.missingFields }
           : undefined,
@@ -302,8 +308,10 @@ type ExecuteContext = {
   contactCampusId: string | null;
   convContext: ConversationContext;
   validCategoryIds: string[];
+  validIncomeCategoryIds: string[];
   validCampusIds: string[];
   categories: Array<{ id: string; name: string; slug: string }>;
+  incomeCategories: Array<{ id: string; name: string; slug: string }>;
   campuses: Array<{ id: string; name: string; slug: string }>;
   tenantId: string;
 };
@@ -399,6 +407,57 @@ async function executeFunctionCall(
       await notifyFinanceForApproval(expense.id, extracted, tenantId, traceId, categoryName);
 
       return { success: true, data: { expenseId: expense.id, extracted } };
+    }
+
+    case "create_income": {
+      const { validIncomeCategoryIds, incomeCategories: incCats } = execCtx;
+      if (validIncomeCategoryIds.length === 0) {
+        return { success: false, error: "No income categories configured. Ask admin to add income categories in the web app (Income settings)." };
+      }
+      const amountVal = typeof args.amount === "number" ? Math.round(args.amount) : parseAmount(args.amount);
+      const amount = amountVal ?? 0;
+      if (amount <= 0) {
+        return { success: false, error: "Income amount must be a positive number." };
+      }
+      let categoryId = String(args.categoryId ?? "").trim();
+      let campusId = args.campusId ? String(args.campusId) : null;
+      if (categoryId && !validIncomeCategoryIds.includes(categoryId)) {
+        const resolved = resolveIncomeCategoryFromMessage(categoryId, incCats);
+        if (resolved) categoryId = resolved;
+      }
+      if (campusId && !execCtx.validCampusIds.includes(campusId)) {
+        const resolved = resolveCampusFromMessage(campusId, execCtx.campuses);
+        if (resolved) campusId = resolved;
+      }
+      const finalCategoryId = categoryId || validIncomeCategoryIds[0];
+      if (!finalCategoryId) {
+        return { success: false, error: "No income categories configured. Ask admin to add income categories." };
+      }
+      const incomeDate = String(args.incomeDate ?? new Date().toISOString().slice(0, 10));
+      const particulars = args.particulars ? String(args.particulars) : null;
+
+      let income: { id: string } | null = null;
+      try {
+        income = await finJoeData.createIncome({
+          tenantId,
+          costCenterId: campusId,
+          categoryId: finalCategoryId,
+          amount,
+          incomeDate,
+          particulars: particulars ?? "From FinJoe WhatsApp",
+          incomeType: args.incomeType ? String(args.incomeType) : "other",
+          submittedByContactPhone: contactPhone,
+        });
+      } catch (err) {
+        logger.error("Income create error", { traceId, err: String(err) });
+      }
+
+      if (!income?.id) {
+        return { success: false, error: USER_FACING_ERROR };
+      }
+
+      const categoryName = incCats.find((c) => c.id === finalCategoryId)?.name ?? null;
+      return { success: true, data: { incomeId: income.id, amount, categoryName, incomeDate } };
     }
 
     case "bulk_create_expenses": {
@@ -702,6 +761,48 @@ async function executeFunctionCall(
       return { success: true, data: { roleChangeRequests: rows } };
     }
 
+    case "semantic_search_expenses": {
+      const question = String(args.question ?? "").trim();
+      if (!question) return { success: false, error: "Please provide a question about expenses." };
+      const parsed = await parseExpenseQuery(question, execCtx.campuses);
+      if (!parsed) {
+        return {
+          success: true,
+          data: {
+            message: "I couldn't parse that question. Try asking with specific keywords like 'stationery' or 'travel', and a time range like 'last month'.",
+            expenses: [],
+            summary: null,
+          },
+        };
+      }
+      const searchQuery = parsed.searchQuery ?? question;
+      const startDate = parsed.startDate;
+      const endDate = parsed.endDate;
+      const campusId = parsed.campusId ?? undefined;
+      const searchResults = await finJoeData.searchExpenses(searchQuery, 20);
+      const listResults = await finJoeData.listExpenses({
+        startDate,
+        endDate,
+        campusId: campusId ?? null,
+        limit: 20,
+      });
+      const combinedIds = new Set([...searchResults.map((r: any) => r.id), ...listResults.map((r: any) => r.id)]);
+      const byId = new Map([...searchResults.map((r: any) => [r.id, r]), ...listResults.map((r: any) => [r.id, r])]);
+      const expenses = Array.from(byId.values()).slice(0, 20);
+      let summary = null;
+      if (startDate && endDate) {
+        summary = await finJoeData.getExpenseSummary({ startDate, endDate, campusId });
+      }
+      return {
+        success: true,
+        data: {
+          expenses,
+          summary,
+          parsedQuery: { searchQuery, startDate, endDate, campusId },
+        },
+      };
+    }
+
     case "search_expenses": {
       const query = String(args.query ?? "").trim();
       if (!query) return { success: false, error: "Search query is required." };
@@ -721,6 +822,14 @@ async function executeFunctionCall(
     case "pending_workload": {
       const workload = await finJoeData.getPendingWorkload();
       return { success: true, data: workload };
+    }
+
+    case "dashboard_summary": {
+      const startDate = args.startDate ? String(args.startDate) : undefined;
+      const endDate = args.endDate ? String(args.endDate) : undefined;
+      const campusId = args.campusId ? String(args.campusId) : undefined;
+      const summary = await finJoeData.getDashboardSummary({ startDate, endDate, campusId });
+      return { success: true, data: summary };
     }
 
     case "petty_cash_summary": {

@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import { handleWebhook } from "./webhook.js";
+import { runWeeklyInsights } from "./weekly-insights.js";
 import { logger } from "./logger.js";
 
 // Prevent unhandled rejections from crashing the process (can cause 502)
@@ -25,6 +26,21 @@ app.use(
 
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", service: "finjoe" });
+});
+
+app.get("/cron/weekly-insights", async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.query?.secret !== secret) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  try {
+    const result = await runWeeklyInsights();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error("Weekly insights cron error", { err: String(err) });
+    res.status(500).json({ error: "Failed to run weekly insights" });
+  }
 });
 
 // Wrap async handler so Express catches rejections (prevents 502 from unhandled errors)

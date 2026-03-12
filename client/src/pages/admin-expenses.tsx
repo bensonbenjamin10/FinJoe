@@ -147,6 +147,9 @@ function ImportWizard({
   const [expenseOverrides, setExpenseOverrides] = useState<Record<string, string>>({});
   const [incomeOverrides, setIncomeOverrides] = useState<Record<string, string>>({});
   const [costCenterOverrides, setCostCenterOverrides] = useState<Record<string, string | null>>({});
+  const [bulkMapPattern, setBulkMapPattern] = useState("");
+  const [bulkMapType, setBulkMapType] = useState<"expense" | "income">("expense");
+  const [bulkMapCategoryId, setBulkMapCategoryId] = useState("");
 
   const slugToExpCatId = Object.fromEntries(expenseCategories.map((c) => [c.slug, c.id]));
   const slugToIncCatId = Object.fromEntries(incomeCategories.map((c) => [c.slug, c.id]));
@@ -262,6 +265,84 @@ function ImportWizard({
               </span>
             )}
           </p>
+          {/* Bulk map by pattern */}
+          <div className="flex flex-wrap items-end gap-2 rounded-lg border p-3 bg-muted/30">
+            <div className="flex-1 min-w-[120px]">
+              <Label className="text-xs">Bulk map by pattern</Label>
+              <Input
+                placeholder="e.g. Salary, UPI, NEFT"
+                value={bulkMapPattern}
+                onChange={(e) => setBulkMapPattern(e.target.value)}
+                className="mt-1 h-8"
+              />
+            </div>
+            <div className="w-[100px]">
+              <Label className="text-xs">Type</Label>
+              <Select value={bulkMapType} onValueChange={(v: "expense" | "income") => setBulkMapType(v)}>
+                <SelectTrigger className="mt-1 h-8">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="expense">Expense</SelectItem>
+                  <SelectItem value="income">Income</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="w-[160px]">
+              <Label className="text-xs">Map to category</Label>
+              <Select value={bulkMapCategoryId} onValueChange={setBulkMapCategoryId}>
+                <SelectTrigger className="mt-1 h-8">
+                  <SelectValue placeholder="Select category" />
+                </SelectTrigger>
+                <SelectContent>
+                  {bulkMapType === "expense"
+                    ? expenseCategories.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                      ))
+                    : incomeCategories.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                      ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={!bulkMapPattern.trim() || !bulkMapCategoryId}
+              onClick={() => {
+                const pattern = bulkMapPattern.trim().toLowerCase();
+                if (!pattern || !bulkMapCategoryId) return;
+                if (bulkMapType === "expense") {
+                  setExpenseOverrides((prev) => {
+                    const next = { ...prev };
+                    expRows.forEach((r, i) => {
+                      if (r.particulars?.toLowerCase().includes(pattern)) {
+                        next[String(i)] = bulkMapCategoryId;
+                      }
+                    });
+                    return next;
+                  });
+                  const count = expRows.filter((r) => r.particulars?.toLowerCase().includes(pattern)).length;
+                  toast({ title: "Bulk mapping applied", description: `${count} expense rows mapped` });
+                } else {
+                  setIncomeOverrides((prev) => {
+                    const next = { ...prev };
+                    incRows.forEach((r, i) => {
+                      if (r.particulars?.toLowerCase().includes(pattern)) {
+                        next[String(i)] = bulkMapCategoryId;
+                      }
+                    });
+                    return next;
+                  });
+                  const count = incRows.filter((r) => r.particulars?.toLowerCase().includes(pattern)).length;
+                  toast({ title: "Bulk mapping applied", description: `${count} income rows mapped` });
+                }
+              }}
+            >
+              Apply
+            </Button>
+          </div>
+
           {preview.proposedNewCategories && preview.proposedNewCategories.length > 0 && (
             <div className="space-y-2">
               <p className="text-sm font-medium">AI-suggested new categories</p>

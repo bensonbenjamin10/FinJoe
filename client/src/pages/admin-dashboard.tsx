@@ -41,6 +41,7 @@ import {
   CalendarIcon,
   Loader2,
   AlertTriangle,
+  Sparkles,
 } from "lucide-react";
 import { format, isValid, subDays } from "date-fns";
 import { useAuth } from "@/hooks/use-auth";
@@ -133,6 +134,16 @@ export default function AdminDashboard() {
     queryKey: ["/api/admin/analytics", analyticsParams.toString()],
     queryFn: async () => {
       const res = await fetch(`/api/admin/analytics?${analyticsParams.toString()}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+
+  const { data: insights, isLoading: insightsLoading } = useQuery<{ insights: string | null }>({
+    queryKey: ["/api/admin/analytics/insights", analyticsParams.toString()],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/analytics/insights?${analyticsParams.toString()}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
@@ -260,6 +271,31 @@ export default function AdminDashboard() {
               label="Petty Cash at Risk"
             />
           </div>
+
+          {/* AI Insights */}
+          {(insightsLoading || insights?.insights) && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Sparkles className="h-5 w-5" />
+                  AI Insights
+                </CardTitle>
+                <CardDescription>AI-generated summary of your financial trends</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {insightsLoading ? (
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span className="text-sm">Generating insights...</span>
+                  </div>
+                ) : insights?.insights ? (
+                  <p className="text-sm leading-relaxed">{insights.insights}</p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">AI insights require GEMINI_API_KEY to be configured.</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           {/* Row 2: Trend charts */}
           <div className="grid gap-4 md:grid-cols-2">

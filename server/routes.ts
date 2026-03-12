@@ -29,6 +29,8 @@ import { sendFinJoeEmail } from "../worker/src/email.js";
 import { sendFinJoeSms, sendFinJoeWhatsAppTemplate } from "../worker/src/twilio.js";
 import { getCredentialsForTenant } from "../worker/src/providers/resolver.js";
 import { getAnalytics, getPredictions } from "./analytics.js";
+import { generateAnalyticsInsights } from "../lib/analytics-insights.js";
+import { suggestReconciliationMatches } from "../lib/reconciliation-suggestions.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -1167,6 +1169,80 @@ export async function registerRoutes(app: Express) {
     }
   });
 
+  app.get("/api/admin/reconciliation/suggestions", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { startDate, endDate } = req.query;
+      if (!startDate || !endDate || typeof startDate !== "string" || typeof endDate !== "string") {
+        return res.status(400).json({ error: "startDate and endDate required" });
+      }
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dateRegex.test(startDate) || !dateRegex.test(endDate) || startDate > endDate) {
+        return res.status(400).json({ error: "Invalid date range" });
+      }
+      const incomeRows = await db
+        .select({
+          id: incomeRecords.id,
+          amount: incomeRecords.amount,
+          incomeDate: incomeRecords.incomeDate,
+          particulars: incomeRecords.particulars,
+          categoryName: incomeCategories.name,
+        })
+        .from(incomeRecords)
+        .leftJoin(incomeCategories, eq(incomeRecords.categoryId, incomeCategories.id))
+        .where(
+          and(
+            eq(incomeRecords.tenantId, tid),
+            sql`${incomeRecords.incomeDate} >= ${startDate}::date`,
+            sql`${incomeRecords.incomeDate} <= ${endDate}::date`
+          )
+        );
+      const expenseRows = await db
+        .select({
+          id: expenses.id,
+          amount: expenses.amount,
+          expenseDate: expenses.expenseDate,
+          vendorName: expenses.vendorName,
+          description: expenses.description,
+          particulars: expenses.particulars,
+        })
+        .from(expenses)
+        .where(
+          and(
+            eq(expenses.tenantId, tid),
+            eq(expenses.status, "paid"),
+            sql`${expenses.expenseDate} >= ${startDate}::date`,
+            sql`${expenses.expenseDate} <= ${endDate}::date`
+          )
+        );
+      const suggestions = await suggestReconciliationMatches(
+        incomeRows.map((r) => ({
+          id: r.id,
+          amount: r.amount,
+          incomeDate: String(r.incomeDate).slice(0, 10),
+          particulars: r.particulars,
+          categoryName: r.categoryName ?? undefined,
+        })),
+        expenseRows.map((r) => ({
+          id: r.id,
+          amount: r.amount,
+          expenseDate: String(r.expenseDate).slice(0, 10),
+          vendorName: r.vendorName,
+          description: r.description,
+          particulars: r.particulars,
+        }))
+      );
+      res.json({ suggestions });
+    } catch (e) {
+      logger.error("Reconciliation suggestions error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to generate suggestions" });
+    }
+  });
+
   app.get("/api/admin/analytics", requireAdmin, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
@@ -1199,6 +1275,51 @@ export async function registerRoutes(app: Express) {
       if (isValidation) return res.status(400).json({ error: msg });
       logger.error("Analytics error", { requestId: req.requestId, err: msg });
       res.status(500).json({ error: "Failed to fetch analytics" });
+    }
+  });
+
+  app.get("/api/admin/analytics/insights", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { startDate, endDate, costCenterId, granularity } = req.query;
+      if (!startDate || !endDate || typeof startDate !== "string" || typeof endDate !== "string") {
+        return res.status(400).json({ error: "startDate and endDate required" });
+      }
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
+        return res.status(400).json({ error: "startDate and endDate must be YYYY-MM-DD" });
+      }
+      if (startDate > endDate) return res.status(400).json({ error: "startDate must be before or equal to endDate" });
+      const filters = {
+        tenantId: tid,
+        startDate,
+        endDate,
+        costCenterId: (costCenterId as string) ?? undefined,
+        granularity: (granularity as "day" | "week" | "month") ?? "day",
+      };
+      const data = await getAnalytics(filters);
+      const summary = {
+        totalExpenses: data.kpis.totalExpenses,
+        totalIncome: data.kpis.totalIncome,
+        netCashflow: data.kpis.netCashflow,
+        expenseTrend: data.comparison.expenseTrend,
+        incomeTrend: data.comparison.incomeTrend,
+        prevTotalExpenses: data.comparison.prevTotalExpenses,
+        prevTotalIncome: data.comparison.prevTotalIncome,
+        topExpenseCategories: (data.expensesByCategory ?? []).slice(0, 5).map((c) => ({ name: c.name, amount: c.amount })),
+        topCostCenters: (data.expensesByCostCenter ?? []).slice(0, 5).map((c) => ({ name: c.name, amount: c.amount })),
+        startDate,
+        endDate,
+      };
+      const insights = await generateAnalyticsInsights(summary);
+      res.json({ insights: insights ?? null });
+    } catch (e) {
+      logger.error("Analytics insights error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to generate insights" });
     }
   });
 

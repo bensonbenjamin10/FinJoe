@@ -21,9 +21,10 @@ export async function fetchSystemContext(tenantId: string): Promise<FetchSystemC
   }
 
   const finJoeData = createFinJoeData(db, tenantId);
-  const [costCenters, categories, audit, settings, tenantRow] = await Promise.all([
+  const [costCenters, categories, incomeCategories, audit, settings, tenantRow] = await Promise.all([
     finJoeData.getCostCenters(),
     finJoeData.getExpenseCategories(),
+    finJoeData.getIncomeCategories(),
     Promise.resolve(finJoeData.getAuditRequirements()),
     finJoeData.getFinJoeSettings(),
     db.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId)).limit(1),
@@ -34,6 +35,7 @@ export async function fetchSystemContext(tenantId: string): Promise<FetchSystemC
   const tenantName = tenantRow[0]?.name;
   const costCenterList = costCenters?.map((c) => c.name).join(", ") || "Corporate Office";
   const categoryList = categories?.map((c) => c.name).join(", ") || "Operating Expenses";
+  const incomeCategoryList = incomeCategories?.map((c) => c.name).join(", ") || "Fees, Donations, Other";
   const auditDesc = audit
     ? `Required: ${audit.required.join(", ")}. Optional: ${audit.optional.join(", ")}. GSTIN: ${audit.gstinFormat}. Tax types: ${audit.taxTypes.join(", ")}.`
     : "Required: invoice number, date, vendor name. Optional: GSTIN (15 chars), tax type (no_gst, gst_itc, gst_rcm, gst_no_itc).";
@@ -43,6 +45,7 @@ export async function fetchSystemContext(tenantId: string): Promise<FetchSystemC
   context += `Cost center type: ${costCenterType}.\n`;
   context += `${costCenterLabel}s: ${costCenterList}\n`;
   context += `Expense categories: ${categoryList}\n`;
+  context += `Income categories: ${incomeCategoryList}\n`;
   context += `Audit compliance: ${auditDesc}`;
 
   contextCache.set(tenantId, { context, costCenterLabel, at: Date.now() });
@@ -64,16 +67,19 @@ export async function fetchSystemData(tenantId: string): Promise<{
   costCenters: CostCenterInfo[];
   campuses: CostCenterInfo[];
   categories: CategoryInfo[];
+  incomeCategories: CategoryInfo[];
 }> {
   const finJoeData = createFinJoeData(db, tenantId);
-  const [costCenters, categories] = await Promise.all([
+  const [costCenters, categories, incomeCategories] = await Promise.all([
     finJoeData.getCostCenters(),
     finJoeData.getExpenseCategories(),
+    finJoeData.getIncomeCategories(),
   ]);
   return {
     costCenters: costCenters ?? [],
     campuses: costCenters ?? [],
     categories: categories ?? [],
+    incomeCategories: incomeCategories ?? [],
   };
 }
 
@@ -110,3 +116,11 @@ export function resolveCostCenterFromMessage(
 
 /** Legacy alias for backward compatibility */
 export const resolveCampusFromMessage = resolveCostCenterFromMessage;
+
+/** Map user message/income category name to income category slug or id. */
+export function resolveIncomeCategoryFromMessage(
+  message: string,
+  categories: CategoryInfo[]
+): string | null {
+  return resolveCategoryFromMessage(message, categories);
+}

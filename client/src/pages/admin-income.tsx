@@ -38,6 +38,7 @@ import {
   Trash2,
   Tag,
   ArrowLeft,
+  Sparkles,
 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -344,6 +345,7 @@ export default function AdminIncome() {
 
   const totalIncome = incomeList.reduce((sum, i) => sum + (i.amount || 0), 0);
 
+  const [suggestionsRequested, setSuggestionsRequested] = useState(false);
   const { data: reconciliation, isLoading: reconLoading } = useQuery<{
     totalIncome: number;
     totalExpenses: number;
@@ -362,6 +364,28 @@ export default function AdminIncome() {
       return res.json();
     },
     enabled: activeTab === "reconciliation" && !!tenantId,
+    retry: false,
+  });
+
+  const { data: suggestionsData, isLoading: suggestionsLoading } = useQuery<{
+    suggestions: Array<{
+      incomeId: string;
+      expenseId: string;
+      incomeAmount: number;
+      expenseAmount: number;
+      reason: string;
+      confidence: string;
+    }>;
+  }>({
+    queryKey: ["/api/admin/reconciliation/suggestions", reconStartDate, reconEndDate, tenantId],
+    queryFn: async () => {
+      const params = new URLSearchParams({ startDate: reconStartDate, endDate: reconEndDate });
+      if (tenantId) params.append("tenantId", tenantId);
+      const res = await fetch(`/api/admin/reconciliation/suggestions?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: activeTab === "reconciliation" && !!tenantId && suggestionsRequested,
     retry: false,
   });
 
@@ -794,6 +818,7 @@ export default function AdminIncome() {
                     <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                   </div>
                 ) : reconciliation ? (
+                  <>
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                     <Card>
                       <CardHeader className="pb-2">
@@ -855,6 +880,50 @@ export default function AdminIncome() {
                       </CardContent>
                     </Card>
                   </div>
+
+                  <div className="mt-6 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setSuggestionsRequested(true)}
+                        disabled={suggestionsLoading}
+                      >
+                        {suggestionsLoading ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Sparkles className="h-4 w-4" />
+                        )}
+                        Get AI match suggestions
+                      </Button>
+                    </div>
+                    {suggestionsData?.suggestions && suggestionsData.suggestions.length > 0 && (
+                      <Card>
+                        <CardHeader className="pb-2">
+                          <CardTitle className="text-sm font-medium">AI-suggested matches</CardTitle>
+                          <CardDescription>Plausible income-expense pairs (review before applying)</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                          <ul className="space-y-2 text-sm">
+                            {suggestionsData.suggestions.map((s, i) => (
+                              <li key={i} className="flex items-start gap-2 p-2 rounded border">
+                                <Badge variant={s.confidence === "high" ? "default" : "secondary"}>{s.confidence}</Badge>
+                                <span>
+                                  Income ₹{s.incomeAmount.toLocaleString("en-IN")} ↔ Expense ₹{s.expenseAmount.toLocaleString("en-IN")}
+                                  {" — "}
+                                  <span className="text-muted-foreground">{s.reason}</span>
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        </CardContent>
+                      </Card>
+                    )}
+                    {suggestionsRequested && suggestionsData?.suggestions?.length === 0 && !suggestionsLoading && (
+                      <p className="text-sm text-muted-foreground">No AI suggestions found. GEMINI_API_KEY may be unset, or no clear matches in the data.</p>
+                    )}
+                  </div>
+                  </>
                 ) : null}
               </div>
             </TabsContent>

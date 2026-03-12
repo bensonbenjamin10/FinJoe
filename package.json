@@ -11,6 +11,7 @@
     "build": "vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "start": "node dist/index.js",
     "db:migrate": "node scripts/run-migrations.mjs",
+    "cron:weekly-insights": "node scripts/run-weekly-insights.mjs",
     "create-templates": "node scripts/create-finjoe-templates.mjs"
   },
   "dependencies": {
@@ -32,6 +33,7 @@
     "bcrypt": "^6.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "connect-pg-simple": "^10.0.0",
     "date-fns": "^3.6.0",
     "dotenv": "^17.3.1",
     "drizzle-orm": "^0.39.1",
@@ -45,10 +47,10 @@
     "passport": "^0.7.0",
     "passport-local": "^1.0.0",
     "react": "^18.3.1",
-    "recharts": "^2.15.0",
     "react-day-picker": "^9.4.4",
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.55.0",
+    "recharts": "^2.15.0",
     "resend": "^6.9.3",
     "tailwind-merge": "^2.6.0",
     "twilio": "^5.10.4",

@@ -9,7 +9,7 @@ const FALLBACK_MODEL = "gemini-2.0-flash";
 export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional persona who knows everything about finance. You help organizations manage expenses and financial planning over WhatsApp.
 
 === IDENTITY & CONTEXT ===
-- You represent Finance Joe: the go-to expert for finance questions and expense tracking. (Income recording is not yet supported via WhatsApp—users can record income in the web app.)
+- You represent Finance Joe: the go-to expert for finance questions and expense tracking. You help record both expenses and income over WhatsApp.
 - You help the user's organization with expenses, onboarding, and finance workflows over WhatsApp.
 - Tone: warm, knowledgeable, approachable—like a finance expert who's always ready to help. Be concise but clear. No artificial length limits.
 
@@ -23,6 +23,11 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 - When user says "it's paid", "payment done", etc., use record_payout with the expense ID from recent context (e.g. the expense just approved). If unclear, list approved expenses to find it.
 - Corporate Office: for HQ/central expenses, use campusId null or __corporate__. No cost center = Corporate Office.
 - Petty cash: cost centers may have petty cash funds; use petty_cash_summary when user asks about balances.
+
+=== RECORDING INCOME ===
+- Use create_income when the user wants to record income (fees, donations, sales, etc.). Required: amount, categoryId (income category). Optional: cost center, particulars, income date.
+- Income categories are separate from expense categories—use the income category list from SYSTEM DATA.
+- Use today's date for incomeDate if not provided. Default category: first from the provided income category list.
 
 === RECORDING EXPENSES ===
 - Required: amount. Also cost center (or Corporate Office for HQ expenses). Use the terminology from SYSTEM DATA (e.g. campus, branch, department).
@@ -39,7 +44,7 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 - Call create_role_change_request when you have name and (for vendor/faculty) cost center. Otherwise store_pending_role_change and ask for what's missing.
 
 === ROLE-BASED CAPABILITIES ===
-- guest, vendor, faculty, student: create expense, submit role request, Q&A about process.
+- guest, vendor, faculty, student: create expense, create income, submit role request, Q&A about process.
 - campus_coordinator, head_office: above + list expenses, search, list pending approvals, list role requests.
 - admin, finance: above + expense_summary, pending_workload, petty_cash_summary, approve/reject expenses and role requests.
 - Use the tools available to your role. When user asks for status, reports, or to take action, use the appropriate tool.
@@ -104,7 +109,11 @@ Assistant: [calls list_expenses with status=draft to find it, then submit_expens
 
 Example 5 - Record payout (finance/admin):
 User: It's paid
-Assistant: [calls record_payout with expenseId from recent context, payoutMethod bank_transfer, payoutRef "marked via WhatsApp"] Done. Expense #xyz is now marked as paid.`;
+Assistant: [calls record_payout with expenseId from recent context, payoutMethod bank_transfer, payoutRef "marked via WhatsApp"] Done. Expense #xyz is now marked as paid.
+
+Example 6 - Record income:
+User: Received ₹50,000 fees from student enrollment
+Assistant: [calls create_income with amount 50000, categoryId from fees category, particulars "student enrollment"] Done. Recorded ₹50,000 income for fees.`;
 
 /** Function declarations for agentic flow */
 const FINJOE_FUNCTION_DECLARATIONS = [
@@ -151,6 +160,21 @@ const FINJOE_FUNCTION_DECLARATIONS = [
         },
       },
       required: ["expenses"],
+    },
+  },
+  {
+    name: "create_income",
+    description: "Record income (fees, donations, sales, etc.) when you have amount and income category. Use the income category list from SYSTEM DATA—not expense categories.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        amount: { type: Type.NUMBER, description: "Amount in rupees (integer)" },
+        categoryId: { type: Type.STRING, description: "Income category ID or slug (required, use from provided income category list)" },
+        campusId: { type: Type.STRING, description: "Cost center ID, slug, or name (optional, null for Corporate Office)" },
+        particulars: { type: Type.STRING, description: "Description or particulars (optional)" },
+        incomeDate: { type: Type.STRING, description: "Income date YYYY-MM-DD (optional, use today if missing)" },
+      },
+      required: ["amount", "categoryId"],
     },
   },
   {
@@ -288,6 +312,17 @@ const FINJOE_FUNCTION_DECLARATIONS = [
     },
   },
   {
+    name: "semantic_search_expenses",
+    description: "Answer natural language questions about expenses (e.g. 'What did we spend on stationery last year?', 'Travel expenses for Chennai this month'). Use when user asks a question-style query about expense history. Extracts search params and returns matching expenses.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        question: { type: Type.STRING, description: "The user's natural language question about expenses" },
+      },
+      required: ["question"],
+    },
+  },
+  {
     name: "search_expenses",
     description: "Search expenses by vendor name, invoice number, or description.",
     parameters: {
@@ -317,6 +352,19 @@ const FINJOE_FUNCTION_DECLARATIONS = [
     name: "pending_workload",
     description: "Get count of pending expense approvals and pending role change requests.",
     parameters: { type: Type.OBJECT, properties: {}, required: [] },
+  },
+  {
+    name: "dashboard_summary",
+    description: "Get a full dashboard summary: total expenses, income, net cashflow, pending approvals, pending role requests. Use when user asks for overall status, financial overview, or 'how are we doing'.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        startDate: { type: Type.STRING, description: "YYYY-MM-DD (optional, defaults to 30 days ago)" },
+        endDate: { type: Type.STRING, description: "YYYY-MM-DD (optional, defaults to today)" },
+        campusId: { type: Type.STRING, description: "Cost center filter (optional)" },
+      },
+      required: [],
+    },
   },
   {
     name: "petty_cash_summary",
@@ -391,9 +439,9 @@ const FINJOE_FUNCTION_DECLARATIONS = [
   },
 ];
 
-const BASE_TOOLS = ["create_expense", "create_role_change_request", "store_pending_expense", "store_pending_role_change"];
-const READ_TOOLS = ["list_expenses", "get_expense", "submit_expense", "update_expense", "delete_expense", "list_pending_approvals", "list_role_change_requests", "search_expenses", "bulk_create_expenses"];
-const ANALYTICS_TOOLS = ["expense_summary", "pending_workload", "petty_cash_summary"];
+const BASE_TOOLS = ["create_expense", "create_income", "create_role_change_request", "store_pending_expense", "store_pending_role_change"];
+const READ_TOOLS = ["list_expenses", "get_expense", "submit_expense", "update_expense", "delete_expense", "list_pending_approvals", "list_role_change_requests", "search_expenses", "semantic_search_expenses", "bulk_create_expenses"];
+const ANALYTICS_TOOLS = ["expense_summary", "pending_workload", "petty_cash_summary", "dashboard_summary"];
 const APPROVE_TOOLS = ["approve_expense", "reject_expense", "approve_role_request", "reject_role_request", "record_payout"];
 
 const ROLES_WITH_READ = ["admin", "finance", "campus_coordinator", "head_office"];
@@ -470,6 +518,7 @@ export type AgentTurnInput = {
   costCenterLabel?: string;
   campuses: Array<{ id: string; name: string; slug: string }>;
   categories: Array<{ id: string; name: string; slug: string }>;
+  incomeCategories?: Array<{ id: string; name: string; slug: string }>;
   pendingExpense?: {
     extracted: ExtractedExpense & { categoryId?: string; campusId?: string | null };
     missingFields: string[];
@@ -518,8 +567,9 @@ export async function agentTurnWithFunctionResponse(
 
   const campusList = campuses.map((c) => `${c.name} (id: ${c.id})`).join(", ");
   const categoryList = categories.map((c) => `${c.name} (id: ${c.id})`).join(", ");
+  const incomeCategoryList = (input.incomeCategories ?? []).map((c) => `${c.name} (id: ${c.id})`).join(", ");
   const ccLabel = costCenterLabel.endsWith("s") ? costCenterLabel : `${costCenterLabel}s`;
-  let contextBlock = `${systemContext}\n\nTerminology: Use "${costCenterLabel}" (plural "${ccLabel}") instead of "campus". Parameter campusId maps to cost center. Corporate Office = HQ/central.\n\nAvailable ${ccLabel} with IDs: ${campusList}\nExpense categories with IDs: ${categoryList}`;
+  let contextBlock = `${systemContext}\n\nTerminology: Use "${costCenterLabel}" (plural "${ccLabel}") instead of "campus". Parameter campusId maps to cost center. Corporate Office = HQ/central.\n\nAvailable ${ccLabel} with IDs: ${campusList}\nExpense categories with IDs: ${categoryList}${incomeCategoryList ? `\nIncome categories with IDs (for create_income): ${incomeCategoryList}` : ""}`;
   if (pendingExpense) {
     contextBlock += `\n\nPENDING EXPENSE—you have this data: ${JSON.stringify(pendingExpense.extracted)}. STILL MISSING: ${pendingExpense.missingFields.join(", ")}.`;
   }
@@ -616,6 +666,7 @@ export async function agentTurn(input: AgentTurnInput): Promise<AgentTurnResult>
 
   const campusList = campuses.map((c) => `${c.name} (id: ${c.id})`).join(", ");
   const categoryList = categories.map((c) => `${c.name} (id: ${c.id})`).join(", ");
+  const incomeCategoryList = (input.incomeCategories ?? []).map((c) => `${c.name} (id: ${c.id})`).join(", ");
   const ccLabel = costCenterLabel.endsWith("s") ? costCenterLabel : `${costCenterLabel}s`;
 
   let contextBlock = `${systemContext}
@@ -623,7 +674,7 @@ export async function agentTurn(input: AgentTurnInput): Promise<AgentTurnResult>
 Terminology: Use "${costCenterLabel}" (plural "${ccLabel}") instead of "campus". Parameter campusId maps to cost center. Corporate Office = HQ/central.
 
 Available ${ccLabel} with IDs: ${campusList}
-Expense categories with IDs: ${categoryList}`;
+Expense categories with IDs: ${categoryList}${incomeCategoryList ? `\nIncome categories with IDs (for create_income): ${incomeCategoryList}` : ""}`;
 
   if (pendingExpense) {
     contextBlock += `\n\nPENDING EXPENSE—you have this data: ${JSON.stringify(pendingExpense.extracted)}. STILL MISSING: ${pendingExpense.missingFields.join(", ")}. When the user's message fills any of these, use it. When all are filled, call create_expense.`;

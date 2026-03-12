@@ -3,19 +3,26 @@ import { Strategy as LocalStrategy } from "passport-local";
 import bcrypt from "bcrypt";
 import session from "express-session";
 import MemoryStore from "memorystore";
+import connectPgSimple from "connect-pg-simple";
 import { db } from "./db.js";
 import { users } from "../shared/schema.js";
 import { eq } from "drizzle-orm";
 import type { Express } from "express";
 
+const PgSession = connectPgSimple(session);
 const Store = MemoryStore(session);
 
 export function setupAuth(app: Express) {
   const sessionSecret = process.env.SESSION_SECRET || "finjoe-dev-secret-change-in-production";
 
+  // Use PostgreSQL session store when DATABASE_URL is set; fallback to MemoryStore for dev without DB
+  const sessionStore = process.env.DATABASE_URL
+    ? new PgSession({ conString: process.env.DATABASE_URL, createTableIfMissing: true, tableName: "session" })
+    : new Store({ checkPeriod: 86400000 });
+
   app.use(
     session({
-      store: new Store({ checkPeriod: 86400000 }),
+      store: sessionStore,
       secret: sessionSecret,
       resave: false,
       saveUninitialized: false,

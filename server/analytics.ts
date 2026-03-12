@@ -401,7 +401,38 @@ export async function getPredictions(filters: PredictionsFilters) {
   if (prev7Sum >= 1000 && last7Sum > prev7Sum * 1.5) {
     alerts.push({
       type: "expense_spike",
-      message: `Expense spike detected: last 7 calendar days (${Math.round(last7Sum)} total) is >150% of prior 7 days`,
+      message: `Expense spike detected: last 7 calendar days (₹${Math.round(last7Sum).toLocaleString("en-IN")}) is >150% of prior 7 days`,
+    });
+  }
+
+  // Unusually large single expense (last 30 days): >3x median
+  const last30Expenses = expenseRows
+    .filter((r) => {
+      const d = new Date(r.expenseDate);
+      const diff = (today.getTime() - d.getTime()) / (24 * 60 * 60 * 1000);
+      return diff >= 0 && diff <= 30;
+    })
+    .map((r) => r.amount ?? 0)
+    .filter((a) => a > 0);
+  if (last30Expenses.length >= 5) {
+    const sorted = [...last30Expenses].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const large = last30Expenses.filter((a) => a > median * 3);
+    if (large.length > 0) {
+      const maxAmt = Math.max(...large);
+      alerts.push({
+        type: "unusual_expense",
+        message: `Unusually large expense detected: ₹${maxAmt.toLocaleString("en-IN")} (${large.length} expense(s) >3× median)`,
+      });
+    }
+  }
+
+  // Negative cashflow forecast
+  const minForecast = Math.min(...cashflowForecast.map((c) => c.netPosition));
+  if (minForecast < 0 && startingBalance > 0) {
+    alerts.push({
+      type: "negative_forecast",
+      message: `Cash flow forecast may go negative in the next ${horizonDays} days based on current trends`,
     });
   }
 

@@ -13,6 +13,8 @@ import {
   finJoeTasks,
   pettyCashFunds,
   users,
+  incomeCategories,
+  incomeRecords,
 } from "../shared/schema";
 
 export type FinJoeDb = any;
@@ -90,6 +92,15 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
         .from(expenseCategories)
         .where(and(eq(expenseCategories.isActive, true), or(eq(expenseCategories.tenantId, tenantId), isNull(expenseCategories.tenantId))))
         .orderBy(expenseCategories.displayOrder, expenseCategories.name);
+      return rows;
+    },
+
+    async getIncomeCategories(): Promise<CategoryInfo[]> {
+      const rows = await db
+        .select({ id: incomeCategories.id, name: incomeCategories.name, slug: incomeCategories.slug })
+        .from(incomeCategories)
+        .where(and(eq(incomeCategories.isActive, true), eq(incomeCategories.tenantId, tenantId)))
+        .orderBy(incomeCategories.displayOrder, incomeCategories.name);
       return rows;
     },
 
@@ -392,6 +403,55 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
       };
     },
 
+    async getDashboardSummary(filters?: {
+      startDate?: string;
+      endDate?: string;
+      campusId?: string | null;
+    }): Promise<{
+      totalExpenses: number;
+      totalIncome: number;
+      netCashflow: number;
+      pendingApprovals: number;
+      pendingRoleRequests: number;
+      expenseCount: number;
+      incomeCount: number;
+    }> {
+      const today = new Date();
+      const endDate = filters?.endDate ?? today.toISOString().slice(0, 10);
+      const startDate = filters?.startDate ?? new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+      const conditions = [eq(expenses.tenantId, tenantId), sql`${expenses.expenseDate} >= ${startDate}::date`, sql`${expenses.expenseDate} <= ${endDate}::date`];
+      const ccId = filters?.campusId ?? undefined;
+      if (ccId !== undefined && ccId !== null && ccId !== "" && ccId !== "__corporate__") {
+        if (ccId === "null") conditions.push(sql`${expenses.costCenterId} IS NULL`);
+        else conditions.push(eq(expenses.costCenterId, ccId));
+      }
+      const incomeConditions = [eq(incomeRecords.tenantId, tenantId), sql`${incomeRecords.incomeDate} >= ${startDate}::date`, sql`${incomeRecords.incomeDate} <= ${endDate}::date`];
+      if (ccId !== undefined && ccId !== null && ccId !== "" && ccId !== "__corporate__") {
+        if (ccId === "null") incomeConditions.push(sql`${incomeRecords.costCenterId} IS NULL`);
+        else incomeConditions.push(eq(incomeRecords.costCenterId, ccId));
+      }
+
+      const [expenseRows, incomeRows, approvals, roleReqs] = await Promise.all([
+        db.select({ amount: expenses.amount }).from(expenses).where(and(...conditions)),
+        db.select({ amount: incomeRecords.amount }).from(incomeRecords).where(and(...incomeConditions)),
+        db.select({ count: sql<number>`count(*)::int` }).from(expenses).where(and(eq(expenses.status, "pending_approval"), eq(expenses.tenantId, tenantId))),
+        db.select({ count: sql<number>`count(*)::int` }).from(finJoeRoleChangeRequests).where(and(eq(finJoeRoleChangeRequests.status, "pending"), eq(finJoeRoleChangeRequests.tenantId, tenantId))),
+      ]);
+
+      const totalExpenses = expenseRows.reduce((s, r) => s + (r.amount ?? 0), 0);
+      const totalIncome = incomeRows.reduce((s, r) => s + (r.amount ?? 0), 0);
+      return {
+        totalExpenses,
+        totalIncome,
+        netCashflow: totalIncome - totalExpenses,
+        pendingApprovals: approvals[0]?.count ?? 0,
+        pendingRoleRequests: roleReqs[0]?.count ?? 0,
+        expenseCount: expenseRows.length,
+        incomeCount: incomeRows.length,
+      };
+    },
+
     async getPendingWorkload(): Promise<{ pendingApprovals: number; pendingRoleRequests: number }> {
       const [approvals] = await db
         .select({ count: sql<number>`count(*)::int` })
@@ -516,6 +576,33 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string) {
         .where(eq(expenses.id, id))
         .returning({ id: expenses.id });
       return updated ?? null;
+    },
+
+    async createIncome(data: {
+      tenantId: string;
+      costCenterId: string | null;
+      categoryId: string;
+      amount: number;
+      incomeDate: string;
+      particulars?: string | null;
+      incomeType?: string;
+      submittedByContactPhone?: string | null;
+    }): Promise<{ id: string } | null> {
+      const costCenterIdForDb = data.costCenterId === "__corporate__" || data.costCenterId === "null" ? null : data.costCenterId;
+      const [created] = await db
+        .insert(incomeRecords)
+        .values({
+          tenantId: data.tenantId,
+          costCenterId: costCenterIdForDb,
+          categoryId: data.categoryId,
+          amount: data.amount,
+          incomeDate: new Date(data.incomeDate),
+          particulars: data.particulars ?? null,
+          incomeType: data.incomeType ?? "other",
+          source: "finjoe",
+        })
+        .returning({ id: incomeRecords.id });
+      return created ?? null;
     },
 
     async createRoleChangeRequest(data: CreateRoleChangeInput): Promise<{ id: string } | null> {
