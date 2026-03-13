@@ -22,15 +22,37 @@ if (!CRON_SECRET) {
 const base = WORKER_URL.replace(/\/$/, "");
 let hadError = false;
 
-// 0. Pre-check: verify worker is reachable
+function formatError(text) {
+  const trimmed = String(text || "").trim();
+  if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html")) {
+    return (
+      "Received HTML instead of JSON. You may be hitting the frontend (e.g. finjoe.app) instead of the worker. " +
+      "Set FINJOE_WORKER_URL to your worker's Railway URL (e.g. https://finjoe-worker-xxx.up.railway.app)."
+    );
+  }
+  return trimmed || "Unknown error";
+}
+
+// Log resolved worker URL for debugging (no secrets)
+console.log("Worker URL:", base);
 console.log("Checking worker reachability...");
 try {
   const healthRes = await fetch(`${base}/health`);
+  const healthText = await healthRes.text();
+  if (healthText.trim().startsWith("<!DOCTYPE") || healthText.trim().startsWith("<html")) {
+    console.error(formatError(healthText));
+    process.exit(1);
+  }
   if (!healthRes.ok) {
     console.error("Worker health check failed:", healthRes.status, healthRes.statusText);
     process.exit(1);
   }
-  const health = await healthRes.json().catch(() => ({}));
+  let health = {};
+  try {
+    health = JSON.parse(healthText);
+  } catch (_) {
+    /* ignore */
+  }
   if (health?.status !== "ok") {
     // Accept 200 even if body is empty/non-JSON (proxy, cold start). Cron calls will fail with 401 if wrong.
     console.log("Worker reachable (status:", health?.status ?? "unknown", ")");
@@ -49,7 +71,7 @@ try {
   const contentType = res.headers.get("content-type") || "";
   const data = contentType.includes("application/json") ? await res.json() : { error: await res.text() || res.statusText };
   if (!res.ok || data.error) {
-    console.error("Recurring expenses error:", data.error || res.statusText);
+    console.error("Recurring expenses error:", formatError(data.error || res.statusText));
     hadError = true;
   } else {
     console.log("Recurring expenses OK:", data);
@@ -66,7 +88,7 @@ try {
   const contentType = res.headers.get("content-type") || "";
   const data = contentType.includes("application/json") ? await res.json() : { error: await res.text() || res.statusText };
   if (!res.ok || data.error) {
-    console.error("Backfill embeddings error:", data.error || res.statusText);
+    console.error("Backfill embeddings error:", formatError(data.error || res.statusText));
     hadError = true;
   } else {
     if (data.skipped) {
@@ -91,7 +113,7 @@ if (now.getUTCDay() === 1) {
     const contentType = res.headers.get("content-type") || "";
     const data = contentType.includes("application/json") ? await res.json() : { error: await res.text() || res.statusText };
     if (!res.ok || data.error) {
-      console.error("Weekly insights error:", data.error || res.statusText);
+      console.error("Weekly insights error:", formatError(data.error || res.statusText));
       hadError = true;
     } else {
       console.log("Weekly insights OK:", data);
