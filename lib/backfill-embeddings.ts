@@ -7,10 +7,22 @@
 import { embedExpenseText } from "./expense-embeddings.js";
 
 export type BackfillPool = {
-  query: (text: string, params?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
+  query: (text: string, params?: unknown[]) => Promise<{ rows?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>>;
 };
 
 const BATCH_SIZE = 15;
+
+/** Normalize query result: node-pg returns { rows }, some drivers return array directly. */
+function getRows<T = Record<string, unknown>>(result: { rows?: T[] } | T[]): T[] {
+  if (Array.isArray(result)) return result;
+  return result.rows ?? [];
+}
+
+function getFirstRow<T = Record<string, unknown>>(result: { rows?: T[] } | T[]): T | undefined {
+  const rows = getRows(result);
+  return rows[0];
+}
+
 const DELAY_MS = 200;
 /** Max expenses to process per run (cron/startup). Prevents HTTP timeout. Use env for larger manual runs. */
 const DEFAULT_MAX_PER_RUN = 500;
@@ -49,7 +61,8 @@ export async function runBackfillEmbeddings(
   const countResult = await pool.query(
     "SELECT COUNT(*)::int as c FROM expenses WHERE embedding IS NULL"
   );
-  const total = (countResult.rows[0]?.c as number) ?? 0;
+  const firstRow = getFirstRow(countResult);
+  const total = (firstRow?.c as number) ?? 0;
 
   if (total === 0) {
     return { processed: 0, errors: 0, total: 0, skipped: false };
@@ -59,7 +72,7 @@ export async function runBackfillEmbeddings(
   let errors = 0;
 
   while (processed + errors < limit) {
-    const batch = await pool.query(
+    const batchResult = await pool.query(
       `SELECT e.id, e.tenant_id, e.vendor_name, e.description, e.particulars, e.amount, e.invoice_number, ec.name as category_name
        FROM expenses e
        LEFT JOIN expense_categories ec ON e.category_id = ec.id
@@ -68,9 +81,10 @@ export async function runBackfillEmbeddings(
       [Math.min(BATCH_SIZE, limit === Infinity ? BATCH_SIZE : limit - processed - errors)]
     );
 
-    if (batch.rows.length === 0) break;
+    const batchRows = getRows(batchResult);
+    if (batchRows.length === 0) break;
 
-    for (const row of batch.rows) {
+    for (const row of batchRows) {
       if (processed + errors >= limit) break;
       try {
         const embedding = await embedExpenseText({
@@ -108,7 +122,8 @@ export async function runBackfillEmbeddings(
     const remResult = await pool.query(
       "SELECT COUNT(*)::int as c FROM expenses WHERE embedding IS NULL"
     );
-    remaining = (remResult.rows[0]?.c as number) ?? 0;
+    const remRow = getFirstRow(remResult);
+    remaining = (remRow?.c as number) ?? 0;
   }
   return {
     processed,
