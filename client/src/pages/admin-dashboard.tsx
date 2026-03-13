@@ -49,13 +49,41 @@ import { useCostCenterLabel } from "@/hooks/use-cost-center-label";
 import { StatCard } from "@/components/stat-card";
 import { QueryErrorState } from "@/components/query-error-state";
 import { ChartContainer } from "@/components/ui/chart";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
 import type { Campus } from "@shared/schema";
+import type { DateRange } from "react-day-picker";
 
-const DATE_PRESETS = [
-  { label: "Last 7 days", days: 7 },
-  { label: "Last 30 days", days: 30 },
-  { label: "Last 90 days", days: 90 },
-];
+type DatePreset = "7" | "30" | "90" | "fy" | "all" | "custom";
+
+function getLastFinancialYear(): { start: string; end: string } {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  if (month >= 3) {
+    return { start: `${year - 1}-04-01`, end: `${year}-03-31` };
+  } else {
+    return { start: `${year - 2}-04-01`, end: `${year - 1}-03-31` };
+  }
+}
+
+function getLastFinancialYearLabel(): string {
+  const { start } = getLastFinancialYear();
+  const startYear = parseInt(start.slice(0, 4), 10);
+  return `FY ${startYear}-${String(startYear + 1).slice(-2)}`;
+}
+
+function getDatePresets(): Array<{ value: DatePreset; label: string }> {
+  return [
+    { value: "7", label: "Last 7 days" },
+    { value: "30", label: "Last 30 days" },
+    { value: "90", label: "Last 90 days" },
+    { value: "fy", label: `Last FY (${getLastFinancialYearLabel()})` },
+    { value: "all", label: "All time" },
+    { value: "custom", label: "Custom..." },
+  ];
+}
 
 const CHART_COLORS = ["#0ea5e9", "#8b5cf6", "#f59e0b", "#ec4899", "#10b981", "#6366f1"];
 
@@ -104,11 +132,59 @@ export default function AdminDashboard() {
   const tenantId = isSuperAdmin ? (urlTenantId || user?.tenantId || null) : user?.tenantId ?? null;
   const { costCenterLabel } = useCostCenterLabel(tenantId);
 
-  const [presetDays, setPresetDays] = useState(30);
-  const endDate = new Date();
-  const startDate = subDays(endDate, presetDays);
-  const startStr = format(startDate, "yyyy-MM-dd");
-  const endStr = format(endDate, "yyyy-MM-dd");
+  const today = new Date();
+  const [datePreset, setDatePreset] = useState<DatePreset>("30");
+  const [customRange, setCustomRange] = useState<DateRange | undefined>(() => ({
+    from: subDays(today, 30),
+    to: today,
+  }));
+
+  const { startStr, endStr, periodDays } = (() => {
+    switch (datePreset) {
+      case "7":
+        return {
+          startStr: format(subDays(today, 7), "yyyy-MM-dd"),
+          endStr: format(today, "yyyy-MM-dd"),
+          periodDays: 7,
+        };
+      case "30":
+        return {
+          startStr: format(subDays(today, 30), "yyyy-MM-dd"),
+          endStr: format(today, "yyyy-MM-dd"),
+          periodDays: 30,
+        };
+      case "90":
+        return {
+          startStr: format(subDays(today, 90), "yyyy-MM-dd"),
+          endStr: format(today, "yyyy-MM-dd"),
+          periodDays: 90,
+        };
+      case "fy": {
+        const fy = getLastFinancialYear();
+        const days = Math.ceil((new Date(fy.end).getTime() - new Date(fy.start).getTime()) / (24 * 60 * 60 * 1000)) + 1;
+        return { startStr: fy.start, endStr: fy.end, periodDays: days };
+      }
+      case "all":
+        return {
+          startStr: "2000-01-01",
+          endStr: format(today, "yyyy-MM-dd"),
+          periodDays: Math.ceil((today.getTime() - new Date("2000-01-01").getTime()) / (24 * 60 * 60 * 1000)) + 1,
+        };
+      case "custom": {
+        const from = customRange?.from ?? subDays(today, 30);
+        const to = customRange?.to ?? (customRange?.from ? today : today);
+        const start = from;
+        const end = customRange?.from && !customRange?.to ? today : to;
+        const s = format(start, "yyyy-MM-dd");
+        const e = format(end, "yyyy-MM-dd");
+        const days = Math.ceil((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+        return { startStr: s, endStr: e, periodDays: Math.max(1, days) };
+      }
+    }
+  })();
+
+  const granularity = periodDays <= 31 ? "day" : periodDays <= 90 ? "week" : "month";
+
   const [costCenterFilter, setCostCenterFilter] = useState<string>("all");
 
   const { data: costCenters = [] } = useQuery<Campus[]>({
@@ -127,7 +203,7 @@ export default function AdminDashboard() {
   if (tenantId) analyticsParams.append("tenantId", tenantId);
   analyticsParams.append("startDate", startStr);
   analyticsParams.append("endDate", endStr);
-  analyticsParams.append("granularity", presetDays <= 7 ? "day" : presetDays <= 30 ? "day" : "week");
+  analyticsParams.append("granularity", granularity);
   if (costCenterFilter && costCenterFilter !== "all") analyticsParams.append("costCenterId", costCenterFilter);
 
   const { data: analytics, isLoading: analyticsLoading, isError: analyticsError, refetch: refetchAnalytics } = useQuery<AnalyticsData>({
@@ -192,14 +268,49 @@ export default function AdminDashboard() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Select value={String(presetDays)} onValueChange={(v) => setPresetDays(parseInt(v, 10))}>
-            <SelectTrigger className="w-[160px]">
+          {datePreset === "custom" ? (
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  className={cn("w-[220px] justify-start text-left font-normal", !customRange?.from && "text-muted-foreground")}
+                >
+                  <CalendarIcon className="mr-2 h-4 w-4" />
+                  {customRange?.from ? (
+                    customRange.to ? (
+                      <>
+                        {format(customRange.from, "MMM d, yyyy")} – {format(customRange.to, "MMM d, yyyy")}
+                      </>
+                    ) : (
+                      format(customRange.from, "MMM d, yyyy")
+                    )
+                  ) : (
+                    "Pick date range"
+                  )}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0" align="start">
+                <Calendar
+                  mode="range"
+                  selected={customRange}
+                  onSelect={setCustomRange}
+                  defaultMonth={customRange?.from ?? subDays(today, 30)}
+                  numberOfMonths={2}
+                />
+              </PopoverContent>
+            </Popover>
+          ) : null}
+          <Select
+            value={datePreset}
+            onValueChange={(v) => setDatePreset(v as DatePreset)}
+          >
+            <SelectTrigger className="w-[180px]">
               <CalendarIcon className="h-4 w-4 mr-2" />
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {DATE_PRESETS.map((p) => (
-                <SelectItem key={p.days} value={String(p.days)}>
+              {getDatePresets().map((p) => (
+                <SelectItem key={p.value} value={p.value}>
                   {p.label}
                 </SelectItem>
               ))}
