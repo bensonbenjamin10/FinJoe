@@ -3,6 +3,7 @@ import express from "express";
 import { handleWebhook } from "./webhook.js";
 import { runWeeklyInsights } from "./weekly-insights.js";
 import { generateExpensesFromTemplates } from "../../lib/finjoe-data.js";
+import { runBackfillEmbeddings } from "../../lib/backfill-embeddings.js";
 import { db, pool } from "./db.js";
 import { logger } from "./logger.js";
 
@@ -61,6 +62,21 @@ app.get("/cron/recurring-expenses", async (req, res) => {
   }
 });
 
+app.get("/cron/backfill-embeddings", async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.query?.secret !== secret) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  try {
+    const result = await runBackfillEmbeddings(pool);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error("Backfill embeddings cron error", { err: String(err) });
+    res.status(500).json({ error: "Failed to run backfill embeddings" });
+  }
+});
+
 // Wrap async handler so Express catches rejections (prevents 502 from unhandled errors)
 app.post("/webhook/finjoe", (req, res, next) => {
   handleWebhook(req, res).catch(next);
@@ -78,4 +94,11 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 const port = parseInt(process.env.PORT || "5001", 10);
 app.listen(port, () => {
   logger.info("FinJoe worker started", { port });
+  // Run embeddings backfill on startup (non-blocking): processes expenses where embedding IS NULL
+  runBackfillEmbeddings(pool)
+    .then((r) => {
+      if (r.skipped) return;
+      if (r.processed > 0) logger.info("Startup backfill embeddings", { processed: r.processed, errors: r.errors, total: r.total });
+    })
+    .catch((err) => logger.error("Startup backfill embeddings failed", { err: String(err) }));
 });

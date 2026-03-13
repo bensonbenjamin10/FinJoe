@@ -12,12 +12,13 @@ If the migration fails with "relation already exists", the table was created by 
 
 ## Cron Jobs
 
-The worker exposes two cron endpoints:
+The worker exposes three cron endpoints:
 
 | Endpoint | Purpose |
 |----------|---------|
 | `GET /cron/weekly-insights?secret=CRON_SECRET` | Sends expense/income summaries to admin/finance WhatsApp contacts |
 | `GET /cron/recurring-expenses?secret=CRON_SECRET` | Generates draft expenses from recurring templates (rent, salaries, etc.) |
+| `GET /cron/backfill-embeddings?secret=CRON_SECRET` | Backfills expense embeddings for RAG/semantic search (processes expenses where embedding IS NULL) |
 
 ### Weekly Insights
 
@@ -86,7 +87,10 @@ Or run the setup script:
 
 The `railway.cron.json` config sets `cronSchedule: "5 0 * * *"` (daily at 00:05 UTC) and `startCommand: "node start.mjs"`. The cron service must have `MODE=cron` set. Each run executes `scripts/run-all-cron.mjs`, which:
 - **Recurring expenses**: runs every day (generates draft expenses from templates)
+- **Backfill embeddings**: runs every day (processes expenses without embeddings for RAG/semantic search)
 - **Weekly insights**: runs only on Mondays (sends expense/income summary to admin/finance)
+
+Additionally, the **worker** runs the embeddings backfill on startup (non-blocking), so any expenses missing embeddings get processed when the worker restarts.
 
 #### Option B: Railway Dashboard
 
@@ -135,4 +139,18 @@ The recurring expenses job generates draft expenses from templates (monthly rent
 
 ```bash
 npm run cron:recurring-expenses
+```
+
+### 8. Backfill embeddings (daily + on worker startup)
+
+The embeddings backfill processes expenses where `embedding IS NULL` for RAG/semantic search. It runs:
+- **On worker startup** (non-blocking, in background)
+- **Daily via cron** (as part of `run-all-cron.mjs`)
+
+Requires `GEMINI_API_KEY`. To run manually:
+
+```bash
+npm run backfill:embeddings
+# Or via worker endpoint:
+curl "https://your-worker-url/cron/backfill-embeddings?secret=YOUR_CRON_SECRET"
 ```
