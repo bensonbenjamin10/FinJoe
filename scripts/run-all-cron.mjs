@@ -25,7 +25,8 @@ let hadError = false;
 console.log("Running recurring expenses...");
 try {
   const res = await fetch(`${base}/cron/recurring-expenses?secret=${encodeURIComponent(CRON_SECRET)}`);
-  const data = await res.json();
+  const contentType = res.headers.get("content-type") || "";
+  const data = contentType.includes("application/json") ? await res.json() : { error: await res.text() || res.statusText };
   if (!res.ok) {
     console.error("Recurring expenses error:", data.error || res.statusText);
     hadError = true;
@@ -43,7 +44,8 @@ if (now.getUTCDay() === 1) {
   console.log("Running weekly insights...");
   try {
     const res = await fetch(`${base}/cron/weekly-insights?secret=${encodeURIComponent(CRON_SECRET)}`);
-    const data = await res.json();
+    const contentType = res.headers.get("content-type") || "";
+    const data = contentType.includes("application/json") ? await res.json() : { error: await res.text() || res.statusText };
     if (!res.ok) {
       console.error("Weekly insights error:", data.error || res.statusText);
       hadError = true;

@@ -937,6 +937,9 @@ async function executeFunctionCall(
       if (execCtx.contactRole !== "admin" && execCtx.contactRole !== "finance") {
         return { success: false, error: "Only admin or finance can create recurring templates." };
       }
+      if (validCategoryIds.length === 0) {
+        return { success: false, error: "No expense categories configured. Ask admin to add categories in FinJoe Settings." };
+      }
       const amountVal = typeof args.amount === "number" ? Math.round(args.amount) : parseAmount(args.amount);
       const amount = amountVal ?? 0;
       if (amount <= 0) return { success: false, error: "Amount must be a positive number." };
@@ -956,6 +959,9 @@ async function executeFunctionCall(
         return { success: false, error: "Frequency must be monthly, weekly, or quarterly." };
       }
       const startDate = String(args.startDate ?? new Date().toISOString().slice(0, 10));
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || isNaN(new Date(startDate + "T12:00:00Z").getTime())) {
+        return { success: false, error: "startDate must be a valid date (YYYY-MM-DD)." };
+      }
       const dayOfMonth = args.dayOfMonth != null ? Math.min(31, Math.max(1, Number(args.dayOfMonth))) : undefined;
       const dayOfWeek = args.dayOfWeek != null ? Math.min(6, Math.max(0, Number(args.dayOfWeek))) : undefined;
       const template = await finJoeData.createRecurringTemplate({

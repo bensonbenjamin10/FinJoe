@@ -885,7 +885,13 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       }>
     ): Promise<{ id: string } | null> {
       const [existing] = await db
-        .select({ startDate: recurringExpenseTemplates.startDate, frequency: recurringExpenseTemplates.frequency, dayOfMonth: recurringExpenseTemplates.dayOfMonth, dayOfWeek: recurringExpenseTemplates.dayOfWeek })
+        .select({
+          startDate: recurringExpenseTemplates.startDate,
+          nextRunDate: recurringExpenseTemplates.nextRunDate,
+          frequency: recurringExpenseTemplates.frequency,
+          dayOfMonth: recurringExpenseTemplates.dayOfMonth,
+          dayOfWeek: recurringExpenseTemplates.dayOfWeek,
+        })
         .from(recurringExpenseTemplates)
         .where(and(eq(recurringExpenseTemplates.id, id), eq(recurringExpenseTemplates.tenantId, tenantId)))
         .limit(1);
@@ -901,16 +907,17 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       if (updates.endDate !== undefined) setValues.endDate = updates.endDate ? new Date(updates.endDate) : null;
       if (updates.isActive !== undefined) setValues.isActive = updates.isActive;
 
-      const freq = (updates.frequency ?? existing.frequency) as "monthly" | "weekly" | "quarterly";
-      const dom = updates.dayOfMonth ?? existing.dayOfMonth;
-      const dow = updates.dayOfWeek ?? existing.dayOfWeek;
-      const nextRun = computeNextRunDate(
-        existing.startDate instanceof Date ? existing.startDate.toISOString().slice(0, 10) : String(existing.startDate),
-        freq,
-        dom ?? undefined,
-        dow ?? undefined
-      );
-      if (nextRun) setValues.nextRunDate = new Date(nextRun);
+      // Only recompute nextRunDate when schedule changed (frequency/day). Use today as fromDate so we get the next occurrence from now, not from startDate (which would reset to past dates).
+      const scheduleChanged =
+        updates.frequency !== undefined || updates.dayOfMonth !== undefined || updates.dayOfWeek !== undefined;
+      if (scheduleChanged) {
+        const freq = (updates.frequency ?? existing.frequency) as "monthly" | "weekly" | "quarterly";
+        const dom = updates.dayOfMonth ?? existing.dayOfMonth;
+        const dow = updates.dayOfWeek ?? existing.dayOfWeek;
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const nextRun = computeNextRunDate(todayStr, freq, dom ?? undefined, dow ?? undefined);
+        if (nextRun) setValues.nextRunDate = new Date(nextRun);
+      }
 
       const [updated] = await db
         .update(recurringExpenseTemplates)
@@ -1041,6 +1048,29 @@ export async function generateExpensesFromTemplates(
         const dayOfMonth = tpl.dayOfMonth as number | null;
         const dayOfWeek = tpl.dayOfWeek as number | null;
         const nextRunStr = tpl.nextRunDate instanceof Date ? tpl.nextRunDate.toISOString().slice(0, 10) : String(tpl.nextRunDate).slice(0, 10);
+
+        // Skip if we already created an expense for this template+date (e.g. cron ran twice)
+        const [existingExpense] = await db
+          .select({ id: expenses.id })
+          .from(expenses)
+          .where(
+            and(
+              eq(expenses.tenantId, tenantId),
+              eq(expenses.recurringTemplateId, templateId),
+              sql`${expenses.expenseDate}::date = ${nextRunStr}::date`
+            )
+          )
+          .limit(1);
+        if (existingExpense) {
+          const nextRun = advanceRecurringNextRun(nextRunStr, frequency, dayOfMonth ?? undefined, dayOfWeek ?? undefined);
+          if (nextRun) {
+            await db
+              .update(recurringExpenseTemplates)
+              .set({ nextRunDate: new Date(nextRun), updatedAt: new Date() })
+              .where(eq(recurringExpenseTemplates.id, templateId));
+          }
+          continue;
+        }
 
         const expense = await finJoeData.createExpense({
           tenantId,
