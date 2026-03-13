@@ -5,6 +5,7 @@
  */
 
 import { GoogleGenAI } from "@google/genai";
+import { jsonrepair } from "jsonrepair";
 import type { ParsedExpenseRow, ParsedIncomeRow } from "./bank-statement-parser.js";
 
 export type CategoryInfo = { id: string; name: string; slug: string };
@@ -90,6 +91,20 @@ function getGemini(): GoogleGenAI | null {
     ai = new GoogleGenAI({ apiKey });
   }
   return ai;
+}
+
+/**
+ * Parse Gemini JSON response. Tries JSON.parse first; on failure, repairs with jsonrepair and retries.
+ * Gemini sometimes returns malformed JSON (unquoted keys, unescaped quotes).
+ */
+function parseGeminiJson<T>(text: string): T {
+  try {
+    return JSON.parse(text) as T;
+  } catch (e) {
+    console.warn("Gemini returned malformed JSON; repaired before parse");
+    const repaired = jsonrepair(text);
+    return JSON.parse(repaired) as T;
+  }
 }
 
 /**
@@ -187,7 +202,7 @@ Return JSON with suggestedExpenseMappings, suggestedIncomeMappings, and proposed
     return { suggestedExpenseMappings: {}, suggestedIncomeMappings: {}, proposedNewCategories: [] };
   }
 
-  const parsed = JSON.parse(text) as AnalyzeImportResult;
+  const parsed = parseGeminiJson<AnalyzeImportResult>(text);
   return {
     suggestedExpenseMappings: parsed.suggestedExpenseMappings ?? {},
     suggestedIncomeMappings: parsed.suggestedIncomeMappings ?? {},
@@ -351,7 +366,7 @@ Return JSON: { "proposedNewCategories": [...] }`;
     const text = (response as { text?: string }).text ?? "";
     if (!text.trim()) return merged;
 
-    const parsed = JSON.parse(text) as { proposedNewCategories?: AnalyzeImportResult["proposedNewCategories"] };
+    const parsed = parseGeminiJson<{ proposedNewCategories?: AnalyzeImportResult["proposedNewCategories"] }>(text);
     const extra = Array.isArray(parsed.proposedNewCategories) ? parsed.proposedNewCategories : [];
 
     for (const p of extra) {
