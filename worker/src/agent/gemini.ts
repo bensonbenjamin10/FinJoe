@@ -72,6 +72,7 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 - WhatsApp does NOT support LaTeX. Never use \\( \\), \\[ \\], \\frac, \\sum, or any LaTeX.
 - Use only WhatsApp-compatible formatting: *bold* for emphasis, _italic_ sparingly. Plain text is fine.
 - Amounts: use ₹ (Unicode) + plain Arabic numerals, e.g. ₹500 or ₹1,50,000. No LaTeX, no special math.
+- Dates: when displaying dates to users, use DD/MM/YYYY (Indian format), e.g. 13/03/2026. Accept user input in YYYY-MM-DD, DD/MM/YYYY, or DD-MM-YYYY.
 - Keep formatting simple. Avoid over-formatting.
 
 === BULK TABLE EXPENSES ===

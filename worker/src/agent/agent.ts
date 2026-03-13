@@ -22,7 +22,7 @@ import { parseExpensesFromCsv } from "../csv-parser.js";
 import { fetchSystemContext, fetchSystemData, resolveCategoryFromMessage, resolveCampusFromMessage, resolveIncomeCategoryFromMessage } from "../context.js";
 import { validateExpenseData, validateRoleChangeData } from "../validation.js";
 import { createFinJoeData } from "../../../lib/finjoe-data.js";
-import { parseExpenseQuery } from "../../../lib/expense-query-ai.js";
+import { parseExpenseQuery, parseDateToISO } from "../../../lib/expense-query-ai.js";
 import { embedQuery } from "../../../lib/expense-embeddings.js";
 import { normalizePhone } from "../twilio.js";
 
@@ -345,12 +345,12 @@ async function executeFunctionCall(
       }
       const expenseData = {
         amount: amount ?? 0,
-        expenseDate: String(args.invoiceDate ?? new Date().toISOString().slice(0, 10)),
+        expenseDate: parseDateToISO(String(args.invoiceDate ?? new Date().toISOString().slice(0, 10))) ?? new Date().toISOString().slice(0, 10),
         categoryId: categoryId || validCategoryIds[0] || "",
         campusId,
         description: args.description ? String(args.description) : null,
         invoiceNumber: args.invoiceNumber ? String(args.invoiceNumber) : null,
-        invoiceDate: args.invoiceDate ? String(args.invoiceDate) : null,
+        invoiceDate: args.invoiceDate ? (parseDateToISO(String(args.invoiceDate)) ?? String(args.invoiceDate)) : null,
         vendorName: args.vendorName ? String(args.vendorName) : null,
         gstin: args.gstin ? String(args.gstin) : null,
         taxType: args.taxType ? String(args.taxType) : null,
@@ -434,7 +434,7 @@ async function executeFunctionCall(
       if (!finalCategoryId) {
         return { success: false, error: "No income categories configured. Ask admin to add income categories." };
       }
-      const incomeDate = String(args.incomeDate ?? new Date().toISOString().slice(0, 10));
+      const incomeDate = parseDateToISO(String(args.incomeDate ?? new Date().toISOString().slice(0, 10))) ?? new Date().toISOString().slice(0, 10);
       const particulars = args.particulars ? String(args.particulars) : null;
 
       let income: { id: string } | null = null;
@@ -504,7 +504,8 @@ async function executeFunctionCall(
           const resolved = resolveCampusFromMessage(campusId, execCtx.campuses);
           if (resolved) campusId = resolved;
         }
-        const expenseDate = String(r.invoiceDate ?? r.expenseDate ?? today);
+        const rawDate = String(r.invoiceDate ?? r.expenseDate ?? today);
+        const expenseDate = parseDateToISO(rawDate) ?? rawDate;
         const expenseData = {
           amount,
           expenseDate,
@@ -512,7 +513,7 @@ async function executeFunctionCall(
           campusId,
           description: (r.description ?? r.particulars) ? String(r.description ?? r.particulars) : null,
           invoiceNumber: null as string | null,
-          invoiceDate: r.invoiceDate ? String(r.invoiceDate) : null,
+          invoiceDate: r.invoiceDate ? (parseDateToISO(String(r.invoiceDate)) ?? String(r.invoiceDate)) : null,
           vendorName: (r.vendorName ?? r.name) ? String(r.vendorName ?? r.name) : null,
           gstin: null as string | null,
           taxType: null as string | null,
@@ -725,8 +726,8 @@ async function executeFunctionCall(
       if (amt !== undefined) updates.amount = amt;
       if (args.vendorName !== undefined) updates.vendorName = args.vendorName ? String(args.vendorName) : null;
       if (args.invoiceNumber !== undefined) updates.invoiceNumber = args.invoiceNumber ? String(args.invoiceNumber) : null;
-      if (args.invoiceDate !== undefined) updates.invoiceDate = args.invoiceDate ? String(args.invoiceDate) : null;
-      if (args.expenseDate !== undefined) updates.expenseDate = String(args.expenseDate);
+      if (args.invoiceDate !== undefined) updates.invoiceDate = args.invoiceDate ? (parseDateToISO(String(args.invoiceDate)) ?? String(args.invoiceDate)) : null;
+      if (args.expenseDate !== undefined) updates.expenseDate = parseDateToISO(String(args.expenseDate)) ?? String(args.expenseDate);
       if (args.description !== undefined) updates.description = args.description ? String(args.description) : null;
       if (categoryId) updates.categoryId = categoryId;
       if (campusId !== undefined) updates.costCenterId = campusId;
@@ -777,7 +778,7 @@ async function executeFunctionCall(
         };
       }
       const searchQuery = parsed.searchQuery ?? question;
-      const startDate = parsed.startDate;
+      const startDate = parsed.startDate; // Already normalized by parseExpenseQuery (YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY)
       const endDate = parsed.endDate;
       const campusId = parsed.campusId ?? undefined;
       let searchResults: Array<Record<string, unknown>> = [];
@@ -958,10 +959,12 @@ async function executeFunctionCall(
       if (!["monthly", "weekly", "quarterly"].includes(frequency)) {
         return { success: false, error: "Frequency must be monthly, weekly, or quarterly." };
       }
-      const startDate = String(args.startDate ?? new Date().toISOString().slice(0, 10));
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || isNaN(new Date(startDate + "T12:00:00Z").getTime())) {
-        return { success: false, error: "startDate must be a valid date (YYYY-MM-DD)." };
+      const startDateRaw = String(args.startDate ?? new Date().toISOString().slice(0, 10));
+      const startDate = parseDateToISO(startDateRaw);
+      if (!startDate) {
+        return { success: false, error: "startDate must be a valid date (YYYY-MM-DD, DD/MM/YYYY, or DD-MM-YYYY)." };
       }
+      const endDateNorm = args.endDate ? parseDateToISO(String(args.endDate)) : null;
       const dayOfMonth = args.dayOfMonth != null ? Math.min(31, Math.max(1, Number(args.dayOfMonth))) : undefined;
       const dayOfWeek = args.dayOfWeek != null ? Math.min(6, Math.max(0, Number(args.dayOfWeek))) : undefined;
       const template = await finJoeData.createRecurringTemplate({
@@ -975,7 +978,7 @@ async function executeFunctionCall(
         dayOfMonth,
         dayOfWeek,
         startDate,
-        endDate: args.endDate ? String(args.endDate) : null,
+        endDate: endDateNorm,
       });
       if (!template?.id) return { success: false, error: USER_FACING_ERROR };
       return { success: true, data: { templateId: template.id, amount, frequency, startDate } };
@@ -1005,7 +1008,7 @@ async function executeFunctionCall(
       }
       if (args.dayOfMonth !== undefined) updates.dayOfMonth = Math.min(31, Math.max(1, Number(args.dayOfMonth)));
       if (args.dayOfWeek !== undefined) updates.dayOfWeek = Math.min(6, Math.max(0, Number(args.dayOfWeek)));
-      if (args.endDate !== undefined) updates.endDate = args.endDate ? String(args.endDate) : null;
+      if (args.endDate !== undefined) updates.endDate = args.endDate ? parseDateToISO(String(args.endDate)) ?? null : null;
       if (args.isActive !== undefined) updates.isActive = Boolean(args.isActive);
       if (Object.keys(updates).length === 0) return { success: false, error: "No fields to update. Specify at least one." };
       const result = await finJoeData.updateRecurringTemplate(templateId, updates as any);
