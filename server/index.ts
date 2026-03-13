@@ -8,6 +8,9 @@ import { setupAuth } from "./auth.js";
 import { setupVite, serveStatic } from "./vite.js";
 import { handleWebhook } from "../worker/src/webhook.js";
 import { runWeeklyInsights } from "../worker/src/weekly-insights.js";
+import { generateExpensesFromTemplates } from "../lib/finjoe-data.js";
+import { runBackfillEmbeddings } from "../lib/backfill-embeddings.js";
+import { db, pool } from "./db.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -53,6 +56,44 @@ app.post(
     }
   }
 );
+
+// Health check - cron uses this to verify worker reachability (must return JSON, not HTML)
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok", service: "finjoe" });
+});
+
+// Cron: recurring expenses (same as worker - for single-service deployment)
+app.get("/cron/recurring-expenses", async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.query?.secret !== secret) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const result = await generateExpensesFromTemplates(db, today, pool);
+    res.json({ ok: true, generated: result.generated, errors: result.errors });
+  } catch (err) {
+    logger.error("Recurring expenses cron error", { err: String(err) });
+    res.status(500).json({ error: "Failed to run recurring expenses" });
+  }
+});
+
+// Cron: backfill embeddings (same as worker - for single-service deployment)
+app.get("/cron/backfill-embeddings", async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.query?.secret !== secret) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  try {
+    const result = await runBackfillEmbeddings(pool);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error("Backfill embeddings cron error", { err: String(err) });
+    res.status(500).json({ error: "Failed to run backfill embeddings" });
+  }
+});
 
 // Cron: weekly insights (same as worker - for single-service deployment)
 app.get("/cron/weekly-insights", async (req, res) => {
