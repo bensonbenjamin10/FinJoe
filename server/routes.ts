@@ -1589,8 +1589,12 @@ export async function registerRoutes(app: Express) {
 
       const { expenses: expRows, income: incRows } = parseBankStatementCsv(file.buffer, expCats.map((c) => c.slug), incCats.length > 0 ? incCats.map((c) => c.slug) : ["other"]);
 
-      let imported = 0;
-      let incomeImported = 0;
+      if (expRows.length > 0 && expCats.length === 0) {
+        return res.status(400).json({ error: "Expense rows found but no expense categories. Add categories in Expenses settings first." });
+      }
+      if (incRows.length > 0 && incCats.length === 0) {
+        return res.status(400).json({ error: "Income rows found but no income categories. Add categories in Income settings first." });
+      }
 
       const toDate = (dateStr: string): Date => {
         const d = new Date(dateStr + "T12:00:00Z");
@@ -1598,6 +1602,17 @@ export async function registerRoutes(app: Express) {
         return d;
       };
 
+      const BATCH_SIZE = 250;
+      const expToInsert: Array<{
+        tenantId: string;
+        costCenterId: string | null;
+        categoryId: string;
+        amount: number;
+        expenseDate: Date;
+        description: string;
+        status: string;
+        source: string;
+      }> = [];
       for (let i = 0; i < expRows.length; i++) {
         const r = expRows[i];
         if (!isValidDateString(r.date)) continue;
@@ -1608,7 +1623,7 @@ export async function registerRoutes(app: Express) {
         const ccId = overrideCc !== undefined
           ? (overrideCc === null || overrideCc === "__corporate__" ? null : validCcIds.has(overrideCc) ? overrideCc : null)
           : branchToCcId(r.branch);
-        await db.insert(expenses).values({
+        expToInsert.push({
           tenantId: tid,
           costCenterId: ccId,
           categoryId,
@@ -1618,17 +1633,26 @@ export async function registerRoutes(app: Express) {
           status: "draft",
           source: "bank_import",
         });
-        imported++;
       }
 
       const defaultIncCatId = incCats[0]?.id;
+      const incToInsert: Array<{
+        tenantId: string;
+        costCenterId: null;
+        categoryId: string;
+        amount: number;
+        incomeDate: Date;
+        particulars: string;
+        incomeType: string;
+        source: string;
+      }> = [];
       for (let i = 0; i < incRows.length; i++) {
         const r = incRows[i];
         if (!isValidDateString(r.date)) continue;
         const overrideCat = incomeOverrides[String(i)];
         const categoryId = (overrideCat && validIncCatIds.has(overrideCat) ? overrideCat : null) ?? incSlugToId[r.categoryMatch] ?? defaultIncCatId;
         if (!categoryId) continue;
-        await db.insert(incomeRecords).values({
+        incToInsert.push({
           tenantId: tid,
           costCenterId: null,
           categoryId,
@@ -1638,8 +1662,23 @@ export async function registerRoutes(app: Express) {
           incomeType: "other",
           source: "bank_import",
         });
-        incomeImported++;
       }
+
+      let imported = 0;
+      let incomeImported = 0;
+
+      await db.transaction(async (tx) => {
+        for (let i = 0; i < expToInsert.length; i += BATCH_SIZE) {
+          const chunk = expToInsert.slice(i, i + BATCH_SIZE);
+          await tx.insert(expenses).values(chunk);
+          imported += chunk.length;
+        }
+        for (let i = 0; i < incToInsert.length; i += BATCH_SIZE) {
+          const chunk = incToInsert.slice(i, i + BATCH_SIZE);
+          await tx.insert(incomeRecords).values(chunk);
+          incomeImported += chunk.length;
+        }
+      });
 
       res.json({ imported, incomeImported });
     } catch (e) {

@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useRef, useMemo } from "react";
 import { Link, useSearchParams } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -62,6 +63,190 @@ import type {
 
 type PreviewRow = { date: string; particulars: string; amount: number; majorHead?: string; branch?: string; categoryMatch: string };
 type IncomePreviewRow = { date: string; particulars: string; amount: number; categoryMatch: string };
+
+const ROW_HEIGHT = 52;
+
+function ImportPreviewVirtualizedRows({
+  expRows,
+  incRows,
+  expenseCategories,
+  incomeCategories,
+  campuses,
+  costCenterLabel,
+  expenseOverrides,
+  incomeOverrides,
+  costCenterOverrides,
+  setExpenseOverrides,
+  setIncomeOverrides,
+  setCostCenterOverrides,
+  slugToExpCatId,
+  slugToIncCatId,
+}: {
+  expRows: PreviewRow[];
+  incRows: IncomePreviewRow[];
+  expenseCategories: ExpenseCategory[];
+  incomeCategories: Array<{ id: string; name: string; slug: string }>;
+  campuses: Campus[];
+  costCenterLabel: string;
+  expenseOverrides: Record<string, string>;
+  incomeOverrides: Record<string, string>;
+  costCenterOverrides: Record<string, string | null>;
+  setExpenseOverrides: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  setIncomeOverrides: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  setCostCenterOverrides: React.Dispatch<React.SetStateAction<Record<string, string | null>>>;
+  slugToExpCatId: Record<string, string>;
+  slugToIncCatId: Record<string, string>;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const allRows = useMemo(() => {
+    const items: Array<{ type: "expense" | "income"; index: number; row: PreviewRow | IncomePreviewRow }> = [];
+    expRows.forEach((r, i) => items.push({ type: "expense", index: i, row: r }));
+    incRows.forEach((r, i) => items.push({ type: "income", index: i, row: r }));
+    return items;
+  }, [expRows, incRows]);
+
+  const virtualizer = useVirtualizer({
+    count: allRows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 5,
+  });
+
+  if (allRows.length === 0) return null;
+
+  return (
+    <div className="border rounded">
+      <div className="grid grid-cols-[90px_100px_1fr_100px_140px_160px] gap-2 px-4 py-2 border-b bg-muted/50 text-sm font-medium">
+        <div>Type</div>
+        <div>Date</div>
+        <div>Particulars</div>
+        <div>Amount</div>
+        <div>{costCenterLabel}</div>
+        <div>Category</div>
+      </div>
+      <div
+        ref={parentRef}
+        className="max-h-80 overflow-auto"
+      >
+        <div
+          style={{
+            height: `${virtualizer.getTotalSize()}px`,
+            width: "100%",
+            position: "relative",
+          }}
+        >
+          {virtualizer.getVirtualItems().map((virtualRow) => {
+            const item = allRows[virtualRow.index];
+            if (item.type === "expense") {
+              const r = item.row as PreviewRow;
+              const i = item.index;
+              return (
+                <div
+                  key={`exp-${i}`}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualRow.start}px)`,
+                    height: ROW_HEIGHT,
+                  }}
+                  className="grid grid-cols-[90px_100px_1fr_100px_140px_160px] gap-2 items-center border-b px-4 py-1"
+                >
+                  <div>
+                    <Badge variant="outline">Expense</Badge>
+                  </div>
+                  <div>{r.date}</div>
+                  <div className="truncate min-w-0" title={r.particulars}>{r.particulars}</div>
+                  <div>₹ {r.amount.toLocaleString("en-IN")}</div>
+                  <div className="min-w-0">
+                    <Select
+                      value={
+                        costCenterOverrides[String(i)] !== undefined
+                          ? (costCenterOverrides[String(i)] ?? "__corporate__")
+                          : (r.branch ? campuses.find((c) => c.name.toLowerCase() === r.branch?.toLowerCase() || c.slug?.toLowerCase() === r.branch?.toLowerCase())?.id ?? "__corporate__" : "__corporate__")
+                      }
+                      onValueChange={(v) => setCostCenterOverrides((o) => ({ ...o, [String(i)]: v === "__corporate__" ? null : v }))}
+                    >
+                      <SelectTrigger className="h-8 w-full max-w-[130px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__corporate__">Corporate</SelectItem>
+                        {campuses.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="min-w-0">
+                    <Select
+                      value={expenseOverrides[String(i)] ?? slugToExpCatId[r.categoryMatch] ?? expenseCategories[0]?.id}
+                      onValueChange={(v) => setExpenseOverrides((o) => ({ ...o, [String(i)]: v }))}
+                    >
+                      <SelectTrigger className="h-8 w-full max-w-[150px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {expenseCategories.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              );
+            } else {
+              const r = item.row as IncomePreviewRow;
+              const i = item.index;
+              return (
+                <div
+                  key={`inc-${i}`}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualRow.start}px)`,
+                    height: ROW_HEIGHT,
+                  }}
+                  className="grid grid-cols-[90px_100px_1fr_100px_140px_160px] gap-2 items-center border-b px-4 py-1"
+                >
+                  <div>
+                    <Badge className="bg-green-600">Income</Badge>
+                  </div>
+                  <div>{r.date}</div>
+                  <div className="truncate min-w-0" title={r.particulars}>{r.particulars}</div>
+                  <div className="text-green-600">₹ {r.amount.toLocaleString("en-IN")}</div>
+                  <div>—</div>
+                  <div className="min-w-0">
+                    <Select
+                      value={incomeOverrides[String(i)] ?? slugToIncCatId[r.categoryMatch] ?? incomeCategories[0]?.id ?? (incomeCategories.length === 0 ? "__skip__" : "")}
+                      onValueChange={(v) => setIncomeOverrides((o) => ({ ...o, [String(i)]: v === "__skip__" ? "" : v }))}
+                    >
+                      <SelectTrigger className="h-8 w-full max-w-[150px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {incomeCategories.length === 0 ? (
+                          <SelectItem value="__skip__" disabled>Add categories in Income page</SelectItem>
+                        ) : (
+                          incomeCategories.map((c) => (
+                            <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              );
+            }
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ImportWizard({
   tenantId,
@@ -375,93 +560,22 @@ function ImportWizard({
               </div>
             </div>
           )}
-          <div className="max-h-80 overflow-auto border rounded">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Particulars</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>{costCenterLabel}</TableHead>
-                  <TableHead>Category</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {expRows.map((r, i) => (
-                  <TableRow key={`exp-${i}`}>
-                    <TableCell><Badge variant="outline">Expense</Badge></TableCell>
-                    <TableCell>{r.date}</TableCell>
-                    <TableCell className="max-w-[200px] truncate" title={r.particulars}>{r.particulars}</TableCell>
-                    <TableCell>₹ {r.amount.toLocaleString("en-IN")}</TableCell>
-                    <TableCell>
-                      <Select
-                        value={
-                          costCenterOverrides[String(i)] !== undefined
-                            ? (costCenterOverrides[String(i)] ?? "__corporate__")
-                            : (r.branch ? campuses.find((c) => c.name.toLowerCase() === r.branch?.toLowerCase() || c.slug?.toLowerCase() === r.branch?.toLowerCase())?.id ?? "__corporate__" : "__corporate__")
-                        }
-                        onValueChange={(v) => setCostCenterOverrides((o) => ({ ...o, [String(i)]: v === "__corporate__" ? null : v }))}
-                      >
-                        <SelectTrigger className="h-8 w-[140px]">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__corporate__">Corporate</SelectItem>
-                          {campuses.map((c) => (
-                            <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </TableCell>
-                    <TableCell>
-                      <Select
-                        value={expenseOverrides[String(i)] ?? slugToExpCatId[r.categoryMatch] ?? expenseCategories[0]?.id}
-                        onValueChange={(v) => setExpenseOverrides((o) => ({ ...o, [String(i)]: v }))}
-                      >
-                        <SelectTrigger className="h-8 w-[160px]">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {expenseCategories.map((c) => (
-                            <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {incRows.map((r, i) => (
-                  <TableRow key={`inc-${i}`}>
-                    <TableCell><Badge className="bg-green-600">Income</Badge></TableCell>
-                    <TableCell>{r.date}</TableCell>
-                    <TableCell className="max-w-[200px] truncate" title={r.particulars}>{r.particulars}</TableCell>
-                    <TableCell className="text-green-600">₹ {r.amount.toLocaleString("en-IN")}</TableCell>
-                    <TableCell>—</TableCell>
-                    <TableCell>
-                      <Select
-                        value={incomeOverrides[String(i)] ?? slugToIncCatId[r.categoryMatch] ?? incomeCategories[0]?.id ?? (incomeCategories.length === 0 ? "__skip__" : "")}
-                        onValueChange={(v) => setIncomeOverrides((o) => ({ ...o, [String(i)]: v === "__skip__" ? "" : v }))}
-                      >
-                        <SelectTrigger className="h-8 w-[160px]">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {incomeCategories.length === 0 ? (
-                            <SelectItem value="__skip__" disabled>Add categories in Income page</SelectItem>
-                          ) : (
-                            incomeCategories.map((c) => (
-                              <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                            ))
-                          )}
-                        </SelectContent>
-                      </Select>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+          <ImportPreviewVirtualizedRows
+            expRows={expRows}
+            incRows={incRows}
+            expenseCategories={expenseCategories}
+            incomeCategories={incomeCategories}
+            campuses={campuses}
+            costCenterLabel={costCenterLabel}
+            expenseOverrides={expenseOverrides}
+            incomeOverrides={incomeOverrides}
+            costCenterOverrides={costCenterOverrides}
+            setExpenseOverrides={setExpenseOverrides}
+            setIncomeOverrides={setIncomeOverrides}
+            setCostCenterOverrides={setCostCenterOverrides}
+            slugToExpCatId={slugToExpCatId}
+            slugToIncCatId={slugToIncCatId}
+          />
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
             <Button onClick={() => setStep(3)}>Continue to Summary</Button>
