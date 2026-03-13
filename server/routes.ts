@@ -35,6 +35,8 @@ import { suggestReconciliationMatches } from "../lib/reconciliation-suggestions.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 const EXPORT_ROW_LIMIT = parseInt(process.env.EXPORT_ROW_LIMIT ?? "10000", 10) || 10000;
+const LIST_PAGE_SIZE = 100;
+const LIST_PAGE_SIZE_MAX = 200;
 
 function escapeCsv(s: string): string {
   if (s.includes(",") || s.includes('"') || s.includes("\n")) {
@@ -1014,16 +1016,26 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.query?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { campusId, costCenterId, categoryId, startDate, endDate } = req.query;
+      const { campusId, costCenterId, categoryId, startDate, endDate, limit: limitParam, offset: offsetParam } = req.query;
       const ccId = (costCenterId ?? campusId) as string | undefined;
       const conditions = [eq(incomeRecords.tenantId, tid)];
       if (ccId && ccId !== "all") {
-        if (ccId === "null" || ccId === "__corporate__") conditions.push(sql`${incomeRecords.costCenterId} IS NULL`);
+        if (ccId === "null" || ccId === "corporate" || ccId === "__corporate__") conditions.push(sql`${incomeRecords.costCenterId} IS NULL`);
         else conditions.push(eq(incomeRecords.costCenterId, ccId));
       }
       if (categoryId && categoryId !== "all") conditions.push(eq(incomeRecords.categoryId, categoryId as string));
       if (startDate && typeof startDate === "string") conditions.push(sql`${incomeRecords.incomeDate} >= ${startDate}::date`);
       if (endDate && typeof endDate === "string") conditions.push(sql`${incomeRecords.incomeDate} <= ${endDate}::date`);
+
+      const whereClause = and(...conditions);
+      const limit = Math.min(Math.max(1, parseInt(String(limitParam ?? LIST_PAGE_SIZE), 10) || LIST_PAGE_SIZE), LIST_PAGE_SIZE_MAX);
+      const offset = Math.max(0, parseInt(String(offsetParam ?? 0), 10) || 0);
+
+      const [countRow] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(incomeRecords)
+        .where(whereClause);
+
       const rows = await db
         .select({
           id: incomeRecords.id,
@@ -1042,15 +1054,18 @@ export async function registerRoutes(app: Express) {
         .from(incomeRecords)
         .leftJoin(costCenters, eq(incomeRecords.costCenterId, costCenters.id))
         .leftJoin(incomeCategories, eq(incomeRecords.categoryId, incomeCategories.id))
-        .where(and(...conditions))
+        .where(whereClause)
         .orderBy(desc(incomeRecords.incomeDate), desc(incomeRecords.createdAt))
-        .limit(200);
+        .limit(limit)
+        .offset(offset);
+
+      const total = countRow?.count ?? 0;
       const result = rows.map((r) => ({
         ...r,
         campusId: r.costCenterId,
         campusName: r.costCenterName,
       }));
-      res.json(result);
+      res.json({ rows: result, total, limit, offset, hasMore: offset + rows.length < total });
     } catch (e) {
       logger.error("Income list error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to fetch income" });
@@ -1707,7 +1722,7 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.query?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { campusId, costCenterId, status, categoryId, source, startDate, endDate } = req.query;
+      const { campusId, costCenterId, status, categoryId, source, startDate, endDate, limit: limitParam, offset: offsetParam } = req.query;
       const conditions = [eq(expenses.tenantId, tid)];
       const ccId = (costCenterId ?? campusId) as string | undefined;
       if (ccId && ccId !== "all") {
@@ -1722,6 +1737,16 @@ export async function registerRoutes(app: Express) {
       if (source && source !== "all") conditions.push(eq(expenses.source, source as string));
       if (startDate && typeof startDate === "string") conditions.push(sql`${expenses.expenseDate} >= ${startDate}::date`);
       if (endDate && typeof endDate === "string") conditions.push(sql`${expenses.expenseDate} <= ${endDate}::date`);
+
+      const whereClause = and(...conditions);
+      const limit = Math.min(Math.max(1, parseInt(String(limitParam ?? LIST_PAGE_SIZE), 10) || LIST_PAGE_SIZE), LIST_PAGE_SIZE_MAX);
+      const offset = Math.max(0, parseInt(String(offsetParam ?? 0), 10) || 0);
+
+      const [countRow] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(expenses)
+        .where(whereClause);
+
       const rows = await db
         .select({
           id: expenses.id,
@@ -1747,16 +1772,19 @@ export async function registerRoutes(app: Express) {
         .from(expenses)
         .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
-        .where(and(...conditions))
+        .where(whereClause)
         .orderBy(desc(expenses.expenseDate), desc(expenses.createdAt))
-        .limit(200);
+        .limit(limit)
+        .offset(offset);
+
+      const total = countRow?.count ?? 0;
       const result = rows.map((r) => ({
         ...r,
         campus: r.costCenterId ? { id: r.costCenterId, name: r.costCenterName, slug: "" } : null,
         costCenter: r.costCenterId ? { id: r.costCenterId, name: r.costCenterName, slug: "" } : null,
         category: r.categoryId ? { id: r.categoryId, name: r.categoryName, slug: "" } : null,
       }));
-      res.json(result);
+      res.json({ rows: result, total, limit, offset, hasMore: offset + rows.length < total });
     } catch (e) {
       logger.error("Expenses list error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to fetch expenses" });

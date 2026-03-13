@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useMemo, useEffect } from "react";
 import { Link, useSearchParams } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -920,29 +920,55 @@ export default function AdminExpenses() {
   const [deleteCategoryDialog, setDeleteCategoryDialog] = useState<ExpenseCategory | null>(null);
   const [exportStart, setExportStart] = useState<Date | undefined>();
   const [exportEnd, setExportEnd] = useState<Date | undefined>();
-  const buildQueryParams = () => {
+  const LIST_PAGE_SIZE = 100;
+  const [expenseOffset, setExpenseOffset] = useState(0);
+  const [allExpenses, setAllExpenses] = useState<ExpenseWithDetails[]>([]);
+
+  const buildQueryParams = (offset: number) => {
     const params = new URLSearchParams();
     if (tenantId) params.append("tenantId", tenantId);
-    if (filters.campusId && filters.campusId !== "all") params.append("campusId", filters.campusId === "corporate" ? "null" : filters.campusId);
+    const campusVal = filters.campusId && filters.campusId !== "all" ? filters.campusId : null;
+    if (campusVal) params.append("campusId", campusVal === "corporate" || campusVal === "__corporate__" ? "__corporate__" : campusVal);
     if (filters.status && filters.status !== "all") params.append("status", filters.status);
     if (filters.categoryId && filters.categoryId !== "all") params.append("categoryId", filters.categoryId);
     if (filters.source && filters.source !== "all") params.append("source", filters.source);
     if (filters.startDate) params.append("startDate", filters.startDate);
     if (filters.endDate) params.append("endDate", filters.endDate);
+    params.append("limit", String(LIST_PAGE_SIZE));
+    params.append("offset", String(offset));
     return params.toString();
   };
 
+  const filtersKey = JSON.stringify(filters);
+  useEffect(() => {
+    setExpenseOffset(0);
+    setAllExpenses([]);
+  }, [filtersKey]);
+
   const qs = tenantId ? `?tenantId=${tenantId}` : "";
-  const { data: expenses = [], isLoading } = useQuery<ExpenseWithDetails[]>({
-    queryKey: ["/api/admin/expenses", filters, tenantId],
+  const { data: expensesData, isLoading } = useQuery<{ rows: ExpenseWithDetails[]; total: number; hasMore: boolean; offset: number }>({
+    queryKey: ["/api/admin/expenses", filters, tenantId, expenseOffset],
     queryFn: async () => {
-      const q = buildQueryParams();
-      const res = await fetch(`/api/admin/expenses${q ? `?${q}` : ""}`, { credentials: "include" });
+      const q = buildQueryParams(expenseOffset);
+      const res = await fetch(`/api/admin/expenses?${q}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
     enabled: !!tenantId,
   });
+
+  useEffect(() => {
+    if (!expensesData) return;
+    if (expensesData.offset === 0) {
+      setAllExpenses(expensesData.rows);
+    } else {
+      setAllExpenses((prev) => [...prev, ...expensesData.rows]);
+    }
+  }, [expensesData]);
+
+  const expenses = allExpenses;
+  const expensesTotal = expensesData?.total ?? 0;
+  const expensesHasMore = expensesData?.hasMore ?? false;
 
   const { data: categories = [] } = useQuery<ExpenseCategory[]>({
     queryKey: ["/api/admin/expense-categories", tenantId],
@@ -1030,6 +1056,7 @@ export default function AdminExpenses() {
       return res.json();
     },
     onSuccess: () => {
+      setExpenseOffset(0);
       queryClient.invalidateQueries({ queryKey: ["/api/admin/expenses"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/petty-cash/replenishments"] });
       toast({ title: "Replenishment recorded" });
@@ -1059,6 +1086,7 @@ export default function AdminExpenses() {
       return res.json();
     },
     onSuccess: () => {
+      setExpenseOffset(0);
       queryClient.invalidateQueries({ queryKey: ["/api/admin/expenses"] });
       setCreateForm({ campusId: "__corporate__", categoryId: "", amount: "", expenseDate: new Date(), description: "", invoiceNumber: "", invoiceDate: "", vendorName: "", gstin: "", taxType: "", voucherNumber: "" });
       setActiveTab("list");
@@ -1074,6 +1102,7 @@ export default function AdminExpenses() {
       return res.json();
     },
     onSuccess: () => {
+      setExpenseOffset(0);
       queryClient.invalidateQueries({ queryKey: ["/api/admin/expenses"] });
       setActionMenu(null);
       toast({ title: "Expense submitted" });
@@ -1087,6 +1116,7 @@ export default function AdminExpenses() {
       return res.json();
     },
     onSuccess: () => {
+      setExpenseOffset(0);
       queryClient.invalidateQueries({ queryKey: ["/api/admin/expenses"] });
       setApproveDialog(null);
       toast({ title: "Expense approved" });
@@ -1100,6 +1130,7 @@ export default function AdminExpenses() {
       return res.json();
     },
     onSuccess: () => {
+      setExpenseOffset(0);
       queryClient.invalidateQueries({ queryKey: ["/api/admin/expenses"] });
       setRejectDialog(null);
       toast({ title: "Expense rejected" });
@@ -1113,6 +1144,7 @@ export default function AdminExpenses() {
       return res.json();
     },
     onSuccess: () => {
+      setExpenseOffset(0);
       queryClient.invalidateQueries({ queryKey: ["/api/admin/expenses"] });
       setPayoutDialog(null);
       toast({ title: "Payout recorded" });
@@ -1129,6 +1161,7 @@ export default function AdminExpenses() {
       return res.json();
     },
     onSuccess: () => {
+      setExpenseOffset(0);
       queryClient.invalidateQueries({ queryKey: ["/api/admin/expenses"] });
       setEditExpenseDialog(null);
       toast({ title: "Expense updated" });
@@ -1146,6 +1179,7 @@ export default function AdminExpenses() {
       }
     },
     onSuccess: () => {
+      setExpenseOffset(0);
       queryClient.invalidateQueries({ queryKey: ["/api/admin/expenses"] });
       setDeleteExpenseDialog(null);
       toast({ title: "Expense deleted" });
@@ -1510,6 +1544,18 @@ export default function AdminExpenses() {
                       ))}
                     </TableBody>
                   </Table>
+                )}
+                {!isLoading && expensesHasMore && (
+                  <div className="flex justify-center py-4">
+                    <Button
+                      variant="outline"
+                      onClick={() => setExpenseOffset((o) => o + LIST_PAGE_SIZE)}
+                      disabled={isLoading}
+                    >
+                      {isLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                      Load more ({expenses.length} of {expensesTotal} shown)
+                    </Button>
+                  </div>
                 )}
                 {!isLoading && expenses.length === 0 && (
                   <p className="text-center text-muted-foreground py-8">No expenses found.</p>

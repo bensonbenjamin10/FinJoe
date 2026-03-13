@@ -104,26 +104,52 @@ export default function AdminIncome() {
     }
   }, [editIncomeDialog]);
 
-  const buildQueryParams = () => {
+  const LIST_PAGE_SIZE = 100;
+  const [incomeOffset, setIncomeOffset] = useState(0);
+  const [allIncome, setAllIncome] = useState<IncomeWithDetails[]>([]);
+
+  const buildQueryParams = (offset: number) => {
     const params = new URLSearchParams();
     if (tenantId) params.append("tenantId", tenantId);
-    if (filters.campusId && filters.campusId !== "all") params.append("campusId", filters.campusId === "corporate" ? "null" : filters.campusId);
+    const campusVal = filters.campusId && filters.campusId !== "all" ? filters.campusId : null;
+    if (campusVal) params.append("campusId", campusVal === "corporate" || campusVal === "__corporate__" ? "__corporate__" : campusVal);
     if (filters.categoryId && filters.categoryId !== "all") params.append("categoryId", filters.categoryId);
     if (filters.startDate) params.append("startDate", filters.startDate);
     if (filters.endDate) params.append("endDate", filters.endDate);
+    params.append("limit", String(LIST_PAGE_SIZE));
+    params.append("offset", String(offset));
     return params.toString();
   };
 
-  const { data: incomeList = [], isLoading } = useQuery<IncomeWithDetails[]>({
-    queryKey: ["/api/admin/income", filters, tenantId],
+  const filtersKey = JSON.stringify(filters);
+  useEffect(() => {
+    setIncomeOffset(0);
+    setAllIncome([]);
+  }, [filtersKey]);
+
+  const { data: incomeData, isLoading } = useQuery<{ rows: IncomeWithDetails[]; total: number; hasMore: boolean; offset: number }>({
+    queryKey: ["/api/admin/income", filters, tenantId, incomeOffset],
     queryFn: async () => {
-      const q = buildQueryParams();
-      const res = await fetch(`/api/admin/income${q ? `?${q}` : ""}`, { credentials: "include" });
+      const q = buildQueryParams(incomeOffset);
+      const res = await fetch(`/api/admin/income?${q}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
     enabled: !!tenantId,
   });
+
+  useEffect(() => {
+    if (!incomeData) return;
+    if (incomeData.offset === 0) {
+      setAllIncome(incomeData.rows);
+    } else {
+      setAllIncome((prev) => [...prev, ...incomeData.rows]);
+    }
+  }, [incomeData]);
+
+  const incomeList = allIncome;
+  const incomeTotal = incomeData?.total ?? 0;
+  const incomeHasMore = incomeData?.hasMore ?? false;
 
   const { data: categories = [] } = useQuery<IncomeCategory[]>({
     queryKey: ["/api/admin/income-categories", tenantId],
@@ -178,6 +204,7 @@ export default function AdminIncome() {
       return res.json();
     },
     onSuccess: () => {
+      setIncomeOffset(0);
       queryClient.invalidateQueries({ queryKey: ["/api/admin/income"] });
       setCreateForm({ campusId: "__corporate__", categoryId: "", amount: "", incomeDate: new Date(), particulars: "", incomeType: "other" });
       setActiveTab("list");
@@ -196,6 +223,7 @@ export default function AdminIncome() {
       return res.json();
     },
     onSuccess: () => {
+      setIncomeOffset(0);
       queryClient.invalidateQueries({ queryKey: ["/api/admin/income"] });
       setEditIncomeDialog(null);
       toast({ title: "Income updated" });
@@ -478,7 +506,7 @@ export default function AdminIncome() {
                 </div>
 
                 <p className="text-sm text-muted-foreground">
-                  Total: {incomeList.length} records, ₹ {totalIncome.toLocaleString("en-IN")}
+                  Total: {incomeList.length}{incomeHasMore ? ` of ${incomeTotal}` : ""} records, ₹ {totalIncome.toLocaleString("en-IN")}
                 </p>
 
                 {isLoading ? (
@@ -537,6 +565,18 @@ export default function AdminIncome() {
                       ))}
                     </TableBody>
                   </Table>
+                )}
+
+                {incomeHasMore && (
+                  <div className="flex justify-center pt-4">
+                    <Button
+                      variant="outline"
+                      onClick={() => setIncomeOffset((o) => o + LIST_PAGE_SIZE)}
+                      disabled={isLoading}
+                    >
+                      {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : `Load more (${incomeList.length} of ${incomeTotal} shown)`}
+                    </Button>
+                  </div>
                 )}
 
                 {!isLoading && incomeList.length === 0 && (
