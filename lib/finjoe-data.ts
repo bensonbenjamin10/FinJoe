@@ -1022,6 +1022,9 @@ export function advanceRecurringNextRun(
 
 export type FinJoeData = ReturnType<typeof createFinJoeData>;
 
+/** Max expenses to create per template per run (catch-up for missed cron runs) */
+const MAX_CATCH_UP_PER_TEMPLATE = 12;
+
 /** Run recurring expense generation for all tenants. Call from scheduled job. */
 export async function generateExpensesFromTemplates(
   db: FinJoeDb,
@@ -1047,52 +1050,77 @@ export async function generateExpensesFromTemplates(
         const frequency = tpl.frequency as "monthly" | "weekly" | "quarterly";
         const dayOfMonth = tpl.dayOfMonth as number | null;
         const dayOfWeek = tpl.dayOfWeek as number | null;
-        const nextRunStr = tpl.nextRunDate instanceof Date ? tpl.nextRunDate.toISOString().slice(0, 10) : String(tpl.nextRunDate).slice(0, 10);
+        let nextRunStr = tpl.nextRunDate instanceof Date ? tpl.nextRunDate.toISOString().slice(0, 10) : String(tpl.nextRunDate).slice(0, 10);
 
-        // Skip if we already created an expense for this template+date (e.g. cron ran twice)
-        const [existingExpense] = await db
-          .select({ id: expenses.id })
-          .from(expenses)
-          .where(
-            and(
-              eq(expenses.tenantId, tenantId),
-              eq(expenses.recurringTemplateId, templateId),
-              sql`${expenses.expenseDate}::date = ${nextRunStr}::date`
-            )
-          )
+        // Validate category and cost center exist (avoid FK violation if deleted)
+        const [catExists] = await db
+          .select({ id: expenseCategories.id })
+          .from(expenseCategories)
+          .where(and(eq(expenseCategories.id, categoryId), or(eq(expenseCategories.tenantId, tenantId), isNull(expenseCategories.tenantId)), eq(expenseCategories.isActive, true)))
           .limit(1);
-        if (existingExpense) {
-          const nextRun = advanceRecurringNextRun(nextRunStr, frequency, dayOfMonth ?? undefined, dayOfWeek ?? undefined);
-          if (nextRun) {
-            await db
-              .update(recurringExpenseTemplates)
-              .set({ nextRunDate: new Date(nextRun), updatedAt: new Date() })
-              .where(eq(recurringExpenseTemplates.id, templateId));
-          }
+        if (!catExists) {
+          errors.push(`Template ${templateId}: category ${categoryId} not found or inactive`);
           continue;
         }
-
-        const expense = await finJoeData.createExpense({
-          tenantId,
-          costCenterId,
-          categoryId,
-          amount,
-          expenseDate: nextRunStr,
-          description,
-          vendorName,
-          source: "recurring_template",
-          recurringTemplateId: templateId,
-        });
-
-        if (expense?.id) {
-          generated++;
-          const nextRun = advanceRecurringNextRun(nextRunStr, frequency, dayOfMonth ?? undefined, dayOfWeek ?? undefined);
-          if (nextRun) {
-            await db
-              .update(recurringExpenseTemplates)
-              .set({ nextRunDate: new Date(nextRun), updatedAt: new Date() })
-              .where(eq(recurringExpenseTemplates.id, templateId));
+        if (costCenterId) {
+          const [ccExists] = await db
+            .select({ id: costCenters.id })
+            .from(costCenters)
+            .where(and(eq(costCenters.id, costCenterId), eq(costCenters.tenantId, tenantId), eq(costCenters.isActive, true)))
+            .limit(1);
+          if (!ccExists) {
+            errors.push(`Template ${templateId}: cost center ${costCenterId} not found or inactive`);
+            continue;
           }
+        }
+
+        // Catch-up: create expenses for all missed dates (nextRunDate <= today), up to MAX_CATCH_UP_PER_TEMPLATE
+        let createdThisTemplate = 0;
+        while (nextRunStr <= today && createdThisTemplate < MAX_CATCH_UP_PER_TEMPLATE) {
+          const [existingExpense] = await db
+            .select({ id: expenses.id })
+            .from(expenses)
+            .where(
+              and(
+                eq(expenses.tenantId, tenantId),
+                eq(expenses.recurringTemplateId, templateId),
+                sql`${expenses.expenseDate}::date = ${nextRunStr}::date`
+              )
+            )
+            .limit(1);
+          if (existingExpense) {
+            const nextRun = advanceRecurringNextRun(nextRunStr, frequency, dayOfMonth ?? undefined, dayOfWeek ?? undefined);
+            if (!nextRun) break;
+            nextRunStr = nextRun;
+            continue;
+          }
+
+          const expense = await finJoeData.createExpense({
+            tenantId,
+            costCenterId,
+            categoryId,
+            amount,
+            expenseDate: nextRunStr,
+            description,
+            vendorName,
+            source: "recurring_template",
+            recurringTemplateId: templateId,
+          });
+
+          if (expense?.id) {
+            generated++;
+            createdThisTemplate++;
+          }
+          const nextRun = advanceRecurringNextRun(nextRunStr, frequency, dayOfMonth ?? undefined, dayOfWeek ?? undefined);
+          if (!nextRun) break;
+          nextRunStr = nextRun;
+        }
+
+        if (nextRunStr) {
+          await db
+            .update(recurringExpenseTemplates)
+            .set({ nextRunDate: new Date(nextRunStr), updatedAt: new Date() })
+            .where(eq(recurringExpenseTemplates.id, templateId));
         }
       } catch (err) {
         errors.push(`Template ${tpl.id}: ${err instanceof Error ? err.message : String(err)}`);

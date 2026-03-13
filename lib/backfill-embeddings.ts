@@ -12,22 +12,39 @@ export type BackfillPool = {
 
 const BATCH_SIZE = 15;
 const DELAY_MS = 200;
+/** Max expenses to process per run (cron/startup). Prevents HTTP timeout. Use env for larger manual runs. */
+const DEFAULT_MAX_PER_RUN = 500;
 
 export interface BackfillResult {
   processed: number;
   errors: number;
   total: number;
   skipped: boolean; // true if no GEMINI_API_KEY or no expenses to process
+  remaining?: number; // approximate count still left (when limited by maxPerRun)
+}
+
+export interface BackfillOptions {
+  /** Max expenses to process this run. Default from BACKFILL_EMBEDDINGS_MAX_PER_RUN env or 500. */
+  maxPerRun?: number;
 }
 
 /**
  * Run embeddings backfill. Processes expenses where embedding IS NULL.
  * Returns early if GEMINI_API_KEY is not set.
+ * Respects maxPerRun to avoid timeout on large backfills (cron/startup).
  */
-export async function runBackfillEmbeddings(pool: BackfillPool): Promise<BackfillResult> {
+export async function runBackfillEmbeddings(
+  pool: BackfillPool,
+  options?: BackfillOptions
+): Promise<BackfillResult> {
   if (!process.env.GEMINI_API_KEY) {
     return { processed: 0, errors: 0, total: 0, skipped: true };
   }
+
+  const maxPerRun =
+    options?.maxPerRun ??
+    (parseInt(process.env.BACKFILL_EMBEDDINGS_MAX_PER_RUN || "", 10) || DEFAULT_MAX_PER_RUN);
+  const limit = maxPerRun === 0 ? Infinity : maxPerRun;
 
   const countResult = await pool.query(
     "SELECT COUNT(*)::int as c FROM expenses WHERE embedding IS NULL"
@@ -41,19 +58,20 @@ export async function runBackfillEmbeddings(pool: BackfillPool): Promise<Backfil
   let processed = 0;
   let errors = 0;
 
-  while (true) {
+  while (processed + errors < limit) {
     const batch = await pool.query(
       `SELECT e.id, e.tenant_id, e.vendor_name, e.description, e.particulars, e.amount, e.invoice_number, ec.name as category_name
        FROM expenses e
        LEFT JOIN expense_categories ec ON e.category_id = ec.id
        WHERE e.embedding IS NULL
        LIMIT $1`,
-      [BATCH_SIZE]
+      [Math.min(BATCH_SIZE, limit === Infinity ? BATCH_SIZE : limit - processed - errors)]
     );
 
     if (batch.rows.length === 0) break;
 
     for (const row of batch.rows) {
+      if (processed + errors >= limit) break;
       try {
         const embedding = await embedExpenseText({
           vendorName: row.vendor_name as string | null,
@@ -84,5 +102,19 @@ export async function runBackfillEmbeddings(pool: BackfillPool): Promise<Backfil
     }
   }
 
-  return { processed, errors, total, skipped: false };
+  // Count how many still need embedding (for incremental runs)
+  let remaining: number | undefined;
+  if (processed + errors > 0) {
+    const remResult = await pool.query(
+      "SELECT COUNT(*)::int as c FROM expenses WHERE embedding IS NULL"
+    );
+    remaining = (remResult.rows[0]?.c as number) ?? 0;
+  }
+  return {
+    processed,
+    errors,
+    total,
+    skipped: false,
+    ...(remaining !== undefined && remaining > 0 && { remaining }),
+  };
 }

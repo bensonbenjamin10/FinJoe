@@ -37,32 +37,35 @@ if (!res.ok || data.error) {
 
 ---
 
-## Gaps (Lower Priority)
+## Gaps (Fixed)
 
 ### Backfill & embeddings
-| Gap | Impact | Mitigation |
-|-----|--------|------------|
-| Large backfill can timeout | Cron HTTP request may time out with 10k+ expenses | Run initial backfill manually: `npm run backfill:embeddings`. Cron/startup handles incremental. |
-| No per-run limit | Single run processes all NULL embeddings | Acceptable; skip when complete. For very large DBs, consider adding `LIMIT` per run. |
-| embedExpenseText null not logged | Silent API failures | Fix #1 above. |
+| Gap | Fix |
+|-----|-----|
+| Large backfill can timeout | Added `maxPerRun` (default 500 via env `BACKFILL_EMBEDDINGS_MAX_PER_RUN`). Cron/startup process up to 500 per run. Manual script uses no limit. |
+| embedExpenseText null not logged | Fixed: increment `errors` when embedding is null. |
 
 ### Cron
-| Gap | Impact | Mitigation |
-|-----|--------|------------|
-| FINJOE_WORKER_URL must be reachable | Cron service calls worker over HTTP | Set to worker's public URL (e.g. Railway domain). Cron and worker must be on same network or public. |
-| Non-JSON 200 response | Wrong success reporting | Fix #2 above. |
+| Gap | Fix |
+|-----|-----|
+| FINJOE_WORKER_URL must be reachable | Added pre-check: fetch `/health` before running jobs. Exits immediately with clear error if worker unreachable. |
+| Non-JSON 200 response | Fixed: treat `data.error` as failure. |
 
-### Recurring expenses (from RECURRING_EXPENSES_REVIEW.md)
-| Gap | Impact |
-|-----|--------|
-| Category/cost center deleted | FK violation on expense create |
-| Timezone | All dates UTC; no tenant-specific TZ |
-| Catch-up for missed runs | One run per template per cron; no backfill of missed days |
+### Recurring expenses
+| Gap | Fix |
+|-----|-----|
+| Category/cost center deleted | Validate category and cost center exist (and are active, tenant-scoped) before create. Skip with clear error. |
+| Catch-up for missed runs | Create expenses for all missed dates (nextRunDate <= today), up to 12 per template per run. |
 
 ### Migration 021
+| Gap | Fix |
+|-----|-----|
+| CREATE EXTENSION vector | Added comment in migration: Neon/Supabase support it; some Postgres need superuser. |
+
+### Remaining (Lower Priority)
 | Gap | Impact |
 |-----|--------|
-| CREATE EXTENSION vector | Requires superuser on some Postgres. Neon supports it. |
+| Timezone | All dates UTC; no tenant-specific TZ. Would need tenant config. |
 
 ---
 

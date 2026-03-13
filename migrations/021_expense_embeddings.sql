@@ -1,5 +1,9 @@
 -- RAG: pgvector extension and expense embeddings for semantic search
 -- Run via: psql $DATABASE_URL -f migrations/021_expense_embeddings.sql
+--
+-- Note: CREATE EXTENSION vector requires superuser on some Postgres instances.
+-- Neon, Supabase, and most managed Postgres support it. If it fails, ask your
+-- provider to enable the pgvector extension.
 
 CREATE EXTENSION IF NOT EXISTS vector;
 

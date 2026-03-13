@@ -31,7 +31,8 @@ if (!GEMINI_API_KEY) {
 const pool = new Pool({ connectionString: DATABASE_URL });
 
 async function main() {
-  const result = await runBackfillEmbeddings(pool);
+  // Manual run: no limit (or use BACKFILL_EMBEDDINGS_MAX_PER_RUN env for partial runs)
+  const result = await runBackfillEmbeddings(pool, { maxPerRun: 0 }); // 0 = no limit
   await pool.end();
 
   if (result.skipped) {
@@ -42,7 +43,8 @@ async function main() {
     console.log("No expenses need embedding. Done.");
     return;
   }
-  console.log(`Done. Embedded ${result.processed} expenses, ${result.errors} errors.`);
+  const remaining = result.remaining ?? 0;
+  console.log(`Done. Embedded ${result.processed} expenses, ${result.errors} errors.${remaining > 0 ? ` (${remaining} remaining)` : ""}`);
 }
 
 main().catch((err) => {

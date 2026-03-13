@@ -22,6 +22,25 @@ if (!CRON_SECRET) {
 const base = WORKER_URL.replace(/\/$/, "");
 let hadError = false;
 
+// 0. Pre-check: verify worker is reachable
+console.log("Checking worker reachability...");
+try {
+  const healthRes = await fetch(`${base}/health`);
+  if (!healthRes.ok) {
+    console.error("Worker health check failed:", healthRes.status, healthRes.statusText);
+    process.exit(1);
+  }
+  const health = await healthRes.json().catch(() => ({}));
+  if (health?.status !== "ok") {
+    console.error("Worker returned unexpected health:", health);
+    process.exit(1);
+  }
+  console.log("Worker OK");
+} catch (err) {
+  console.error("Cannot reach worker at", base, "-", err.message);
+  process.exit(1);
+}
+
 // 1. Recurring expenses (daily)
 console.log("Running recurring expenses...");
 try {
@@ -52,7 +71,7 @@ try {
     if (data.skipped) {
       console.log("Backfill embeddings skipped (no GEMINI_API_KEY or no expenses to process)");
     } else if (data.processed > 0) {
-      console.log("Backfill embeddings OK:", { processed: data.processed, errors: data.errors, total: data.total });
+      console.log("Backfill embeddings OK:", { processed: data.processed, errors: data.errors, total: data.total, ...(data.remaining != null && { remaining: data.remaining }) });
     } else {
       console.log("Backfill embeddings OK (none needed)");
     }
