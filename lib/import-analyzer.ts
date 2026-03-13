@@ -117,8 +117,9 @@ function buildParticularsWithCounts(
 type PatternRule = { pattern: string; slug: string; type: "expense" | "income"; matchType: "prefix" | "substring" };
 
 function matchesRule(particulars: string, rule: PatternRule): boolean {
-  const p = particulars.toLowerCase();
   const pat = rule.pattern.toLowerCase().replace(/\*$/, "").trim();
+  if (!pat) return false; // empty pattern would match everything
+  const p = particulars.toLowerCase();
   if (rule.matchType === "prefix") return p.startsWith(pat);
   return p.includes(pat);
 }
@@ -145,8 +146,9 @@ function applyPatternRules(
   const suggestedExpenseMappings: Record<string, string> = {};
   const suggestedIncomeMappings: Record<string, string> = {};
 
-  const expRules = rules.filter((r) => r.type === "expense");
-  const incRules = rules.filter((r) => r.type === "income");
+  const validRule = (r: PatternRule) => (r.pattern?.trim() ?? "") !== "";
+  const expRules = rules.filter((r) => r.type === "expense" && validRule(r));
+  const incRules = rules.filter((r) => r.type === "income" && validRule(r));
 
   for (let i = 0; i < expenseRows.length; i++) {
     const particulars = expenseRows[i].particulars ?? "";
@@ -284,17 +286,25 @@ Return JSON with patternRules and proposedNewCategories.`;
         slug: p.slug,
         reason: p.reason,
         type: p.type,
-        pattern: p.pattern ?? "",
+        pattern: (p.pattern ?? "").trim(),
         matchType: (p.matchType ?? "substring") as "prefix" | "substring",
       }));
 
+      // Dedupe by slug (AI may return duplicates)
+      const seenSlugs = new Set<string>();
+      const deduped = withIndices.filter((p) => {
+        if (seenSlugs.has(p.slug)) return false;
+        seenSlugs.add(p.slug);
+        return true;
+      });
+
       const rowIndicesList = deriveRowIndicesForProposed(
-        withIndices.map(({ pattern, matchType, type }) => ({ pattern, matchType, type })),
+        deduped.map(({ pattern, matchType, type }) => ({ pattern, matchType, type })),
         expenseRows,
         incomeRows
       );
 
-      proposedNewCategories = withIndices.map((p, i) => ({
+      proposedNewCategories = deduped.map((p, i) => ({
         name: p.name,
         slug: p.slug,
         reason: p.reason,
