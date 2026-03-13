@@ -53,6 +53,8 @@ export async function parseExpenseQuery(
 
   const prompt = `Convert this expense question into search parameters.
 
+Today's date is ${today} (YYYY-MM-DD). Use this for all relative date calculations.
+
 User question: "${question}"
 
 Available cost centers: ${campusList || "None"}

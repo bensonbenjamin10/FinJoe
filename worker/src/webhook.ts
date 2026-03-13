@@ -195,7 +195,9 @@ export async function handleWebhook(req: Request, res: Response) {
             contact.costCenterId ?? undefined
           );
         } catch (err) {
-          logger.error("Agent processing error", { traceId, err: String(err) });
+          const errMsg = err instanceof Error ? err.message : String(err);
+          const errStack = err instanceof Error ? err.stack : undefined;
+          logger.error("Agent processing error", { traceId, err: errMsg, stack: errStack });
           reply = "Something went wrong on my side. Please try again in a moment, or send your message again.";
         }
       } else {
@@ -225,7 +227,9 @@ export async function handleWebhook(req: Request, res: Response) {
 
     res.status(200).type("text/xml").send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
   } catch (err) {
-    logger.error("Webhook error", { traceId, err: String(err) });
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const errStack = err instanceof Error ? err.stack : undefined;
+    logger.error("Webhook error", { traceId, err: errMsg, stack: errStack });
     res.status(500).send("Internal Server Error");
   }
 }

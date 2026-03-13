@@ -10,9 +10,16 @@ npm run db:migrate
 
 If the migration fails with "relation already exists", the table was created by `connect-pg-simple`'s `createTableIfMissing`—no action needed.
 
-## Weekly Insights Cron
+## Cron Jobs
 
-The worker exposes `GET /cron/weekly-insights?secret=CRON_SECRET` to send expense/income summaries to admin/finance WhatsApp contacts.
+The worker exposes two cron endpoints:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /cron/weekly-insights?secret=CRON_SECRET` | Sends expense/income summaries to admin/finance WhatsApp contacts |
+| `GET /cron/recurring-expenses?secret=CRON_SECRET` | Generates draft expenses from recurring templates (rent, salaries, etc.) |
+
+### Weekly Insights
 
 ### 1. Set environment variables
 
@@ -77,7 +84,9 @@ Or run the setup script:
 .\scripts\railway-cron-setup.ps1 # Windows PowerShell
 ```
 
-The `railway.cron.json` config sets `cronSchedule: "0 9 * * 1"` (Monday 9am UTC) and `startCommand: "node start.mjs"`. The cron service must have `MODE=cron` set so the entry point runs the weekly insights script instead of the server.
+The `railway.cron.json` config sets `cronSchedule: "5 0 * * *"` (daily at 00:05 UTC) and `startCommand: "node start.mjs"`. The cron service must have `MODE=cron` set. Each run executes `scripts/run-all-cron.mjs`, which:
+- **Recurring expenses**: runs every day (generates draft expenses from templates)
+- **Weekly insights**: runs only on Mondays (sends expense/income summary to admin/finance)
 
 #### Option B: Railway Dashboard
 
@@ -112,5 +121,18 @@ Add a **Cron Service** in your Railway project:
 With the worker running (`npm run worker:dev`):
 
 ```bash
-FINJOE_WORKER_URL=http://localhost:5001 CRON_SECRET=test npm run cron:weekly-insights
+# Run all cron jobs (recurring + weekly if Monday)
+FINJOE_WORKER_URL=http://localhost:5001 CRON_SECRET=test node scripts/run-all-cron.mjs
+
+# Or run individually:
+npm run cron:weekly-insights
+npm run cron:recurring-expenses
+```
+
+### 7. Recurring expenses (daily)
+
+The recurring expenses job generates draft expenses from templates (monthly rent, salaries, etc.). It runs automatically via the Railway cron service (daily at 00:05 UTC). To run manually:
+
+```bash
+npm run cron:recurring-expenses
 ```

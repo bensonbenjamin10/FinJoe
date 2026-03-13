@@ -1,4 +1,4 @@
-import { db } from "../db.js";
+import { db, pool } from "../db.js";
 import {
   finJoeContacts,
   finJoeMedia,
@@ -23,6 +23,7 @@ import { fetchSystemContext, fetchSystemData, resolveCategoryFromMessage, resolv
 import { validateExpenseData, validateRoleChangeData } from "../validation.js";
 import { createFinJoeData } from "../../../lib/finjoe-data.js";
 import { parseExpenseQuery } from "../../../lib/expense-query-ai.js";
+import { embedQuery } from "../../../lib/expense-embeddings.js";
 import { normalizePhone } from "../twilio.js";
 
 const HISTORY_LIMIT = 10;
@@ -323,7 +324,7 @@ async function executeFunctionCall(
   traceId?: string
 ): Promise<FunctionResult> {
   const { validCategoryIds, validCampusIds, contactPhone, contactStudentId, convContext, tenantId } = execCtx;
-  const finJoeData = createFinJoeData(db, tenantId);
+  const finJoeData = createFinJoeData(db, tenantId, pool);
 
   switch (name) {
     case "create_expense": {
@@ -779,7 +780,18 @@ async function executeFunctionCall(
       const startDate = parsed.startDate;
       const endDate = parsed.endDate;
       const campusId = parsed.campusId ?? undefined;
-      const searchResults = await finJoeData.searchExpenses(searchQuery, 20);
+      let searchResults: Array<Record<string, unknown>> = [];
+      const queryEmbedding = await embedQuery(question);
+      if (queryEmbedding) {
+        searchResults = await finJoeData.searchExpensesByEmbedding(queryEmbedding, 20, {
+          startDate,
+          endDate,
+          campusId: campusId ?? null,
+        });
+      }
+      if (searchResults.length === 0) {
+        searchResults = await finJoeData.searchExpenses(searchQuery, 20);
+      }
       const listResults = await finJoeData.listExpenses({
         startDate,
         endDate,
@@ -919,6 +931,90 @@ async function executeFunctionCall(
       const result = await finJoeData.recordExpensePayout(expenseId, payoutMethod, payoutRef);
       if (!result) return { success: false, error: `Could not record payout for expense #${expenseId}. It may not be approved.` };
       return { success: true, data: { expenseId, paid: true, payoutMethod, payoutRef } };
+    }
+
+    case "create_recurring_template": {
+      if (execCtx.contactRole !== "admin" && execCtx.contactRole !== "finance") {
+        return { success: false, error: "Only admin or finance can create recurring templates." };
+      }
+      const amountVal = typeof args.amount === "number" ? Math.round(args.amount) : parseAmount(args.amount);
+      const amount = amountVal ?? 0;
+      if (amount <= 0) return { success: false, error: "Amount must be a positive number." };
+      let categoryId = String(args.categoryId ?? "").trim();
+      let campusId = args.campusId ? String(args.campusId) : null;
+      if (campusId === "null" || campusId === "__corporate__" || campusId === "") campusId = null;
+      if (categoryId && !validCategoryIds.includes(categoryId)) {
+        const resolved = resolveCategoryFromMessage(categoryId, execCtx.categories);
+        if (resolved) categoryId = resolved;
+      }
+      if (campusId && !validCampusIds.includes(campusId)) {
+        const resolved = resolveCampusFromMessage(campusId, execCtx.campuses);
+        if (resolved) campusId = resolved;
+      }
+      const frequency = String(args.frequency ?? "monthly").toLowerCase() as "monthly" | "weekly" | "quarterly";
+      if (!["monthly", "weekly", "quarterly"].includes(frequency)) {
+        return { success: false, error: "Frequency must be monthly, weekly, or quarterly." };
+      }
+      const startDate = String(args.startDate ?? new Date().toISOString().slice(0, 10));
+      const dayOfMonth = args.dayOfMonth != null ? Math.min(31, Math.max(1, Number(args.dayOfMonth))) : undefined;
+      const dayOfWeek = args.dayOfWeek != null ? Math.min(6, Math.max(0, Number(args.dayOfWeek))) : undefined;
+      const template = await finJoeData.createRecurringTemplate({
+        tenantId,
+        costCenterId: campusId,
+        categoryId: categoryId || validCategoryIds[0] || "",
+        amount,
+        description: args.description ? String(args.description) : null,
+        vendorName: args.vendorName ? String(args.vendorName) : null,
+        frequency,
+        dayOfMonth,
+        dayOfWeek,
+        startDate,
+        endDate: args.endDate ? String(args.endDate) : null,
+      });
+      if (!template?.id) return { success: false, error: USER_FACING_ERROR };
+      return { success: true, data: { templateId: template.id, amount, frequency, startDate } };
+    }
+
+    case "list_recurring_templates": {
+      if (execCtx.contactRole !== "admin" && execCtx.contactRole !== "finance") {
+        return { success: false, error: "Only admin or finance can list recurring templates." };
+      }
+      const isActive = args.isActive !== undefined ? Boolean(args.isActive) : undefined;
+      const rows = await finJoeData.listRecurringTemplates({ isActive });
+      return { success: true, data: { templates: rows } };
+    }
+
+    case "update_recurring_template": {
+      if (execCtx.contactRole !== "admin" && execCtx.contactRole !== "finance") {
+        return { success: false, error: "Only admin or finance can update recurring templates." };
+      }
+      const templateId = String(args.templateId ?? "");
+      const updates: Record<string, unknown> = {};
+      if (args.amount !== undefined) updates.amount = Math.round(Number(args.amount));
+      if (args.description !== undefined) updates.description = args.description ? String(args.description) : null;
+      if (args.vendorName !== undefined) updates.vendorName = args.vendorName ? String(args.vendorName) : null;
+      if (args.frequency !== undefined) {
+        const freq = String(args.frequency).toLowerCase();
+        if (["monthly", "weekly", "quarterly"].includes(freq)) updates.frequency = freq;
+      }
+      if (args.dayOfMonth !== undefined) updates.dayOfMonth = Math.min(31, Math.max(1, Number(args.dayOfMonth)));
+      if (args.dayOfWeek !== undefined) updates.dayOfWeek = Math.min(6, Math.max(0, Number(args.dayOfWeek)));
+      if (args.endDate !== undefined) updates.endDate = args.endDate ? String(args.endDate) : null;
+      if (args.isActive !== undefined) updates.isActive = Boolean(args.isActive);
+      if (Object.keys(updates).length === 0) return { success: false, error: "No fields to update. Specify at least one." };
+      const result = await finJoeData.updateRecurringTemplate(templateId, updates as any);
+      if (!result) return { success: false, error: `Could not update template #${templateId}. It may not exist.` };
+      return { success: true, data: { templateId, updated: true } };
+    }
+
+    case "delete_recurring_template": {
+      if (execCtx.contactRole !== "admin" && execCtx.contactRole !== "finance") {
+        return { success: false, error: "Only admin or finance can delete recurring templates." };
+      }
+      const templateId = String(args.templateId ?? "");
+      const deleted = await finJoeData.deleteRecurringTemplate(templateId);
+      if (!deleted) return { success: false, error: `Could not delete template #${templateId}. It may not exist.` };
+      return { success: true, data: { templateId, deleted: true } };
     }
 
     default:

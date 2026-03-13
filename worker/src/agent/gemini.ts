@@ -77,6 +77,9 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 === BULK TABLE EXPENSES ===
 - When EXTRACTED BULK EXPENSES (from table image or CSV) is provided, you MUST call bulk_create_expenses with that data. Do not ask for confirmation unless the user explicitly asks. Map cost center strings (HO, Chennai, etc.) to campusId. Max 25 per call.
 
+=== RECURRING EXPENSES ===
+- Admin/finance can create recurring templates for monthly rent, salaries, utilities, etc. Use create_recurring_template with amount, categoryId, frequency (monthly/weekly/quarterly), startDate, and optionally dayOfMonth (1-31) or dayOfWeek (0-6). Draft expenses are auto-generated on schedule. Use list_recurring_templates when user asks about recurring or scheduled expenses.
+
 === EDGE CASES ===
 - Multiple images in one message: process each; if they're for different expenses, handle one at a time or ask which to process first.
 - User corrects a value: update your understanding and use the corrected value. Call store_pending_expense with the fix if you had stored partial data.
@@ -437,12 +440,73 @@ const FINJOE_FUNCTION_DECLARATIONS = [
       required: ["expenseId"],
     },
   },
+  // Recurring expense templates (admin, finance only)
+  {
+    name: "create_recurring_template",
+    description: "Create a recurring expense template (e.g. monthly rent, salaries, utilities). Draft expenses are auto-generated on schedule. Use when user wants to set up recurring expenses like rent or salaries.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        amount: { type: Type.NUMBER, description: "Amount in rupees (integer)" },
+        categoryId: { type: Type.STRING, description: "Expense category ID or slug" },
+        campusId: { type: Type.STRING, description: "Cost center ID, slug, or null for Corporate Office" },
+        description: { type: Type.STRING, description: "Description (e.g. 'Office Rent - March')" },
+        vendorName: { type: Type.STRING, description: "Vendor name (optional)" },
+        frequency: { type: Type.STRING, description: "monthly, weekly, or quarterly" },
+        dayOfMonth: { type: Type.NUMBER, description: "Day of month 1-31 for monthly/quarterly (e.g. 1 = 1st)" },
+        dayOfWeek: { type: Type.NUMBER, description: "Day of week 0-6 for weekly (0=Sun, 1=Mon)" },
+        startDate: { type: Type.STRING, description: "YYYY-MM-DD when to start generating" },
+        endDate: { type: Type.STRING, description: "YYYY-MM-DD when to stop (optional)" },
+      },
+      required: ["amount", "categoryId", "frequency", "startDate"],
+    },
+  },
+  {
+    name: "list_recurring_templates",
+    description: "List recurring expense templates for the tenant. Use when user asks about recurring expenses, templates, or scheduled expenses.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        isActive: { type: Type.BOOLEAN, description: "Filter by active only (optional)" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "update_recurring_template",
+    description: "Update a recurring expense template (amount, frequency, isActive, etc.).",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        templateId: { type: Type.STRING, description: "ID of the template to update" },
+        amount: { type: Type.NUMBER, description: "New amount (optional)" },
+        description: { type: Type.STRING, description: "New description (optional)" },
+        vendorName: { type: Type.STRING, description: "New vendor name (optional)" },
+        frequency: { type: Type.STRING, description: "monthly, weekly, or quarterly (optional)" },
+        dayOfMonth: { type: Type.NUMBER, description: "Day of month (optional)" },
+        dayOfWeek: { type: Type.NUMBER, description: "Day of week (optional)" },
+        endDate: { type: Type.STRING, description: "YYYY-MM-DD when to stop (optional)" },
+        isActive: { type: Type.BOOLEAN, description: "Enable or disable template (optional)" },
+      },
+      required: ["templateId"],
+    },
+  },
+  {
+    name: "delete_recurring_template",
+    description: "Delete a recurring expense template. Use when user wants to remove a recurring expense setup.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: { templateId: { type: Type.STRING, description: "ID of the template to delete" } },
+      required: ["templateId"],
+    },
+  },
 ];
 
 const BASE_TOOLS = ["create_expense", "create_income", "create_role_change_request", "store_pending_expense", "store_pending_role_change"];
 const READ_TOOLS = ["list_expenses", "get_expense", "submit_expense", "update_expense", "delete_expense", "list_pending_approvals", "list_role_change_requests", "search_expenses", "semantic_search_expenses", "bulk_create_expenses"];
 const ANALYTICS_TOOLS = ["expense_summary", "pending_workload", "petty_cash_summary", "dashboard_summary"];
 const APPROVE_TOOLS = ["approve_expense", "reject_expense", "approve_role_request", "reject_role_request", "record_payout"];
+const RECURRING_TOOLS = ["create_recurring_template", "list_recurring_templates", "update_recurring_template", "delete_recurring_template"];
 
 const ROLES_WITH_READ = ["admin", "finance", "campus_coordinator", "head_office"];
 const ROLES_WITH_ANALYTICS = ["admin", "finance"];
@@ -452,7 +516,10 @@ export function getFunctionDeclarationsForRole(contactRole: string): FunctionDec
   const effectiveRole = contactRole === "coordinator" ? "campus_coordinator" : contactRole;
   const allowed = new Set(BASE_TOOLS);
   if (ROLES_WITH_READ.includes(effectiveRole)) READ_TOOLS.forEach((t) => allowed.add(t));
-  if (ROLES_WITH_ANALYTICS.includes(effectiveRole)) ANALYTICS_TOOLS.forEach((t) => allowed.add(t));
+  if (ROLES_WITH_ANALYTICS.includes(effectiveRole)) {
+    ANALYTICS_TOOLS.forEach((t) => allowed.add(t));
+    RECURRING_TOOLS.forEach((t) => allowed.add(t));
+  }
   if (ROLES_WITH_APPROVE.includes(effectiveRole)) APPROVE_TOOLS.forEach((t) => allowed.add(t));
   return FINJOE_FUNCTION_DECLARATIONS.filter((f) => allowed.has(f.name)) as unknown as FunctionDeclaration[];
 }
@@ -569,7 +636,8 @@ export async function agentTurnWithFunctionResponse(
   const categoryList = categories.map((c) => `${c.name} (id: ${c.id})`).join(", ");
   const incomeCategoryList = (input.incomeCategories ?? []).map((c) => `${c.name} (id: ${c.id})`).join(", ");
   const ccLabel = costCenterLabel.endsWith("s") ? costCenterLabel : `${costCenterLabel}s`;
-  let contextBlock = `${systemContext}\n\nTerminology: Use "${costCenterLabel}" (plural "${ccLabel}") instead of "campus". Parameter campusId maps to cost center. Corporate Office = HQ/central.\n\nAvailable ${ccLabel} with IDs: ${campusList}\nExpense categories with IDs: ${categoryList}${incomeCategoryList ? `\nIncome categories with IDs (for create_income): ${incomeCategoryList}` : ""}`;
+  const currentDate = new Date().toISOString().slice(0, 10);
+  let contextBlock = `${systemContext}\n\nCurrent date: ${currentDate} (use for "today", invoiceDate, incomeDate, and relative phrases like "last month").\n\nTerminology: Use "${costCenterLabel}" (plural "${ccLabel}") instead of "campus". Parameter campusId maps to cost center. Corporate Office = HQ/central.\n\nAvailable ${ccLabel} with IDs: ${campusList}\nExpense categories with IDs: ${categoryList}${incomeCategoryList ? `\nIncome categories with IDs (for create_income): ${incomeCategoryList}` : ""}`;
   if (pendingExpense) {
     contextBlock += `\n\nPENDING EXPENSE—you have this data: ${JSON.stringify(pendingExpense.extracted)}. STILL MISSING: ${pendingExpense.missingFields.join(", ")}.`;
   }
@@ -668,8 +736,11 @@ export async function agentTurn(input: AgentTurnInput): Promise<AgentTurnResult>
   const categoryList = categories.map((c) => `${c.name} (id: ${c.id})`).join(", ");
   const incomeCategoryList = (input.incomeCategories ?? []).map((c) => `${c.name} (id: ${c.id})`).join(", ");
   const ccLabel = costCenterLabel.endsWith("s") ? costCenterLabel : `${costCenterLabel}s`;
+  const currentDate = new Date().toISOString().slice(0, 10);
 
   let contextBlock = `${systemContext}
+
+Current date: ${currentDate} (use for "today", invoiceDate, incomeDate, and relative phrases like "last month").
 
 Terminology: Use "${costCenterLabel}" (plural "${ccLabel}") instead of "campus". Parameter campusId maps to cost center. Corporate Office = HQ/central.
 

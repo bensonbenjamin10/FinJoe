@@ -129,6 +129,30 @@ export const expenses = pgTable("expenses", {
   gstin: text("gstin"),
   taxType: text("tax_type"),
   voucherNumber: text("voucher_number"),
+  recurringTemplateId: varchar("recurring_template_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Recurring expense templates (monthly rent, salaries, etc.)
+export const recurringExpenseTemplates = pgTable("recurring_expense_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  costCenterId: varchar("cost_center_id").references(() => costCenters.id),
+  categoryId: varchar("category_id").references(() => expenseCategories.id).notNull(),
+  amount: integer("amount").notNull(),
+  description: text("description"),
+  vendorName: text("vendor_name"),
+  frequency: text("frequency").notNull(),
+  dayOfMonth: integer("day_of_month"),
+  dayOfWeek: integer("day_of_week"),
+  startDate: timestamp("start_date").notNull(),
+  endDate: timestamp("end_date"),
+  isActive: boolean("is_active").notNull().default(true),
+  nextRunDate: timestamp("next_run_date").notNull(),
+  createdById: varchar("created_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -353,7 +377,15 @@ export const expensesRelations = relations(expenses, ({ one, many }) => ({
   category: one(expenseCategories, { fields: [expenses.categoryId], references: [expenseCategories.id] }),
   submittedBy: one(users, { fields: [expenses.submittedById], references: [users.id] }),
   approvedBy: one(users, { fields: [expenses.approvedById], references: [users.id] }),
+  recurringTemplate: one(recurringExpenseTemplates, { fields: [expenses.recurringTemplateId], references: [recurringExpenseTemplates.id] }),
   finJoeTasks: many(finJoeTasks),
+}));
+
+export const recurringExpenseTemplatesRelations = relations(recurringExpenseTemplates, ({ one, many }) => ({
+  tenant: one(tenants, { fields: [recurringExpenseTemplates.tenantId], references: [tenants.id] }),
+  costCenter: one(costCenters, { fields: [recurringExpenseTemplates.costCenterId], references: [costCenters.id] }),
+  category: one(expenseCategories, { fields: [recurringExpenseTemplates.categoryId], references: [expenseCategories.id] }),
+  createdBy: one(users, { fields: [recurringExpenseTemplates.createdById], references: [users.id] }),
 }));
 
 export const finJoeContactsRelations = relations(finJoeContacts, ({ one, many }) => ({
@@ -406,6 +438,8 @@ export type ExpenseCategory = typeof expenseCategories.$inferSelect;
 export type InsertExpenseCategory = typeof expenseCategories.$inferInsert;
 export type Expense = typeof expenses.$inferSelect;
 export type InsertExpense = typeof expenses.$inferInsert;
+export type RecurringExpenseTemplate = typeof recurringExpenseTemplates.$inferSelect;
+export type InsertRecurringExpenseTemplate = typeof recurringExpenseTemplates.$inferInsert;
 
 export type ExpenseWithDetails = Expense & {
   costCenterName?: string | null;

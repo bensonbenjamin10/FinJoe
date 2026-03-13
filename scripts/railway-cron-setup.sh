@@ -1,5 +1,5 @@
 #!/bin/bash
-# Railway CLI: Set up weekly insights cron service
+# Railway CLI: Set up cron service (recurring expenses daily, weekly insights on Mondays)
 # Run from repo root: ./scripts/railway-cron-setup.sh
 #
 # Prerequisites:

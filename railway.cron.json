@@ -6,6 +6,6 @@
   },
   "deploy": {
     "startCommand": "node start.mjs",
-    "cronSchedule": "0 9 * * 1"
+    "cronSchedule": "5 0 * * *"
   }
 }

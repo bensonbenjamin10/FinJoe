@@ -2,6 +2,8 @@ import "dotenv/config";
 import express from "express";
 import { handleWebhook } from "./webhook.js";
 import { runWeeklyInsights } from "./weekly-insights.js";
+import { generateExpensesFromTemplates } from "../../lib/finjoe-data.js";
+import { db, pool } from "./db.js";
 import { logger } from "./logger.js";
 
 // Prevent unhandled rejections from crashing the process (can cause 502)
@@ -40,6 +42,22 @@ app.get("/cron/weekly-insights", async (req, res) => {
   } catch (err) {
     logger.error("Weekly insights cron error", { err: String(err) });
     res.status(500).json({ error: "Failed to run weekly insights" });
+  }
+});
+
+app.get("/cron/recurring-expenses", async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.query?.secret !== secret) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const result = await generateExpensesFromTemplates(db, today, pool);
+    res.json({ ok: true, generated: result.generated, errors: result.errors });
+  } catch (err) {
+    logger.error("Recurring expenses cron error", { err: String(err) });
+    res.status(500).json({ error: "Failed to run recurring expenses" });
   }
 });
 
