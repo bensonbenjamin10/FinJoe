@@ -61,7 +61,7 @@ export async function fetchSystemContext(tenantId: string): Promise<FetchSystemC
   };
 
   if (dataCollectionSettings.requireConfirmationBeforePost) {
-    context += "\n\nData collection: Require user confirmation before posting expense/income. When you have all required data, summarize and ask user to reply 'yes' to confirm. Only call create_expense/create_income after user confirms.";
+    context += "\n\nData collection: Require user confirmation before posting. When you have all required data, call create_expense/create_income—the system will store it and ask for confirmation. Summarize and ask user to reply 'yes'. When they confirm, call confirm_expense/confirm_income. If user says no, cancel, or never mind, do NOT call confirm_expense/confirm_income.";
   }
   if (dataCollectionSettings.requireAuditFieldsAboveAmount != null) {
     context += `\n\nAudit enforcement: For expenses above ₹${dataCollectionSettings.requireAuditFieldsAboveAmount.toLocaleString("en-IN")}, invoice number, invoice date, and vendor name are required.`;

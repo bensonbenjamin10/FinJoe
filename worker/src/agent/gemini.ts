@@ -608,6 +608,7 @@ export type AgentTurnInput = {
     campusName?: string | null;
     studentId?: string | null;
   };
+  pendingConfirmation?: { type: "expense" | "income" };
   extractedFromImage?: ExtractedExpense;
   extractedBulkFromImage?: ExtractedExpenseRow[];
   extractionFailed?: boolean;
@@ -654,6 +655,9 @@ export async function agentTurnWithFunctionResponse(
   }
   if (pendingRoleChange) {
     contextBlock += `\n\nPENDING ROLE CHANGE: ${pendingRoleChange.requestedRole}, name=${pendingRoleChange.name ?? "?"}, ${costCenterLabel.toLowerCase()}=${pendingRoleChange.campusName ?? pendingRoleChange.campusId ?? "?"}.`;
+  }
+  if (input.pendingConfirmation) {
+    contextBlock += `\n\nPENDING CONFIRMATION: ${input.pendingConfirmation.type} ready. When user says yes/confirm/ok, call confirm_${input.pendingConfirmation.type}.`;
   }
   if (extractedFromImage && extractedFromImage.amount) {
     contextBlock += `\n\nEXTRACTED FROM INVOICE IMAGE: ${JSON.stringify(extractedFromImage)}.`;
@@ -763,6 +767,9 @@ Expense categories with IDs: ${categoryList}${incomeCategoryList ? `\nIncome cat
   }
   if (pendingRoleChange) {
     contextBlock += `\n\nPENDING ROLE CHANGE: ${pendingRoleChange.requestedRole}, name=${pendingRoleChange.name ?? "?"}, ${costCenterLabel.toLowerCase()}=${pendingRoleChange.campusName ?? pendingRoleChange.campusId ?? "?"}.`;
+  }
+  if (input.pendingConfirmation) {
+    contextBlock += `\n\nPENDING CONFIRMATION: ${input.pendingConfirmation.type} ready. When user says yes/confirm/ok, call confirm_${input.pendingConfirmation.type}.`;
   }
   if (extractedFromImage && extractedFromImage.amount) {
     contextBlock += `\n\nEXTRACTED FROM INVOICE IMAGE: ${JSON.stringify(extractedFromImage)}. Use create_expense if complete, or store_pending_expense and ask for missing fields.`;

@@ -218,6 +218,7 @@ export async function processWithAgent(
         }
       : undefined,
     pendingRoleChange: convContext.pendingRoleChange,
+    pendingConfirmation: convContext.pendingConfirmation ? { type: convContext.pendingConfirmation.type } : undefined,
     extractedFromImage,
     extractedBulkFromImage,
     extractionFailed,
@@ -303,6 +304,7 @@ export async function processWithAgent(
           ? { extracted: updatedConvContext.pendingExpense.extracted, missingFields: updatedConvContext.pendingExpense.missingFields }
           : undefined,
         pendingRoleChange: updatedConvContext.pendingRoleChange,
+        pendingConfirmation: updatedConvContext.pendingConfirmation ? { type: updatedConvContext.pendingConfirmation.type } : undefined,
         extractedFromImage,
         extractedBulkFromImage,
         traceId,
@@ -450,8 +452,8 @@ async function executeFunctionCall(
         return { success: false, error: `I need: ${validation.errors.join(". ")}. Please provide the missing information.` };
       }
 
-      // Require confirmation before posting: store and ask user to confirm
-      if (requireConfirmation && !convContext.pendingConfirmation) {
+      // Require confirmation before posting: store/update pending and ask user to confirm (handles user corrections too)
+      if (requireConfirmation) {
         const campusName = campusId ? execCtx.campuses.find((c) => c.id === campusId)?.name ?? campusId : "Corporate Office";
         const summary = `₹${expenseData.amount.toLocaleString("en-IN")} for ${campusName}${expenseData.vendorName ? ` (${expenseData.vendorName})` : ""}`;
         await setConversationContext(execCtx.conversationId, {
@@ -554,8 +556,8 @@ async function executeFunctionCall(
         incomeDate,
       };
 
-      // Require confirmation before posting: store and ask user to confirm
-      if (requireConfirmation && !convContext.pendingConfirmation) {
+      // Require confirmation before posting: store/update pending and ask user to confirm (handles user corrections too)
+      if (requireConfirmation) {
         const campusName = campusId ? execCtx.campuses.find((c) => c.id === campusId)?.name ?? campusId : "Corporate Office";
         const catName = incCats.find((c) => c.id === finalCategoryId)?.name ?? "Income";
         const summary = `₹${amount.toLocaleString("en-IN")} ${catName} for ${campusName}${particulars ? ` (${particulars})` : ""}`;
