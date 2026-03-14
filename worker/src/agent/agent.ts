@@ -23,6 +23,7 @@ import { fetchSystemContext, fetchSystemData, resolveCategoryFromMessage, resolv
 import { validateExpenseData, validateRoleChangeData } from "../validation.js";
 import { createFinJoeData } from "../../../lib/finjoe-data.js";
 import { toShortExpenseId } from "../../../lib/expense-id.js";
+import { getMedia } from "../../../lib/media-storage.js";
 import { parseExpenseQuery, parseDateToISO } from "../../../lib/expense-query-ai.js";
 import { embedQuery } from "../../../lib/expense-embeddings.js";
 import { normalizePhone } from "../twilio.js";
@@ -150,9 +151,11 @@ export async function processWithAgent(
     const firstCsv = media.find((m) => isCsv(m.contentType));
     const firstImage = media.find((m) => isImageOrPdf(m.contentType));
 
-    if (firstCsv?.data) {
-      logger.info("Parsing expense from CSV", { ...ctx, contentType: firstCsv.contentType });
-      const rows = parseExpensesFromCsv(firstCsv.data);
+    const firstCsvBuffer = firstCsv?.data ?? (firstCsv?.storagePath ? await getMedia(firstCsv.storagePath) : null);
+    const firstImageBuffer = firstImage?.data ?? (firstImage?.storagePath ? await getMedia(firstImage.storagePath) : null);
+    if (firstCsvBuffer) {
+      logger.info("Parsing expense from CSV", { ...ctx, contentType: firstCsv!.contentType });
+      const rows = parseExpensesFromCsv(firstCsvBuffer);
       if (rows.length > 0) {
         extractedBulkFromImage = rows;
         logger.info("CSV parse result", { ...ctx, count: rows.length });
@@ -160,12 +163,12 @@ export async function processWithAgent(
         extractionFailed = true;
         logger.info("CSV parse yielded no valid rows", { ...ctx });
       }
-    } else if (firstImage?.data) {
-      logger.info("Extracting expense from media", { ...ctx, contentType: firstImage.contentType });
-      const base64 = firstImage.data.toString("base64");
+    } else if (firstImageBuffer) {
+      logger.info("Extracting expense from media", { ...ctx, contentType: firstImage!.contentType });
+      const base64 = firstImageBuffer.toString("base64");
       const extractionResult = await extractExpenseOrExpensesFromImage(
         base64,
-        firstImage.contentType,
+        firstImage!.contentType,
         messageBody,
         traceId,
         systemContext
@@ -184,6 +187,8 @@ export async function processWithAgent(
         hasAmount: extractionResult.type === "single" ? !!extractionResult.expense.amount : extractionResult.type === "bulk",
         extractedKeys: extractionResult.type === "single" ? Object.keys(extractionResult.expense ?? {}) : [],
       });
+    } else {
+      extractionFailed = true;
     }
   }
 
@@ -240,6 +245,7 @@ export async function processWithAgent(
           incomeCategories,
           campuses,
           tenantId,
+          messageId,
         },
         traceId
       );
@@ -316,6 +322,7 @@ type ExecuteContext = {
   incomeCategories: Array<{ id: string; name: string; slug: string }>;
   campuses: Array<{ id: string; name: string; slug: string }>;
   tenantId: string;
+  messageId?: string;
 };
 
 async function executeFunctionCall(
@@ -404,6 +411,9 @@ async function executeFunctionCall(
         expenseId: expense.id,
         payload: { extracted, expenseId: expense.id },
       });
+      if (execCtx.messageId) {
+        await db.update(finJoeMedia).set({ expenseId: expense.id }).where(eq(finJoeMedia.messageId, execCtx.messageId));
+      }
       await finJoeData.submitExpense(expense.id, contactStudentId);
       const categoryName = execCtx.categories.find((c) => c.id === expenseData.categoryId)?.name ?? null;
       await notifyFinanceForApproval(expense.id, extracted, tenantId, traceId, categoryName);
@@ -577,7 +587,9 @@ async function executeFunctionCall(
           return { success: false, error: USER_FACING_ERROR };
         }
       }
-
+      if (execCtx.messageId && expenseIds.length > 0) {
+        await db.update(finJoeMedia).set({ expenseId: expenseIds[0] }).where(eq(finJoeMedia.messageId, execCtx.messageId));
+      }
       return { success: true, data: { created: expenseIds.length, expenseIds } };
     }
 

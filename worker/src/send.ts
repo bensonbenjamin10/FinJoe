@@ -4,6 +4,7 @@ import { isWithin24hWindow } from "./window.js";
 import { getOrCreateConversation } from "./conversation.js";
 import { logger } from "./logger.js";
 import { db } from "./db.js";
+import { finJoeMessages } from "../../shared/schema.js";
 import { createFinJoeData } from "../../lib/finjoe-data.js";
 import { toShortExpenseId } from "../../lib/expense-id.js";
 import { getPlatformSettings } from "./platform-settings.js";
@@ -57,10 +58,28 @@ async function fetchFinJoeSettings(tenantId: string): Promise<CachedSettings | n
   }
 }
 
+/** Store outbound message for audit and proof of transactions */
+async function storeOutboundMessage(
+  conversationId: string,
+  body: string,
+  messageSid?: string | null
+): Promise<void> {
+  try {
+    await db.insert(finJoeMessages).values({
+      conversationId,
+      direction: "out",
+      body,
+      messageSid: messageSid ?? undefined,
+    });
+  } catch (err) {
+    logger.warn("Failed to store outbound message", { conversationId, err: String(err) });
+  }
+}
+
 /**
  * Send message with 24h window routing: free-form within 24h, template outside.
  * Outside 24h: try WhatsApp template, then SMS fallback, then email for critical.
- * Success = any channel delivers.
+ * Success = any channel delivers. Stores all outbound messages for audit.
  */
 export async function sendWith24hRouting(
   to: string,
@@ -70,14 +89,18 @@ export async function sendWith24hRouting(
   tenantId: string,
   options?: SendWith24hOptions
 ): Promise<boolean> {
+  const conversation = await getOrCreateConversation(to, tenantId);
   const within24h = await isWithin24hWindow(to, tenantId);
   if (within24h) {
     const result = await sendFinJoeWhatsApp(to, freeFormMessage, traceId, tenantId);
-    if (result) await getOrCreateConversation(to, tenantId);
-    if (result) return true;
+    if (result) {
+      await storeOutboundMessage(conversation.id, freeFormMessage, (result as { sid?: string })?.sid);
+      return true;
+    }
   }
 
   let delivered = false;
+  let deliveredMessageSid: string | null = null;
 
   if (!within24h) {
     if (templateConfig?.templateSid) {
@@ -90,7 +113,7 @@ export async function sendWith24hRouting(
           tenantId
         );
         if (result) {
-          await getOrCreateConversation(to, tenantId);
+          deliveredMessageSid = (result as { sid?: string })?.sid ?? null;
           delivered = true;
         }
       } catch (err) {
@@ -130,6 +153,10 @@ export async function sendWith24hRouting(
 
   if (!delivered && !within24h) {
     logger.warn("Outside 24h window - no channel delivered (template/SMS/email)", { traceId, to });
+  }
+
+  if (delivered) {
+    await storeOutboundMessage(conversation.id, freeFormMessage, deliveredMessageSid);
   }
   return delivered;
 }
@@ -187,9 +214,16 @@ export async function sendReEngagementIfNeeded(to: string, tenantId: string, tra
   const settings = await fetchFinJoeSettings(tenantId);
   const sid = settings?.finjoeReEngagementTemplateSid;
   if (!sid) return false;
+  const conversation = await getOrCreateConversation(to, tenantId);
   try {
     const result = await sendFinJoeWhatsAppTemplate(to, sid, {}, traceId, tenantId);
-    if (result) await getOrCreateConversation(to, tenantId);
+    if (result) {
+      await storeOutboundMessage(
+        conversation.id,
+        "[Re-engagement template]",
+        (result as { sid?: string })?.sid ?? undefined
+      );
+    }
     return !!result;
   } catch (err) {
     logger.error("Re-engagement template send failed", { traceId, to, err: String(err) });

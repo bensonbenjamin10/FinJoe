@@ -221,7 +221,9 @@ export const finJoeMedia = pgTable("fin_joe_media", {
     .references(() => finJoeMessages.id, { onDelete: "cascade" }),
   contentType: varchar("content_type").notNull(),
   fileName: varchar("file_name"),
-  data: bytea("data").notNull(),
+  data: bytea("data"),
+  storagePath: varchar("storage_path"),
+  expenseId: varchar("expense_id").references(() => expenses.id),
   sizeBytes: integer("size_bytes").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

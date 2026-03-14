@@ -1,7 +1,7 @@
 import express, { type Express } from "express";
 import multer from "multer";
 import passport from "passport";
-import { eq, and, desc, or, sql, inArray, isNull } from "drizzle-orm";
+import { eq, and, desc, or, sql, inArray, isNull, gte, lte } from "drizzle-orm";
 import { db } from "./db.js";
 import { parseBankStatementCsv, isValidDateString } from "../lib/bank-statement-parser.js";
 import { analyzeImportSuggestions } from "../lib/import-analyzer.js";
@@ -15,6 +15,9 @@ import {
   expenses,
   expenseCategories,
   finJoeContacts,
+  finJoeConversations,
+  finJoeMessages,
+  finJoeMedia,
   finJoeRoleChangeRequests,
   finjoeSettings,
   platformSettings,
@@ -31,6 +34,7 @@ import { getCredentialsForTenant } from "../worker/src/providers/resolver.js";
 import { getAnalytics, getPredictions } from "./analytics.js";
 import { generateAnalyticsInsights } from "../lib/analytics-insights.js";
 import { suggestReconciliationMatches } from "../lib/reconciliation-suggestions.js";
+import { getMedia } from "../lib/media-storage.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -476,6 +480,188 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("FinJoe reject error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to reject" });
+    }
+  });
+
+  // Message and media lookup APIs (proof of transactions)
+  app.get("/api/admin/conversations/:id/messages", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const { id } = req.params;
+      const limit = Math.min(parseInt(String(req.query.limit || LIST_PAGE_SIZE), 10) || LIST_PAGE_SIZE, LIST_PAGE_SIZE_MAX);
+      const offset = parseInt(String(req.query.offset || 0), 10) || 0;
+
+      const [conv] = await db
+        .select()
+        .from(finJoeConversations)
+        .where(tenantId ? and(eq(finJoeConversations.id, id), eq(finJoeConversations.tenantId, tenantId)) : eq(finJoeConversations.id, id))
+        .limit(1);
+      if (!conv) return res.status(404).json({ error: "Conversation not found" });
+
+      const msgs = await db
+        .select({
+          id: finJoeMessages.id,
+          direction: finJoeMessages.direction,
+          body: finJoeMessages.body,
+          messageSid: finJoeMessages.messageSid,
+          createdAt: finJoeMessages.createdAt,
+        })
+        .from(finJoeMessages)
+        .where(eq(finJoeMessages.conversationId, id))
+        .orderBy(desc(finJoeMessages.createdAt))
+        .limit(limit)
+        .offset(offset);
+
+      const mediaRows = await db
+        .select({
+          id: finJoeMedia.id,
+          messageId: finJoeMedia.messageId,
+          contentType: finJoeMedia.contentType,
+          fileName: finJoeMedia.fileName,
+          sizeBytes: finJoeMedia.sizeBytes,
+          expenseId: finJoeMedia.expenseId,
+          createdAt: finJoeMedia.createdAt,
+        })
+        .from(finJoeMedia)
+        .where(inArray(finJoeMedia.messageId, msgs.map((m) => m.id)));
+
+      const mediaByMessage = mediaRows.reduce((acc, m) => {
+        if (!acc[m.messageId]) acc[m.messageId] = [];
+        acc[m.messageId].push(m);
+        return acc;
+      }, {} as Record<string, typeof mediaRows>);
+
+      const messagesWithMedia = msgs.map((m) => ({
+        ...m,
+        media: mediaByMessage[m.id] ?? [],
+      }));
+
+      res.json({ conversation: conv, messages: messagesWithMedia });
+    } catch (e) {
+      logger.error("Conversation messages error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch messages" });
+    }
+  });
+
+  app.get("/api/admin/media/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const { id } = req.params;
+
+      const [media] = await db
+        .select({
+          id: finJoeMedia.id,
+          contentType: finJoeMedia.contentType,
+          storagePath: finJoeMedia.storagePath,
+          data: finJoeMedia.data,
+        })
+        .from(finJoeMedia)
+        .innerJoin(finJoeMessages, eq(finJoeMedia.messageId, finJoeMessages.id))
+        .innerJoin(finJoeConversations, eq(finJoeMessages.conversationId, finJoeConversations.id))
+        .where(
+          tenantId
+            ? and(eq(finJoeMedia.id, id), eq(finJoeConversations.tenantId, tenantId))
+            : eq(finJoeMedia.id, id)
+        )
+        .limit(1);
+
+      if (!media) return res.status(404).json({ error: "Media not found" });
+
+      let buffer: Buffer | null = null;
+      if (media.storagePath) {
+        buffer = await getMedia(media.storagePath);
+      }
+      if (!buffer && media.data) {
+        buffer = Buffer.from(media.data);
+      }
+      if (!buffer) return res.status(404).json({ error: "Media file not found" });
+
+      const contentType = media.contentType || "application/octet-stream";
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Disposition", `inline; filename="media-${id}"`);
+      res.send(buffer);
+    } catch (e) {
+      logger.error("Media download error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to download media" });
+    }
+  });
+
+  app.get("/api/admin/expenses/:id/media", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const { id } = req.params;
+
+      const [exp] = await db
+        .select({ id: expenses.id })
+        .from(expenses)
+        .where(tenantId ? and(eq(expenses.id, id), eq(expenses.tenantId, tenantId)) : eq(expenses.id, id))
+        .limit(1);
+      if (!exp) return res.status(404).json({ error: "Expense not found" });
+
+      const mediaRows = await db
+        .select({
+          id: finJoeMedia.id,
+          messageId: finJoeMedia.messageId,
+          contentType: finJoeMedia.contentType,
+          fileName: finJoeMedia.fileName,
+          sizeBytes: finJoeMedia.sizeBytes,
+          createdAt: finJoeMedia.createdAt,
+        })
+        .from(finJoeMedia)
+        .where(eq(finJoeMedia.expenseId, id))
+        .orderBy(desc(finJoeMedia.createdAt));
+
+      res.json(mediaRows);
+    } catch (e) {
+      logger.error("Expense media error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch expense media" });
+    }
+  });
+
+  app.get("/api/admin/messages/search", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req) ?? (typeof req.query.tenantId === "string" ? req.query.tenantId : null);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      if (!tenantId) return res.status(400).json({ error: "tenantId required (query param for super_admin)" });
+      const contactPhone = typeof req.query.contactPhone === "string" ? req.query.contactPhone.trim() : null;
+      const startDate = typeof req.query.startDate === "string" ? req.query.startDate : null;
+      const endDate = typeof req.query.endDate === "string" ? req.query.endDate : null;
+      const limit = Math.min(parseInt(String(req.query.limit || LIST_PAGE_SIZE), 10) || LIST_PAGE_SIZE, LIST_PAGE_SIZE_MAX);
+      const offset = parseInt(String(req.query.offset || 0), 10) || 0;
+
+      const conditions = [eq(finJoeConversations.tenantId, tenantId)];
+      if (contactPhone) conditions.push(eq(finJoeConversations.contactPhone, contactPhone));
+      if (startDate && isValidDateString(startDate)) conditions.push(gte(finJoeMessages.createdAt, new Date(startDate)));
+      if (endDate && isValidDateString(endDate)) conditions.push(lte(finJoeMessages.createdAt, new Date(endDate + "T23:59:59.999Z")));
+
+      const rows = await db
+        .select({
+          id: finJoeMessages.id,
+          conversationId: finJoeMessages.conversationId,
+          direction: finJoeMessages.direction,
+          body: finJoeMessages.body,
+          messageSid: finJoeMessages.messageSid,
+          createdAt: finJoeMessages.createdAt,
+          contactPhone: finJoeConversations.contactPhone,
+        })
+        .from(finJoeMessages)
+        .innerJoin(finJoeConversations, eq(finJoeMessages.conversationId, finJoeConversations.id))
+        .where(and(...conditions))
+        .orderBy(desc(finJoeMessages.createdAt))
+        .limit(limit)
+        .offset(offset);
+
+      res.json(rows);
+    } catch (e) {
+      logger.error("Messages search error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to search messages" });
     }
   });
 

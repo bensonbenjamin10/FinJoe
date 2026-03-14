@@ -15,6 +15,7 @@ import { wasOutside24hBeforeMessage } from "./window.js";
 import { sendReEngagementIfNeeded } from "./send.js";
 import { resolveTenantAndProvider } from "./providers/resolver.js";
 import { validateTwilioWebhook } from "./providers/twilio-provider.js";
+import { saveMedia } from "../../lib/media-storage.js";
 
 /** Per-conversation lock to serialize processing and preserve message order */
 const conversationLocks = new Map<string, Promise<void>>();
@@ -162,10 +163,14 @@ export async function handleWebhook(req: Request, res: Response) {
         if (mediaUrl) {
           try {
             const { buffer, contentType: ct } = await downloadMedia(credentials, mediaUrl, contentType);
+            const mediaId = crypto.randomUUID();
+            const storagePath = await saveMedia(mediaId, buffer, ct, tenantId);
             await db.insert(finJoeMedia).values({
+              id: mediaId,
               messageId: msg.id,
               contentType: ct,
-              data: buffer,
+              data: storagePath ? null : buffer,
+              storagePath: storagePath ?? undefined,
               sizeBytes: buffer.length,
             });
           } catch (err) {
@@ -210,11 +215,12 @@ export async function handleWebhook(req: Request, res: Response) {
 
       logger.info("Webhook completed", { traceId, conversationId: conversation.id });
 
-      // Store outbound message
+      // Store outbound message (with messageSid when available for proof of transactions)
       await db.insert(finJoeMessages).values({
         conversationId: conversation.id,
         direction: "out",
         body: reply,
+        messageSid: (sendResult as { sid?: string } | null)?.sid ?? undefined,
       });
 
       // Update lastMessageAt so 24h window stays open
