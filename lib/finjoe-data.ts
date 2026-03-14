@@ -865,7 +865,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
     async createRecurringTemplate(data: CreateRecurringTemplateInput): Promise<{ id: string } | null> {
       const costCenterIdForDb = data.costCenterId === "__corporate__" || data.costCenterId === "null" ? null : data.costCenterId;
       const nextRunDate = computeNextRunDate(data.startDate, data.frequency, data.dayOfMonth, data.dayOfWeek);
-      if (!nextRunDate) return null;
+      if (!nextRunDate || nextRunDate < "2022-01-01") return null;
       const [created] = await db
         .insert(recurringExpenseTemplates)
         .values({
@@ -1024,7 +1024,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
     }): Promise<{ id: string } | null> {
       const costCenterIdForDb = data.costCenterId === "__corporate__" || data.costCenterId === "null" ? null : data.costCenterId;
       const nextRunDate = computeNextRunDate(data.startDate, data.frequency, data.dayOfMonth, data.dayOfWeek);
-      if (!nextRunDate) return null;
+      if (!nextRunDate || nextRunDate < "2022-01-01") return null;
       const [created] = await db
         .insert(recurringIncomeTemplates)
         .values({
@@ -1256,7 +1256,19 @@ export async function generateExpensesFromTemplates(
         const frequency = tpl.frequency as "monthly" | "weekly" | "quarterly";
         const dayOfMonth = tpl.dayOfMonth as number | null;
         const dayOfWeek = tpl.dayOfWeek as number | null;
-        let nextRunStr = tpl.nextRunDate instanceof Date ? tpl.nextRunDate.toISOString().slice(0, 10) : String(tpl.nextRunDate).slice(0, 10);
+        let nextRunStr = tpl.nextRunDate instanceof Date ? tpl.nextRunDate.toISOString().slice(0, 10) : String(tpl.nextRunDate ?? "").slice(0, 10);
+
+        // Repair far-past nextRunDate (e.g. epoch) – persist immediately so display fixes even if we skip later
+        if (nextRunStr < "2022-01-01") {
+          const repaired = computeNextRunDate(today, frequency, dayOfMonth ?? undefined, dayOfWeek ?? undefined);
+          if (repaired) {
+            nextRunStr = repaired;
+            await db
+              .update(recurringExpenseTemplates)
+              .set({ nextRunDate: new Date(nextRunStr), updatedAt: new Date() })
+              .where(eq(recurringExpenseTemplates.id, templateId));
+          }
+        }
 
         // Validate category and cost center exist (avoid FK violation if deleted)
         const [catExists] = await db
@@ -1358,7 +1370,19 @@ export async function generateIncomeFromTemplates(db: FinJoeDb, today: string): 
         const frequency = tpl.frequency as "monthly" | "weekly" | "quarterly";
         const dayOfMonth = tpl.dayOfMonth as number | null;
         const dayOfWeek = tpl.dayOfWeek as number | null;
-        let nextRunStr = tpl.nextRunDate instanceof Date ? tpl.nextRunDate.toISOString().slice(0, 10) : String(tpl.nextRunDate).slice(0, 10);
+        let nextRunStr = tpl.nextRunDate instanceof Date ? tpl.nextRunDate.toISOString().slice(0, 10) : String(tpl.nextRunDate ?? "").slice(0, 10);
+
+        // Repair far-past nextRunDate (e.g. epoch) – persist immediately so display fixes even if we skip later
+        if (nextRunStr < "2022-01-01") {
+          const repaired = computeNextRunDate(today, frequency, dayOfMonth ?? undefined, dayOfWeek ?? undefined);
+          if (repaired) {
+            nextRunStr = repaired;
+            await db
+              .update(recurringIncomeTemplates)
+              .set({ nextRunDate: new Date(nextRunStr), updatedAt: new Date() })
+              .where(eq(recurringIncomeTemplates.id, templateId));
+          }
+        }
 
         const [catExists] = await db
           .select({ id: incomeCategories.id })
