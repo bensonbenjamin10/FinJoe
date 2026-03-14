@@ -55,6 +55,22 @@ const AUDIT_REQUIREMENTS: AuditRequirements = {
   taxTypes: ["no_gst", "gst_itc", "gst_rcm", "gst_no_itc"],
 };
 
+/** Normalize DB date (Date, string, or raw days-since-2000 number from PostgreSQL DATE) to YYYY-MM-DD string */
+function toDateString(val: unknown): string | null {
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val.toISOString().slice(0, 10);
+  if (typeof val === "string" && /^\d{4}-\d{2}-\d{2}/.test(val)) return val.slice(0, 10);
+  if (typeof val === "number") {
+    if (val < 100000) {
+      const d = new Date(Date.UTC(2000, 0, 1));
+      d.setUTCDate(d.getUTCDate() + val);
+      return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+    }
+    const d = val < 10000000000 ? new Date(val * 1000) : new Date(val);
+    return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  }
+  return null;
+}
+
 export type CreateExpenseInput = {
   tenantId: string;
   costCenterId: string | null;
@@ -929,6 +945,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         .orderBy(recurringExpenseTemplates.nextRunDate);
       return rows.map((r: Record<string, unknown>) => ({
         ...r,
+        nextRunDate: toDateString(r.nextRunDate) ?? r.nextRunDate,
         campusName: r.costCenterName,
       }));
     },
@@ -1096,6 +1113,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         .orderBy(recurringIncomeTemplates.nextRunDate);
       return rows.map((r: Record<string, unknown>) => ({
         ...r,
+        nextRunDate: toDateString(r.nextRunDate) ?? r.nextRunDate,
         campusName: r.costCenterName,
       }));
     },

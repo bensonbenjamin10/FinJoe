@@ -72,6 +72,24 @@ const FREQUENCY_LABELS: Record<string, string> = {
 
 const DAYS_OF_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+/** Format nextRunDate for display; handles raw days-since-2000 number from API */
+function formatNextRunDate(value: unknown): string {
+  if (value == null) return "—";
+  let d: Date;
+  if (typeof value === "number") {
+    if (value < 100000) {
+      d = new Date(Date.UTC(2000, 0, 1));
+      d.setUTCDate(d.getUTCDate() + value);
+    } else {
+      d = value < 10000000000 ? new Date(value * 1000) : new Date(value);
+    }
+  } else {
+    d = new Date(value as string | Date);
+  }
+  if (isNaN(d.getTime()) || d.getFullYear() < 2022) return "—";
+  return format(d, "dd MMM yyyy");
+}
+
 export default function AdminRecurringIncomeTemplates() {
   const { toast } = useToast();
   const { user } = useAuth();
@@ -363,7 +381,7 @@ export default function AdminRecurringIncomeTemplates() {
                     <TableCell>
                       {FREQUENCY_LABELS[tpl.frequency] || tpl.frequency} ({scheduleLabel(tpl)})
                     </TableCell>
-                    <TableCell>{format(new Date(tpl.nextRunDate), "dd MMM yyyy")}</TableCell>
+                    <TableCell>{formatNextRunDate(tpl.nextRunDate)}</TableCell>
                     <TableCell>
                       <Badge variant={tpl.isActive ? "default" : "secondary"}>{tpl.isActive ? "Active" : "Inactive"}</Badge>
                     </TableCell>
