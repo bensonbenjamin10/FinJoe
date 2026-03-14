@@ -866,10 +866,12 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
     },
 
     // Recurring expense templates
-    async createRecurringTemplate(data: CreateRecurringTemplateInput): Promise<{ id: string } | null> {
+    async createRecurringTemplate(data: CreateRecurringTemplateInput): Promise<{ id: string } | { error: string } | null> {
       const costCenterIdForDb = data.costCenterId === "__corporate__" || data.costCenterId === "null" ? null : data.costCenterId;
       const nextRunDate = computeNextRunDate(data.startDate, data.frequency, data.dayOfMonth, data.dayOfWeek);
-      if (!nextRunDate || nextRunDate < "2022-01-01") return null;
+      if (!nextRunDate || nextRunDate < "2022-01-01") {
+        return { error: "startDate must be 2022 or later. The computed next run date would be in the past." };
+      }
       const [created] = await db
         .insert(recurringExpenseTemplates)
         .values({
@@ -1242,28 +1244,29 @@ export function advanceRecurringNextRun(
   dayOfWeek?: number
 ): string | null {
   const d = new Date(currentNextRun + "T12:00:00Z");
+  if (isNaN(d.getTime())) return null;
   d.setUTCDate(d.getUTCDate() + 1); // advance by 1 day so we get the *next* occurrence
   return computeNextRunDate(d.toISOString().slice(0, 10), frequency, dayOfMonth, dayOfWeek);
 }
 
 export type FinJoeData = ReturnType<typeof createFinJoeData>;
 
+const VENDOR_SUGGESTIONS_LIMIT = 100;
+
 /** List distinct vendor names from expenses for autocomplete suggestions */
 export async function listDistinctVendorNames(db: FinJoeDb, tenantId: string): Promise<string[]> {
   const rows = await db
-    .select({ vendorName: expenses.vendorName })
+    .selectDistinct({ vendorName: expenses.vendorName })
     .from(expenses)
-    .where(and(eq(expenses.tenantId, tenantId), sql`${expenses.vendorName} IS NOT NULL AND ${expenses.vendorName} != ''`));
-  const seen = new Set<string>();
+    .where(and(eq(expenses.tenantId, tenantId), sql`${expenses.vendorName} IS NOT NULL AND ${expenses.vendorName} != ''`))
+    .orderBy(expenses.vendorName)
+    .limit(VENDOR_SUGGESTIONS_LIMIT);
   const result: string[] = [];
   for (const r of rows) {
     const name = (r.vendorName as string)?.trim();
-    if (name && !seen.has(name)) {
-      seen.add(name);
-      result.push(name);
-    }
+    if (name) result.push(name);
   }
-  return result.sort();
+  return result;
 }
 
 /** Max expenses to create per template per run (catch-up for missed cron runs) */

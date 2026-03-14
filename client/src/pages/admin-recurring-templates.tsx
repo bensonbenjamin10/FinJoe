@@ -68,6 +68,9 @@ type RecurringTemplate = {
   campusName?: string | null;
 };
 
+/** GSTIN must be exactly 15 alphanumeric characters when provided */
+const GSTIN_REGEX = /^[0-9A-Za-z]{15}$/;
+
 const TAX_TYPE_OPTIONS = [
   { value: "", label: "—" },
   { value: "no_gst", label: "No GST" },
@@ -275,6 +278,15 @@ export default function AdminRecurringTemplates() {
       toast({ title: "Error", description: "Category and amount required", variant: "destructive" });
       return;
     }
+    const gstinVal = createForm.gstin?.trim();
+    if (gstinVal && !GSTIN_REGEX.test(gstinVal)) {
+      toast({ title: "Error", description: "GSTIN must be exactly 15 alphanumeric characters", variant: "destructive" });
+      return;
+    }
+    const gstTaxTypes = ["gst_itc", "gst_rcm", "gst_no_itc"];
+    if (gstTaxTypes.includes(createForm.taxType) && !gstinVal) {
+      toast({ title: "Note", description: "GST tax type selected but GSTIN is empty. Add it for compliance if required." });
+    }
     createMutation.mutate(createForm);
   };
 
@@ -299,6 +311,11 @@ export default function AdminRecurringTemplates() {
   const handleUpdate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editDialog) return;
+    const gstinVal = editForm.gstin?.trim();
+    if (gstinVal && !GSTIN_REGEX.test(gstinVal)) {
+      toast({ title: "Error", description: "GSTIN must be exactly 15 alphanumeric characters", variant: "destructive" });
+      return;
+    }
     updateMutation.mutate({
       id: editDialog.id,
       data: {

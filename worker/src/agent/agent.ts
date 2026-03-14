@@ -1129,12 +1129,17 @@ async function executeFunctionCall(
         amount,
         description: args.description ? String(args.description) : null,
         vendorName: args.vendorName ? String(args.vendorName) : null,
+        gstin: args.gstin ? String(args.gstin) : null,
+        taxType: args.taxType ? String(args.taxType) : null,
+        invoiceNumber: args.invoiceNumber ? String(args.invoiceNumber) : null,
+        voucherNumber: args.voucherNumber ? String(args.voucherNumber) : null,
         frequency,
         dayOfMonth,
         dayOfWeek,
         startDate,
         endDate: endDateNorm,
       });
+      if (template && "error" in template) return { success: false, error: template.error };
       if (!template?.id) return { success: false, error: USER_FACING_ERROR };
       return { success: true, data: { templateId: template.id, amount, frequency, startDate } };
     }
@@ -1157,6 +1162,10 @@ async function executeFunctionCall(
       if (args.amount !== undefined) updates.amount = Math.round(Number(args.amount));
       if (args.description !== undefined) updates.description = args.description ? String(args.description) : null;
       if (args.vendorName !== undefined) updates.vendorName = args.vendorName ? String(args.vendorName) : null;
+      if (args.gstin !== undefined) updates.gstin = args.gstin ? String(args.gstin) : null;
+      if (args.taxType !== undefined) updates.taxType = args.taxType ? String(args.taxType) : null;
+      if (args.invoiceNumber !== undefined) updates.invoiceNumber = args.invoiceNumber ? String(args.invoiceNumber) : null;
+      if (args.voucherNumber !== undefined) updates.voucherNumber = args.voucherNumber ? String(args.voucherNumber) : null;
       if (args.frequency !== undefined) {
         const freq = String(args.frequency).toLowerCase();
         if (["monthly", "weekly", "quarterly"].includes(freq)) updates.frequency = freq;

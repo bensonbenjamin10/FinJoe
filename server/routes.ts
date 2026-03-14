@@ -1729,6 +1729,7 @@ export async function registerRoutes(app: Express) {
         endDate: endDate ? String(endDate) : null,
         createdById: (req.user as Express.User)?.id ?? null,
       });
+      if (result && "error" in result) return res.status(400).json({ error: result.error });
       if (!result?.id) return res.status(500).json({ error: "Failed to create recurring template" });
       res.status(201).json({ id: result.id });
     } catch (e) {
