@@ -42,6 +42,9 @@ export type FinJoeSettings = {
   smsFrom: string | null;
   costCenterLabel: string | null;
   costCenterType: string | null;
+  requireConfirmationBeforePost: boolean;
+  requireAuditFieldsAboveAmount: number | null;
+  askOptionalFields: boolean;
 };
 
 const AUDIT_REQUIREMENTS: AuditRequirements = {
@@ -144,6 +147,9 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         smsFrom: settings.smsFrom ?? null,
         costCenterLabel: settings.costCenterLabel ?? null,
         costCenterType: settings.costCenterType ?? null,
+        requireConfirmationBeforePost: settings.requireConfirmationBeforePost ?? false,
+        requireAuditFieldsAboveAmount: settings.requireAuditFieldsAboveAmount ?? null,
+        askOptionalFields: settings.askOptionalFields ?? false,
       };
     },
 

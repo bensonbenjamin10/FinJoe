@@ -685,6 +685,9 @@ export async function registerRoutes(app: Express) {
         smsFrom: row.smsFrom,
         costCenterLabel: row.costCenterLabel ?? "Cost Center",
         costCenterType: row.costCenterType ?? "campus",
+        requireConfirmationBeforePost: row.requireConfirmationBeforePost ?? false,
+        requireAuditFieldsAboveAmount: row.requireAuditFieldsAboveAmount ?? null,
+        askOptionalFields: row.askOptionalFields ?? false,
       });
     } catch (e) {
       logger.error("FinJoe settings get error", { requestId: req.requestId, err: String(e) });
@@ -699,7 +702,7 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.body?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { expenseApprovalTemplateSid, expenseApprovedTemplateSid, expenseRejectedTemplateSid, reEngagementTemplateSid, notificationEmails, resendFromEmail, smsFrom, costCenterLabel, costCenterType } = req.body;
+      const { expenseApprovalTemplateSid, expenseApprovedTemplateSid, expenseRejectedTemplateSid, reEngagementTemplateSid, notificationEmails, resendFromEmail, smsFrom, costCenterLabel, costCenterType, requireConfirmationBeforePost, requireAuditFieldsAboveAmount, askOptionalFields } = req.body;
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (expenseApprovalTemplateSid !== undefined) updates.expenseApprovalTemplateSid = expenseApprovalTemplateSid || null;
       if (expenseApprovedTemplateSid !== undefined) updates.expenseApprovedTemplateSid = expenseApprovedTemplateSid || null;
@@ -710,6 +713,9 @@ export async function registerRoutes(app: Express) {
       if (smsFrom !== undefined) updates.smsFrom = smsFrom || null;
       if (costCenterLabel !== undefined) updates.costCenterLabel = costCenterLabel || null;
       if (costCenterType !== undefined) updates.costCenterType = costCenterType || null;
+      if (requireConfirmationBeforePost !== undefined) updates.requireConfirmationBeforePost = !!requireConfirmationBeforePost;
+      if (requireAuditFieldsAboveAmount !== undefined) updates.requireAuditFieldsAboveAmount = requireAuditFieldsAboveAmount == null || requireAuditFieldsAboveAmount === "" ? null : Math.max(0, parseInt(String(requireAuditFieldsAboveAmount), 10));
+      if (askOptionalFields !== undefined) updates.askOptionalFields = !!askOptionalFields;
       const [existing] = await db.select().from(finjoeSettings).where(eq(finjoeSettings.tenantId, tid)).limit(1);
       let result;
       if (existing) {

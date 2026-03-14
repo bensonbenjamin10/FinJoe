@@ -970,6 +970,18 @@ export default function AdminExpenses() {
   const expensesTotal = expensesData?.total ?? 0;
   const expensesHasMore = expensesData?.hasMore ?? false;
 
+  const { data: finjoeSettings } = useQuery<{ requireConfirmationBeforePost?: boolean } | null>({
+    queryKey: ["/api/admin/finjoe/settings", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/finjoe/settings${tenantId ? `?tenantId=${tenantId}` : ""}`, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+
+  const [createConfirmDialog, setCreateConfirmDialog] = useState<Record<string, unknown> | null>(null);
+
   const { data: categories = [] } = useQuery<ExpenseCategory[]>({
     queryKey: ["/api/admin/expense-categories", tenantId],
     queryFn: async () => {
@@ -1244,7 +1256,7 @@ export default function AdminExpenses() {
       toast({ title: "Error", description: "Category and amount required", variant: "destructive" });
       return;
     }
-    createMutation.mutate({
+    const payload = {
       campusId: (createForm.campusId && createForm.campusId !== "__corporate__") ? createForm.campusId : null,
       categoryId: createForm.categoryId,
       amount: Math.round(parseFloat(createForm.amount)),
@@ -1257,7 +1269,12 @@ export default function AdminExpenses() {
       taxType: createForm.taxType || undefined,
       voucherNumber: createForm.voucherNumber || undefined,
       status: "draft",
-    });
+    };
+    if (finjoeSettings?.requireConfirmationBeforePost) {
+      setCreateConfirmDialog(payload);
+    } else {
+      createMutation.mutate(payload);
+    }
   };
 
   const handleExport = () => {
@@ -1930,6 +1947,44 @@ export default function AdminExpenses() {
               disabled={approveMutation.isPending}
             >
               {approveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Approve"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create Expense Confirmation Dialog */}
+      <Dialog open={!!createConfirmDialog} onOpenChange={() => !createMutation.isPending && setCreateConfirmDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm Expense</DialogTitle>
+            <DialogDescription>
+              {createConfirmDialog && (
+                <div className="space-y-1 mt-2">
+                  <p><strong>₹ {(createConfirmDialog.amount as number)?.toLocaleString("en-IN")}</strong></p>
+                  <p>{categories.find((c) => c.id === createConfirmDialog.categoryId)?.name ?? createConfirmDialog.categoryId}</p>
+                  <p>{createConfirmDialog.campusId ? campuses.find((c) => c.id === createConfirmDialog.campusId)?.name ?? createConfirmDialog.campusId : "Corporate Office"}</p>
+                  {createConfirmDialog.vendorName && <p>Vendor: {String(createConfirmDialog.vendorName)}</p>}
+                  {createConfirmDialog.description && <p>{String(createConfirmDialog.description)}</p>}
+                </div>
+              )}
+              Create this expense?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateConfirmDialog(null)} disabled={createMutation.isPending}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (createConfirmDialog) {
+                  createMutation.mutate(createConfirmDialog);
+                  setCreateConfirmDialog(null);
+                }
+              }}
+              disabled={createMutation.isPending}
+            >
+              {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Confirm
             </Button>
           </DialogFooter>
         </DialogContent>

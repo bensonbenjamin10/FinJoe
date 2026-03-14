@@ -232,6 +232,16 @@ const FINJOE_FUNCTION_DECLARATIONS = [
       required: ["requestedRole"],
     },
   },
+  {
+    name: "confirm_expense",
+    description: "Confirm and post a pending expense after user has said yes/confirm. Call only when user explicitly confirms (e.g. 'yes', 'confirm', 'ok') and you previously asked for confirmation.",
+    parameters: { type: Type.OBJECT, properties: {}, required: [] },
+  },
+  {
+    name: "confirm_income",
+    description: "Confirm and post a pending income after user has said yes/confirm. Call only when user explicitly confirms (e.g. 'yes', 'confirm', 'ok') and you previously asked for confirmation.",
+    parameters: { type: Type.OBJECT, properties: {}, required: [] },
+  },
   // Read tools (admin, finance, campus_coordinator, head_office)
   {
     name: "list_expenses",
@@ -503,7 +513,7 @@ const FINJOE_FUNCTION_DECLARATIONS = [
   },
 ];
 
-const BASE_TOOLS = ["create_expense", "create_income", "create_role_change_request", "store_pending_expense", "store_pending_role_change"];
+const BASE_TOOLS = ["create_expense", "create_income", "create_role_change_request", "store_pending_expense", "store_pending_role_change", "confirm_expense", "confirm_income"];
 const READ_TOOLS = ["list_expenses", "get_expense", "submit_expense", "update_expense", "delete_expense", "list_pending_approvals", "list_role_change_requests", "search_expenses", "semantic_search_expenses", "bulk_create_expenses"];
 const ANALYTICS_TOOLS = ["expense_summary", "pending_workload", "petty_cash_summary", "dashboard_summary"];
 const APPROVE_TOOLS = ["approve_expense", "reject_expense", "approve_role_request", "reject_role_request", "record_payout"];

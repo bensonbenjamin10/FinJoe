@@ -151,6 +151,18 @@ export default function AdminIncome() {
   const incomeTotal = incomeData?.total ?? 0;
   const incomeHasMore = incomeData?.hasMore ?? false;
 
+  const { data: finjoeSettings } = useQuery<{ requireConfirmationBeforePost?: boolean } | null>({
+    queryKey: ["/api/admin/finjoe/settings", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/finjoe/settings${tenantId ? `?tenantId=${tenantId}` : ""}`, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+
+  const [createConfirmDialog, setCreateConfirmDialog] = useState<Record<string, unknown> | null>(null);
+
   const { data: categories = [] } = useQuery<IncomeCategory[]>({
     queryKey: ["/api/admin/income-categories", tenantId],
     queryFn: async () => {
@@ -361,14 +373,19 @@ export default function AdminIncome() {
       toast({ title: "Error", description: "Category and amount required", variant: "destructive" });
       return;
     }
-    createMutation.mutate({
+    const payload = {
       campusId: (createForm.campusId && createForm.campusId !== "__corporate__") ? createForm.campusId : null,
       categoryId: createForm.categoryId,
       amount: Math.round(parseFloat(createForm.amount)),
       incomeDate: format(createForm.incomeDate, "yyyy-MM-dd"),
       particulars: createForm.particulars || undefined,
       incomeType: createForm.incomeType,
-    });
+    };
+    if (finjoeSettings?.requireConfirmationBeforePost) {
+      setCreateConfirmDialog(payload);
+    } else {
+      createMutation.mutate(payload);
+    }
   };
 
   const totalIncome = incomeList.reduce((sum, i) => sum + (i.amount || 0), 0);
@@ -970,6 +987,43 @@ export default function AdminIncome() {
           </Tabs>
         </CardContent>
       </Card>
+
+      {/* Create Income Confirmation Dialog */}
+      <Dialog open={!!createConfirmDialog} onOpenChange={() => !createMutation.isPending && setCreateConfirmDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm Income</DialogTitle>
+            <DialogDescription>
+              {createConfirmDialog && (
+                <div className="space-y-1 mt-2">
+                  <p><strong>₹ {(createConfirmDialog.amount as number)?.toLocaleString("en-IN")}</strong></p>
+                  <p>{categories.find((c) => c.id === createConfirmDialog.categoryId)?.name ?? createConfirmDialog.categoryId}</p>
+                  <p>{createConfirmDialog.campusId ? campuses.find((c) => c.id === createConfirmDialog.campusId)?.name ?? createConfirmDialog.campusId : "Corporate"}</p>
+                  {createConfirmDialog.particulars && <p>{String(createConfirmDialog.particulars)}</p>}
+                </div>
+              )}
+              Create this income record?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateConfirmDialog(null)} disabled={createMutation.isPending}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (createConfirmDialog) {
+                  createMutation.mutate(createConfirmDialog);
+                  setCreateConfirmDialog(null);
+                }
+              }}
+              disabled={createMutation.isPending}
+            >
+              {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* View Income Dialog */}
       <Dialog open={!!viewIncomeDialog} onOpenChange={() => setViewIncomeDialog(null)}>

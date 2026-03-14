@@ -24,7 +24,8 @@ const VALID_TAX_TYPES = ["no_gst", "gst_itc", "gst_rcm", "gst_no_itc"];
 export function validateExpenseData(
   data: ExpenseData,
   validCategoryIds: string[],
-  validCampusIds: string[]
+  validCampusIds: string[],
+  requireAuditFieldsAboveAmount?: number | null
 ): ValidationResult {
   const errors: string[] = [];
 
@@ -47,6 +48,18 @@ export function validateExpenseData(
   }
   if (data.taxType && !VALID_TAX_TYPES.includes(data.taxType)) {
     errors.push(`Tax type must be one of: ${VALID_TAX_TYPES.join(", ")}`);
+  }
+
+  // Audit enforcement: for amounts above threshold, require invoiceNumber, invoiceDate, vendorName
+  if (
+    requireAuditFieldsAboveAmount != null &&
+    requireAuditFieldsAboveAmount > 0 &&
+    data.amount != null &&
+    data.amount >= requireAuditFieldsAboveAmount
+  ) {
+    if (!data.invoiceNumber?.trim()) errors.push("Invoice number is required for expenses above ₹" + requireAuditFieldsAboveAmount.toLocaleString("en-IN"));
+    if (!data.invoiceDate?.trim()) errors.push("Invoice date is required for expenses above ₹" + requireAuditFieldsAboveAmount.toLocaleString("en-IN"));
+    if (!data.vendorName?.trim()) errors.push("Vendor name is required for expenses above ₹" + requireAuditFieldsAboveAmount.toLocaleString("en-IN"));
   }
 
   return {

@@ -19,7 +19,7 @@ import {
   type ConversationTurn,
 } from "./gemini.js";
 import { parseExpensesFromCsv } from "../csv-parser.js";
-import { fetchSystemContext, fetchSystemData, resolveCategoryFromMessage, resolveCampusFromMessage, resolveIncomeCategoryFromMessage } from "../context.js";
+import { fetchSystemContext, fetchSystemData, resolveCategoryFromMessage, resolveCampusFromMessage, resolveIncomeCategoryFromMessage, type DataCollectionSettings } from "../context.js";
 import { validateExpenseData, validateRoleChangeData } from "../validation.js";
 import { createFinJoeData } from "../../../lib/finjoe-data.js";
 import { toShortExpenseId } from "../../../lib/expense-id.js";
@@ -47,9 +47,15 @@ type PendingRoleChange = {
   studentId?: string | null;
 };
 
+type PendingConfirmation = {
+  type: "expense" | "income";
+  data: Record<string, unknown>;
+};
+
 type ConversationContext = {
   pendingExpense?: PendingExpense;
   pendingRoleChange?: PendingRoleChange;
+  pendingConfirmation?: PendingConfirmation;
 };
 
 type FunctionResult<T = unknown> = { success: boolean; data?: T; error?: string };
@@ -90,7 +96,7 @@ async function getConversationContext(conversationId: string): Promise<Conversat
   if (!conv?.lastMessageAt) return raw;
   const ageMs = Date.now() - new Date(conv.lastMessageAt).getTime();
   if (ageMs > CONTEXT_EXPIRY_HOURS * 60 * 60 * 1000) {
-    const { pendingExpense, pendingRoleChange, ...rest } = raw;
+    const { pendingExpense, pendingRoleChange, pendingConfirmation, ...rest } = raw;
     return rest;
   }
   return raw;
@@ -109,7 +115,7 @@ async function setConversationContext(
 }
 
 function clearPendingFromContext(ctx: ConversationContext): Partial<ConversationContext> {
-  const { pendingExpense, pendingRoleChange, ...rest } = ctx;
+  const { pendingExpense, pendingRoleChange, pendingConfirmation, ...rest } = ctx;
   return rest;
 }
 
@@ -129,7 +135,7 @@ export async function processWithAgent(
   const body = (messageBody || "").trim();
   const ctx = { traceId, conversationId, messageId };
 
-  const { context: systemContext, costCenterLabel } = await fetchSystemContext(tenantId);
+  const { context: systemContext, costCenterLabel, dataCollectionSettings } = await fetchSystemContext(tenantId);
   const { campuses, categories, incomeCategories } = await fetchSystemData(tenantId);
   const validCampusIds = campuses.map((c) => c.id);
   const validCategoryIds = categories.map((c) => c.id);
@@ -246,6 +252,7 @@ export async function processWithAgent(
           campuses,
           tenantId,
           messageId,
+          dataCollectionSettings,
         },
         traceId
       );
@@ -270,6 +277,10 @@ export async function processWithAgent(
         updatedConvContext = { ...updatedConvContext, pendingRoleChange: result.data as PendingRoleChange };
         await setConversationContext(conversationId, updatedConvContext);
       } else if (fc.name === "create_expense" || fc.name === "create_income" || fc.name === "bulk_create_expenses" || fc.name === "create_role_change_request") {
+        const cleared = clearPendingFromContext(updatedConvContext);
+        await setConversationContext(conversationId, cleared);
+        updatedConvContext = { ...updatedConvContext, ...cleared };
+      } else if (fc.name === "confirm_expense" || fc.name === "confirm_income") {
         const cleared = clearPendingFromContext(updatedConvContext);
         await setConversationContext(conversationId, cleared);
         updatedConvContext = { ...updatedConvContext, ...cleared };
@@ -323,6 +334,7 @@ type ExecuteContext = {
   campuses: Array<{ id: string; name: string; slug: string }>;
   tenantId: string;
   messageId?: string;
+  dataCollectionSettings?: DataCollectionSettings;
 };
 
 async function executeFunctionCall(
@@ -333,8 +345,77 @@ async function executeFunctionCall(
 ): Promise<FunctionResult> {
   const { validCategoryIds, validCampusIds, contactPhone, contactStudentId, convContext, tenantId } = execCtx;
   const finJoeData = createFinJoeData(db, tenantId, pool);
+  const dataCollectionSettings = execCtx.dataCollectionSettings;
+  const requireConfirmation = dataCollectionSettings?.requireConfirmationBeforePost ?? false;
+  const requireAuditAbove = dataCollectionSettings?.requireAuditFieldsAboveAmount ?? null;
 
   switch (name) {
+    case "confirm_expense": {
+      const pending = convContext.pendingConfirmation;
+      if (!pending || pending.type !== "expense") {
+        return { success: false, error: "Nothing to confirm. Please provide the expense details again." };
+      }
+      const d = pending.data as {
+        amount: number;
+        expenseDate: string;
+        categoryId: string;
+        campusId: string | null;
+        description?: string | null;
+        invoiceNumber?: string | null;
+        invoiceDate?: string | null;
+        vendorName?: string | null;
+        gstin?: string | null;
+        taxType?: string | null;
+      };
+      let expense: { id: string } | null = null;
+      try {
+        expense = await finJoeData.createExpense({
+          tenantId,
+          costCenterId: d.campusId,
+          categoryId: d.categoryId,
+          amount: d.amount,
+          expenseDate: d.expenseDate,
+          description: d.description ?? d.vendorName ?? "From FinJoe WhatsApp",
+          invoiceNumber: d.invoiceNumber ?? null,
+          invoiceDate: d.invoiceDate ?? null,
+          vendorName: d.vendorName ?? null,
+          gstin: d.gstin ?? null,
+          taxType: d.taxType ?? null,
+          submittedByContactPhone: contactPhone,
+        });
+      } catch (err) {
+        logger.error("Confirm expense create error", { traceId, err: String(err) });
+      }
+      if (!expense?.id) return { success: false, error: USER_FACING_ERROR };
+      await finJoeData.submitExpense(expense.id, contactStudentId);
+      const categoryName = execCtx.categories.find((c) => c.id === d.categoryId)?.name ?? null;
+      await notifyFinanceForApproval(expense.id, { amount: d.amount, vendorName: d.vendorName, invoiceNumber: d.invoiceNumber, invoiceDate: d.invoiceDate, description: d.description, gstin: d.gstin, taxType: d.taxType }, tenantId, traceId, categoryName);
+      return { success: true, data: { expenseId: expense.id } };
+    }
+
+    case "confirm_income": {
+      const pending = convContext.pendingConfirmation;
+      if (!pending || pending.type !== "income") {
+        return { success: false, error: "Nothing to confirm. Please provide the income details again." };
+      }
+      const d = pending.data as { amount: number; categoryId: string; campusId: string | null; particulars?: string | null; incomeDate: string };
+      try {
+        await finJoeData.createIncome({
+          tenantId,
+          costCenterId: d.campusId,
+          categoryId: d.categoryId,
+          amount: d.amount,
+          incomeDate: d.incomeDate,
+          particulars: d.particulars ?? null,
+          submittedByContactPhone: contactPhone,
+        });
+      } catch (err) {
+        logger.error("Confirm income create error", { traceId, err: String(err) });
+        return { success: false, error: USER_FACING_ERROR };
+      }
+      return { success: true, data: {} };
+    }
+
     case "create_expense": {
       if (validCategoryIds.length === 0) {
         return { success: false, error: "No expense categories configured. Ask admin to add categories in FinJoe Settings." };
@@ -364,9 +445,26 @@ async function executeFunctionCall(
         taxType: args.taxType ? String(args.taxType) : null,
       };
 
-      const validation = validateExpenseData(expenseData, validCategoryIds, validCampusIds);
+      const validation = validateExpenseData(expenseData, validCategoryIds, validCampusIds, requireAuditAbove);
       if (!validation.valid) {
         return { success: false, error: `I need: ${validation.errors.join(". ")}. Please provide the missing information.` };
+      }
+
+      // Require confirmation before posting: store and ask user to confirm
+      if (requireConfirmation && !convContext.pendingConfirmation) {
+        const campusName = campusId ? execCtx.campuses.find((c) => c.id === campusId)?.name ?? campusId : "Corporate Office";
+        const summary = `₹${expenseData.amount.toLocaleString("en-IN")} for ${campusName}${expenseData.vendorName ? ` (${expenseData.vendorName})` : ""}`;
+        await setConversationContext(execCtx.conversationId, {
+          ...convContext,
+          pendingConfirmation: { type: "expense", data: { ...expenseData, vendorName: expenseData.vendorName } },
+        });
+        return {
+          success: true,
+          data: {
+            confirmRequired: true,
+            message: `Please ask the user to confirm: "${summary}". Reply yes to confirm. When they confirm, call confirm_expense.`,
+          },
+        };
       }
 
       const extracted: ExtractedExpense = {
@@ -448,15 +546,41 @@ async function executeFunctionCall(
       const incomeDate = parseDateToISO(String(args.incomeDate ?? new Date().toISOString().slice(0, 10))) ?? new Date().toISOString().slice(0, 10);
       const particulars = args.particulars ? String(args.particulars) : null;
 
+      const incomeData = {
+        amount,
+        categoryId: finalCategoryId,
+        campusId,
+        particulars: particulars ?? null,
+        incomeDate,
+      };
+
+      // Require confirmation before posting: store and ask user to confirm
+      if (requireConfirmation && !convContext.pendingConfirmation) {
+        const campusName = campusId ? execCtx.campuses.find((c) => c.id === campusId)?.name ?? campusId : "Corporate Office";
+        const catName = incCats.find((c) => c.id === finalCategoryId)?.name ?? "Income";
+        const summary = `₹${amount.toLocaleString("en-IN")} ${catName} for ${campusName}${particulars ? ` (${particulars})` : ""}`;
+        await setConversationContext(execCtx.conversationId, {
+          ...convContext,
+          pendingConfirmation: { type: "income", data: incomeData },
+        });
+        return {
+          success: true,
+          data: {
+            confirmRequired: true,
+            message: `Please ask the user to confirm: "${summary}". Reply yes to confirm. When they confirm, call confirm_income.`,
+          },
+        };
+      }
+
       let income: { id: string } | null = null;
       try {
         income = await finJoeData.createIncome({
           tenantId,
           costCenterId: campusId,
-          categoryId: finalCategoryId,
-          amount,
-          incomeDate,
-          particulars: particulars ?? "From FinJoe WhatsApp",
+          categoryId: incomeData.categoryId,
+          amount: incomeData.amount,
+          incomeDate: incomeData.incomeDate,
+          particulars: incomeData.particulars ?? "From FinJoe WhatsApp",
           incomeType: args.incomeType ? String(args.incomeType) : "other",
           submittedByContactPhone: contactPhone,
         });
@@ -529,7 +653,7 @@ async function executeFunctionCall(
           gstin: null as string | null,
           taxType: null as string | null,
         };
-        const validation = validateExpenseData(expenseData, validCategoryIds, validCampusIds);
+        const validation = validateExpenseData(expenseData, validCategoryIds, validCampusIds, requireAuditAbove);
         if (!validation.valid) {
           return { success: false, error: `Expense ${i + 1}: ${validation.errors.join(". ")}` };
         }

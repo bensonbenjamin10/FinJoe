@@ -9,15 +9,21 @@ import { createFinJoeData } from "../../lib/finjoe-data.js";
 import { tenants } from "../../shared/schema.js";
 
 const CONTEXT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const contextCache = new Map<string, { context: string; costCenterLabel: string; at: number }>();
+const contextCache = new Map<string, { context: string; costCenterLabel: string; dataCollectionSettings: DataCollectionSettings; at: number }>();
 
-export type FetchSystemContextResult = { context: string; costCenterLabel: string };
+export type DataCollectionSettings = {
+  requireConfirmationBeforePost: boolean;
+  requireAuditFieldsAboveAmount: number | null;
+  askOptionalFields: boolean;
+};
+
+export type FetchSystemContextResult = { context: string; costCenterLabel: string; dataCollectionSettings: DataCollectionSettings };
 
 /** Fetch and format system context for injection into prompts */
 export async function fetchSystemContext(tenantId: string): Promise<FetchSystemContextResult> {
   const cached = contextCache.get(tenantId);
   if (cached && Date.now() - cached.at < CONTEXT_CACHE_TTL_MS) {
-    return { context: cached.context, costCenterLabel: cached.costCenterLabel };
+    return { context: cached.context, costCenterLabel: cached.costCenterLabel, dataCollectionSettings: cached.dataCollectionSettings };
   }
 
   const finJoeData = createFinJoeData(db, tenantId);
@@ -48,8 +54,24 @@ export async function fetchSystemContext(tenantId: string): Promise<FetchSystemC
   context += `Income categories: ${incomeCategoryList}\n`;
   context += `Audit compliance: ${auditDesc}`;
 
-  contextCache.set(tenantId, { context, costCenterLabel, at: Date.now() });
-  return { context, costCenterLabel };
+  const dataCollectionSettings: DataCollectionSettings = {
+    requireConfirmationBeforePost: settings?.requireConfirmationBeforePost ?? false,
+    requireAuditFieldsAboveAmount: settings?.requireAuditFieldsAboveAmount ?? null,
+    askOptionalFields: settings?.askOptionalFields ?? false,
+  };
+
+  if (dataCollectionSettings.requireConfirmationBeforePost) {
+    context += "\n\nData collection: Require user confirmation before posting expense/income. When you have all required data, summarize and ask user to reply 'yes' to confirm. Only call create_expense/create_income after user confirms.";
+  }
+  if (dataCollectionSettings.requireAuditFieldsAboveAmount != null) {
+    context += `\n\nAudit enforcement: For expenses above ₹${dataCollectionSettings.requireAuditFieldsAboveAmount.toLocaleString("en-IN")}, invoice number, invoice date, and vendor name are required.`;
+  }
+  if (dataCollectionSettings.askOptionalFields) {
+    context += "\n\nOptional fields: When invoice shows GST or tax details, ask for GSTIN and tax type before posting.";
+  }
+
+  contextCache.set(tenantId, { context, costCenterLabel, dataCollectionSettings, at: Date.now() });
+  return { context, costCenterLabel, dataCollectionSettings };
 }
 
 /** Clear cached context (e.g. when config changes). Also invalidated by TTL. */

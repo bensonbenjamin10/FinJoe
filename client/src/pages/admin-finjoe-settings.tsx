@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Settings, Loader2, Copy, AlertCircle, Mail, MessageSquare, RefreshCw, Plus, Send } from "lucide-react";
+import { Settings, Loader2, Copy, AlertCircle, Mail, MessageSquare, RefreshCw, Plus, Send, ShieldCheck } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -52,6 +53,9 @@ type FinJoeSettings = {
   smsFrom?: string | null;
   costCenterLabel?: string | null;
   costCenterType?: string | null;
+  requireConfirmationBeforePost?: boolean;
+  requireAuditFieldsAboveAmount?: number | null;
+  askOptionalFields?: boolean;
 };
 
 type WhatsAppProvider = {
@@ -144,6 +148,11 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
   const [templateForm, setTemplateForm] = useState<FinJoeSettings>({});
   const [channelsForm, setChannelsForm] = useState<FinJoeSettings>({});
   const [costCenterForm, setCostCenterForm] = useState<Pick<FinJoeSettings, "costCenterLabel" | "costCenterType">>({});
+  const [dataCollectionForm, setDataCollectionForm] = useState<{
+    requireConfirmationBeforePost?: boolean;
+    requireAuditFieldsAboveAmount?: number | null;
+    askOptionalFields?: boolean;
+  }>({});
   const [testEmailTo, setTestEmailTo] = useState("");
   const [testSmsTo, setTestSmsTo] = useState("");
   const [testWhatsAppTo, setTestWhatsAppTo] = useState("");
@@ -511,6 +520,76 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
           >
             {updateSettingsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
             Save Cost Center Settings
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="p-6">
+          <CardTitle className="font-display flex items-center gap-2">
+            <ShieldCheck className="h-5 w-5" />
+            Data Collection & Confirmation
+          </CardTitle>
+          <CardDescription className="text-base">
+            Configure how financial data is collected and confirmed before posting. Stricter settings help with audit compliance and reduce errors.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4 p-6">
+          <div className="flex items-center justify-between rounded-lg border p-4">
+            <div className="space-y-0.5">
+              <Label htmlFor="require-confirmation">Require confirmation before posting</Label>
+              <p className="text-sm text-muted-foreground">
+                Require users to confirm before expense/income is recorded. WhatsApp and admin UI will show a summary and ask for &quot;yes&quot; to confirm.
+              </p>
+            </div>
+            <Switch
+              id="require-confirmation"
+              checked={dataCollectionForm.requireConfirmationBeforePost ?? settings?.requireConfirmationBeforePost ?? false}
+              onCheckedChange={(v) => setDataCollectionForm((f) => ({ ...f, requireConfirmationBeforePost: v }))}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label>Require audit fields above amount (₹)</Label>
+            <Input
+              type="number"
+              min="0"
+              placeholder="Leave blank to never enforce"
+              value={(dataCollectionForm.requireAuditFieldsAboveAmount ?? settings?.requireAuditFieldsAboveAmount) != null ? String(dataCollectionForm.requireAuditFieldsAboveAmount ?? settings?.requireAuditFieldsAboveAmount) : ""}
+              onChange={(e) => {
+                const v = e.target.value;
+                setDataCollectionForm((f) => ({ ...f, requireAuditFieldsAboveAmount: v === "" ? null : Math.max(0, parseInt(v, 10) || 0) }));
+              }}
+            />
+            <p className="text-sm text-muted-foreground">
+              For expenses above this amount, invoice number, invoice date, and vendor name become required. Leave blank to never enforce.
+            </p>
+          </div>
+          <div className="flex items-center justify-between rounded-lg border p-4">
+            <div className="space-y-0.5">
+              <Label htmlFor="ask-optional">Ask for optional fields</Label>
+              <p className="text-sm text-muted-foreground">
+                When invoice shows GST or tax details, ask for GSTIN and tax type before posting.
+              </p>
+            </div>
+            <Switch
+              id="ask-optional"
+              checked={dataCollectionForm.askOptionalFields ?? settings?.askOptionalFields ?? false}
+              onCheckedChange={(v) => setDataCollectionForm((f) => ({ ...f, askOptionalFields: v }))}
+            />
+          </div>
+          <Button
+            onClick={() =>
+              updateSettingsMutation.mutate({
+                ...settings,
+                requireConfirmationBeforePost: dataCollectionForm.requireConfirmationBeforePost ?? settings?.requireConfirmationBeforePost ?? false,
+                requireAuditFieldsAboveAmount: dataCollectionForm.requireAuditFieldsAboveAmount !== undefined ? dataCollectionForm.requireAuditFieldsAboveAmount : (settings?.requireAuditFieldsAboveAmount ?? null),
+                askOptionalFields: dataCollectionForm.askOptionalFields ?? settings?.askOptionalFields ?? false,
+              })
+            }
+            disabled={updateSettingsMutation.isPending}
+          >
+            {updateSettingsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+            Save Data Collection Settings
           </Button>
         </CardContent>
       </Card>

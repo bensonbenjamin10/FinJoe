@@ -280,6 +280,9 @@ export const finjoeSettings = pgTable("finjoe_settings", {
   smsFrom: text("sms_from"),
   costCenterLabel: text("cost_center_label"),
   costCenterType: text("cost_center_type"),
+  requireConfirmationBeforePost: boolean("require_confirmation_before_post").default(false),
+  requireAuditFieldsAboveAmount: integer("require_audit_fields_above_amount"),
+  askOptionalFields: boolean("ask_optional_fields").default(false),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
