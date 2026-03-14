@@ -285,6 +285,8 @@ export async function processWithAgent(
         const cleared = clearPendingFromContext(updatedConvContext);
         await setConversationContext(conversationId, cleared);
         updatedConvContext = { ...updatedConvContext, ...cleared };
+      } else if ((fc.name === "create_expense" || fc.name === "create_income") && result.data && typeof result.data === "object" && (result.data as { confirmRequired?: boolean }).confirmRequired) {
+        updatedConvContext = await getConversationContext(conversationId);
       }
     }
 
