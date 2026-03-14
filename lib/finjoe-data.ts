@@ -4,6 +4,7 @@
 
 import { eq, and, desc, sql, or, isNull } from "drizzle-orm";
 import { embedExpenseText } from "./expense-embeddings.js";
+import { isFullUuid, toShortExpenseId } from "./expense-id.js";
 import {
   costCenters,
   expenseCategories,
@@ -204,6 +205,38 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       return row ?? null;
     },
 
+    /**
+     * Resolve expense ID from full UUID or short form (last 6-12 hex chars).
+     * Returns full UUID if single match, null if none or ambiguous.
+     */
+    async resolveExpenseId(input: string): Promise<string | null> {
+      const trimmed = (input ?? "").trim();
+      if (!trimmed) return null;
+
+      if (isFullUuid(trimmed)) {
+        const normalized = trimmed.toLowerCase();
+        const existing = await this.getExpense(normalized);
+        return existing ? normalized : null;
+      }
+
+      const shortForm = trimmed.toLowerCase();
+      if (!/^[0-9a-f]{6,12}$/.test(shortForm)) return null;
+
+      const suffix = "%" + shortForm;
+      const rows = await db
+        .select({ id: expenses.id })
+        .from(expenses)
+        .where(
+          and(
+            eq(expenses.tenantId, tenantId),
+            sql`REPLACE(${expenses.id}::text, '-', '') LIKE ${suffix}`
+          )
+        )
+        .limit(2);
+      if (rows.length !== 1) return null;
+      return rows[0].id;
+    },
+
     async updateExpense(
       id: string,
       updates: {
@@ -339,6 +372,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       const rows = await query.limit(limit);
       return rows.map((r: Record<string, unknown>) => ({
         id: r.id,
+        shortId: toShortExpenseId(r.id as string),
         amount: r.amount,
         status: r.status,
         expenseDate: r.expenseDate,
@@ -374,7 +408,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         .where(and(...conditions))
         .orderBy(desc(expenses.createdAt))
         .limit(50);
-      return rows;
+      return rows.map((r) => ({ ...r, shortId: toShortExpenseId(r.id as string) }));
     },
 
     async listRoleChangeRequests(status?: string): Promise<Array<Record<string, unknown>>> {
@@ -432,6 +466,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       return rows.map((r: Record<string, unknown>) => ({
         ...r,
         campusName: r.costCenterName,
+        shortId: toShortExpenseId(r.id as string),
       }));
     },
 
@@ -491,6 +526,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           campusName: r.cost_center_name,
           costCenterName: r.cost_center_name,
           categoryName: r.category_name,
+          shortId: toShortExpenseId(r.id as string),
         }));
       } catch {
         return [];

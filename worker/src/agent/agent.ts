@@ -22,6 +22,7 @@ import { parseExpensesFromCsv } from "../csv-parser.js";
 import { fetchSystemContext, fetchSystemData, resolveCategoryFromMessage, resolveCampusFromMessage, resolveIncomeCategoryFromMessage } from "../context.js";
 import { validateExpenseData, validateRoleChangeData } from "../validation.js";
 import { createFinJoeData } from "../../../lib/finjoe-data.js";
+import { toShortExpenseId } from "../../../lib/expense-id.js";
 import { parseExpenseQuery, parseDateToISO } from "../../../lib/expense-query-ai.js";
 import { embedQuery } from "../../../lib/expense-embeddings.js";
 import { normalizePhone } from "../twilio.js";
@@ -685,21 +686,27 @@ async function executeFunctionCall(
     }
 
     case "get_expense": {
-      const expenseId = String(args.expenseId ?? "");
+      const expenseIdInput = String(args.expenseId ?? "");
+      const expenseId = await finJoeData.resolveExpenseId(expenseIdInput);
+      if (!expenseId) return { success: false, error: `Expense #${expenseIdInput} not found.` };
       const detail = await finJoeData.getExpenseWithDetails(expenseId);
-      if (!detail) return { success: false, error: `Expense #${expenseId} not found.` };
+      if (!detail) return { success: false, error: `Expense #${expenseIdInput} not found.` };
       return { success: true, data: detail };
     }
 
     case "submit_expense": {
-      const expenseId = String(args.expenseId ?? "");
+      const expenseIdInput = String(args.expenseId ?? "");
+      const expenseId = await finJoeData.resolveExpenseId(expenseIdInput);
+      if (!expenseId) return { success: false, error: `Expense #${expenseIdInput} not found.` };
       const result = await finJoeData.submitExpense(expenseId, contactStudentId);
-      if (!result) return { success: false, error: `Could not submit expense #${expenseId}. It may not be in draft status or already submitted.` };
+      if (!result) return { success: false, error: `Could not submit expense #${expenseIdInput}. It may not be in draft status or already submitted.` };
       return { success: true, data: { expenseId, submitted: true } };
     }
 
     case "update_expense": {
-      const expenseId = String(args.expenseId ?? "");
+      const expenseIdInput = String(args.expenseId ?? "");
+      const expenseId = await finJoeData.resolveExpenseId(expenseIdInput);
+      if (!expenseId) return { success: false, error: `Expense #${expenseIdInput} not found.` };
       let categoryId = args.categoryId ? String(args.categoryId) : undefined;
       let campusId = args.campusId !== undefined ? (args.campusId ? String(args.campusId) : null) : undefined;
       if (categoryId && !validCategoryIds.includes(categoryId)) {
@@ -737,14 +744,16 @@ async function executeFunctionCall(
         return { success: false, error: "No fields to update. Specify at least one: amount, vendorName, invoiceNumber, invoiceDate, description, categoryId, campusId, gstin, taxType." };
       }
       const result = await finJoeData.updateExpense(expenseId, updates);
-      if (!result) return { success: false, error: `Could not update expense #${expenseId}. It may not be in draft status.` };
+      if (!result) return { success: false, error: `Could not update expense #${expenseIdInput}. It may not be in draft status.` };
       return { success: true, data: { expenseId, updated: true } };
     }
 
     case "delete_expense": {
-      const expenseId = String(args.expenseId ?? "");
+      const expenseIdInput = String(args.expenseId ?? "");
+      const expenseId = await finJoeData.resolveExpenseId(expenseIdInput);
+      if (!expenseId) return { success: false, error: `Expense #${expenseIdInput} not found.` };
       const result = await finJoeData.deleteExpense(expenseId);
-      if (!result) return { success: false, error: `Could not delete expense #${expenseId}. It may not exist or may not be in draft status.` };
+      if (!result) return { success: false, error: `Could not delete expense #${expenseIdInput}. It may not exist or may not be in draft status.` };
       return { success: true, data: { expenseId, deleted: true } };
     }
 
@@ -856,9 +865,11 @@ async function executeFunctionCall(
         return { success: false, error: "Only finance or admin can approve expenses." };
       }
       if (!contactStudentId) return { success: false, error: "To approve via WhatsApp, your contact must be linked to a user. Ask an admin to add you in FinJoe Contacts—they can link to your existing account or create one for you." };
-      const expenseId = String(args.expenseId ?? "");
+      const expenseIdInput = String(args.expenseId ?? "");
+      const expenseId = await finJoeData.resolveExpenseId(expenseIdInput);
+      if (!expenseId) return { success: false, error: `Expense #${expenseIdInput} not found.` };
       const result = await finJoeData.approveExpense(expenseId, contactStudentId);
-      if (!result) return { success: false, error: `Could not approve expense #${expenseId}. It may not be pending.` };
+      if (!result) return { success: false, error: `Could not approve expense #${expenseIdInput}. It may not be pending.` };
       if (result.submittedByContactPhone) {
         const submitterEmail = await getSubmitterEmail(result.submittedByContactPhone, tenantId);
         notifySubmitterForApprovalRejection(
@@ -879,10 +890,12 @@ async function executeFunctionCall(
         return { success: false, error: "Only finance or admin can reject expenses." };
       }
       if (!contactStudentId) return { success: false, error: "To approve or reject via WhatsApp, your contact must be linked to a user. Ask an admin to add you in FinJoe Contacts—they can link to your existing account or create one for you." };
-      const expenseId = String(args.expenseId ?? "");
+      const expenseIdInput = String(args.expenseId ?? "");
+      const expenseId = await finJoeData.resolveExpenseId(expenseIdInput);
+      if (!expenseId) return { success: false, error: `Expense #${expenseIdInput} not found.` };
       const reason = String(args.reason ?? "Rejected via FinJoe");
       const result = await finJoeData.rejectExpense(expenseId, contactStudentId, reason);
-      if (!result) return { success: false, error: `Could not reject expense #${expenseId}. It may not be pending.` };
+      if (!result) return { success: false, error: `Could not reject expense #${expenseIdInput}. It may not be pending.` };
       if (result.submittedByContactPhone) {
         const submitterEmail = await getSubmitterEmail(result.submittedByContactPhone, tenantId);
         notifySubmitterForApprovalRejection(
@@ -926,11 +939,13 @@ async function executeFunctionCall(
         return { success: false, error: "Only admin or finance can record payout." };
       }
       if (!contactStudentId) return { success: false, error: "To record payout via WhatsApp, your contact must be linked to a user. Ask an admin to add you in FinJoe Contacts." };
-      const expenseId = String(args.expenseId ?? "");
+      const expenseIdInput = String(args.expenseId ?? "");
+      const expenseId = await finJoeData.resolveExpenseId(expenseIdInput);
+      if (!expenseId) return { success: false, error: `Expense #${expenseIdInput} not found.` };
       const payoutMethod = String(args.payoutMethod ?? "bank_transfer").trim() || "bank_transfer";
       const payoutRef = String(args.payoutRef ?? "marked via FinJoe WhatsApp").trim() || "marked via FinJoe WhatsApp";
       const result = await finJoeData.recordExpensePayout(expenseId, payoutMethod, payoutRef);
-      if (!result) return { success: false, error: `Could not record payout for expense #${expenseId}. It may not be approved.` };
+      if (!result) return { success: false, error: `Could not record payout for expense #${expenseIdInput}. It may not be approved.` };
       return { success: true, data: { expenseId, paid: true, payoutMethod, payoutRef } };
     }
 
@@ -1073,7 +1088,8 @@ async function notifyFinanceForApproval(
     .from(finJoeContacts)
     .where(and(eq(finJoeContacts.tenantId, tenantId), eq(finJoeContacts.role, "finance"), eq(finJoeContacts.isActive, true)));
   const lineItem = extracted.description || categoryName || extracted.vendorName;
-  const msg = `New expense #${expenseId} needs approval: ₹${extracted.amount?.toLocaleString("en-IN")}${lineItem ? ` - ${lineItem}` : ""}. Reply APPROVE ${expenseId} or REJECT ${expenseId} to act.`;
+  const shortId = toShortExpenseId(expenseId);
+  const msg = `New expense #${shortId} needs approval: ₹${extracted.amount?.toLocaleString("en-IN")}${lineItem ? ` - ${lineItem}` : ""}. Reply APPROVE ${shortId} or REJECT ${shortId} to act.`;
   const templateConfig = await getExpenseApprovalTemplateConfig(
     expenseId,
     extracted.amount ?? 0,

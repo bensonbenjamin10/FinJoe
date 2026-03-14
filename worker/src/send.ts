@@ -5,6 +5,7 @@ import { getOrCreateConversation } from "./conversation.js";
 import { logger } from "./logger.js";
 import { db } from "./db.js";
 import { createFinJoeData } from "../../lib/finjoe-data.js";
+import { toShortExpenseId } from "../../lib/expense-id.js";
 import { getPlatformSettings } from "./platform-settings.js";
 
 export type FinJoeTemplateConfig = {
@@ -150,7 +151,7 @@ export async function getExpenseApprovalTemplateConfig(
   return {
     templateSid: sid,
     contentVariables: {
-      "1": expenseId,
+      "1": toShortExpenseId(expenseId),
       "2": amountStr,
     },
   };
@@ -163,7 +164,7 @@ export async function getExpenseApprovedTemplateConfig(expenseId: string, tenant
   if (!sid) return null;
   return {
     templateSid: sid,
-    contentVariables: { "1": expenseId },
+    contentVariables: { "1": toShortExpenseId(expenseId) },
   };
 }
 
@@ -175,7 +176,7 @@ export async function getExpenseRejectedTemplateConfig(expenseId: string, reason
   return {
     templateSid: sid,
     contentVariables: {
-      "1": expenseId,
+      "1": toShortExpenseId(expenseId),
       "2": reason || "Reason not provided",
     },
   };
@@ -207,14 +208,14 @@ export async function notifySubmitterForApprovalRejection(
   submitterEmail?: string | null
 ): Promise<boolean> {
   if (type === "approved") {
-    const freeForm = `Good news! Your expense #${expenseId} has been approved.`;
+    const freeForm = `Good news! Your expense #${toShortExpenseId(expenseId)} has been approved.`;
     const templateConfig = await getExpenseApprovedTemplateConfig(expenseId, tenantId);
     return sendWith24hRouting(to, freeForm, templateConfig, traceId, tenantId, {
       critical: true,
       submitterEmail,
     });
   } else {
-    const freeForm = `Your expense #${expenseId} has been rejected. Reason: ${reason || "Not provided"}`;
+    const freeForm = `Your expense #${toShortExpenseId(expenseId)} has been rejected. Reason: ${reason || "Not provided"}`;
     const templateConfig = await getExpenseRejectedTemplateConfig(expenseId, reason || "", tenantId);
     return sendWith24hRouting(to, freeForm, templateConfig, traceId, tenantId, {
       critical: true,
