@@ -39,6 +39,12 @@ import { getAnalytics, getPredictions } from "./analytics.js";
 import { generateAnalyticsInsights } from "../lib/analytics-insights.js";
 import { suggestReconciliationMatches } from "../lib/reconciliation-suggestions.js";
 import { getMedia } from "../lib/media-storage.js";
+import {
+  notifyFinanceForApproval,
+  notifySubmitterForApprovalRejectionFromExpense,
+  notifyRoleRequestRequester,
+  notifySubmitterForPayoutFromExpense,
+} from "../lib/notifications.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -456,9 +462,21 @@ export async function registerRoutes(app: Express) {
         const [defaultTenant] = await db.select({ id: tenants.id }).from(tenants).where(eq(tenants.slug, "default")).limit(1);
         tenantId = defaultTenant?.id ?? "default";
       }
+      const [reqRow] = await db
+        .select({ contactPhone: finJoeRoleChangeRequests.contactPhone, tenantId: finJoeRoleChangeRequests.tenantId })
+        .from(finJoeRoleChangeRequests)
+        .where(eq(finJoeRoleChangeRequests.id, req.params.id))
+        .limit(1);
       const finJoeData = createFinJoeData(db, tenantId);
       const result = await finJoeData.approveRoleRequest(req.params.id, user.id, "admin");
       if (!result) return res.status(404).json({ error: "Role request not found or not pending" });
+      if (reqRow?.contactPhone && reqRow?.tenantId) {
+        try {
+          await notifyRoleRequestRequester(reqRow.contactPhone, "approved", req.params.id, reqRow.tenantId, undefined, req.requestId);
+        } catch (notifyErr) {
+          logger.error("Failed to notify role request requester for approval", { requestId: req.requestId, err: String(notifyErr) });
+        }
+      }
       res.json({ id: result.id, approved: true });
     } catch (e) {
       logger.error("FinJoe approve error", { requestId: req.requestId, err: String(e) });
@@ -477,9 +495,21 @@ export async function registerRoutes(app: Express) {
         tenantId = defaultTenant?.id ?? "default";
       }
       const { reason } = req.body;
+      const [reqRow] = await db
+        .select({ contactPhone: finJoeRoleChangeRequests.contactPhone, tenantId: finJoeRoleChangeRequests.tenantId })
+        .from(finJoeRoleChangeRequests)
+        .where(eq(finJoeRoleChangeRequests.id, req.params.id))
+        .limit(1);
       const finJoeData = createFinJoeData(db, tenantId);
       const result = await finJoeData.rejectRoleRequest(req.params.id, user.id, reason || "Rejected via admin", "admin");
       if (!result) return res.status(404).json({ error: "Role request not found or not pending" });
+      if (reqRow?.contactPhone && reqRow?.tenantId) {
+        try {
+          await notifyRoleRequestRequester(reqRow.contactPhone, "rejected", req.params.id, reqRow.tenantId, reason || "Rejected via admin", req.requestId);
+        } catch (notifyErr) {
+          logger.error("Failed to notify role request requester for rejection", { requestId: req.requestId, err: String(notifyErr) });
+        }
+      }
       res.json({ id: result.id, rejected: true, reason: reason || "Rejected via admin" });
     } catch (e) {
       logger.error("FinJoe reject error", { requestId: req.requestId, err: String(e) });
@@ -2544,6 +2574,31 @@ export async function registerRoutes(app: Express) {
       if (existing.status !== "draft") return res.status(400).json({ error: "Only draft expenses can be submitted" });
       const [updated] = await db.update(expenses).set({ status: "pending_approval", submittedAt: new Date(), submittedById: (req.user as any).id, updatedAt: new Date() }).where(whereClause).returning();
       if (!updated) return res.status(404).json({ error: "Not found" });
+      // Notify finance about new expense needing approval
+      try {
+        const [row] = await db
+          .select({
+            amount: expenses.amount,
+            vendorName: expenses.vendorName,
+            description: expenses.description,
+            categoryName: expenseCategories.name,
+          })
+          .from(expenses)
+          .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
+          .where(and(eq(expenses.id, updated.id), eq(expenses.tenantId, tid)))
+          .limit(1);
+        if (row) {
+          await notifyFinanceForApproval(
+            updated.id,
+            { amount: row.amount, vendorName: row.vendorName, description: row.description },
+            tid,
+            req.requestId,
+            row.categoryName ?? null
+          );
+        }
+      } catch (notifyErr) {
+        logger.error("Failed to notify finance for web submit", { requestId: req.requestId, err: String(notifyErr) });
+      }
       res.json(updated);
     } catch (e) {
       logger.error("Expense submit error", { requestId: req.requestId, err: String(e) });
@@ -2564,6 +2619,11 @@ export async function registerRoutes(app: Express) {
       if (existing.status !== "pending_approval") return res.status(400).json({ error: "Only pending expenses can be approved" });
       const [updated] = await db.update(expenses).set({ status: "approved", approvedAt: new Date(), approvedById: (req.user as any).id, rejectionReason: null, updatedAt: new Date() }).where(whereClause).returning();
       if (!updated) return res.status(404).json({ error: "Not found" });
+      try {
+        await notifySubmitterForApprovalRejectionFromExpense(updated.id, "approved", tid, undefined, req.requestId);
+      } catch (notifyErr) {
+        logger.error("Failed to notify submitter for approval", { requestId: req.requestId, err: String(notifyErr) });
+      }
       res.json(updated);
     } catch (e) {
       logger.error("Expense approve error", { requestId: req.requestId, err: String(e) });
@@ -2585,6 +2645,11 @@ export async function registerRoutes(app: Express) {
       if (existing.status !== "pending_approval") return res.status(400).json({ error: "Only pending expenses can be rejected" });
       const [updated] = await db.update(expenses).set({ status: "rejected", rejectionReason: reason || null, updatedAt: new Date() }).where(whereClause).returning();
       if (!updated) return res.status(404).json({ error: "Not found" });
+      try {
+        await notifySubmitterForApprovalRejectionFromExpense(updated.id, "rejected", tid, reason, req.requestId);
+      } catch (notifyErr) {
+        logger.error("Failed to notify submitter for rejection", { requestId: req.requestId, err: String(notifyErr) });
+      }
       res.json(updated);
     } catch (e) {
       logger.error("Expense reject error", { requestId: req.requestId, err: String(e) });
@@ -2606,6 +2671,11 @@ export async function registerRoutes(app: Express) {
       if (existing.status !== "approved") return res.status(400).json({ error: "Only approved expenses can be marked as paid" });
       const [updated] = await db.update(expenses).set({ status: "paid", payoutMethod: payoutMethod || null, payoutRef: payoutRef || null, payoutAt: new Date(), updatedAt: new Date() }).where(whereClause).returning();
       if (!updated) return res.status(404).json({ error: "Not found" });
+      try {
+        await notifySubmitterForPayoutFromExpense(updated.id, tid, req.requestId);
+      } catch (notifyErr) {
+        logger.error("Failed to notify submitter for payout", { requestId: req.requestId, err: String(notifyErr) });
+      }
       res.json(updated);
     } catch (e) {
       logger.error("Expense payout error", { requestId: req.requestId, err: String(e) });
