@@ -944,7 +944,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           startDate: recurringExpenseTemplates.startDate,
           endDate: recurringExpenseTemplates.endDate,
           isActive: recurringExpenseTemplates.isActive,
-          nextRunDate: recurringExpenseTemplates.nextRunDate,
+          nextRunDate: sql<string>`${recurringExpenseTemplates.nextRunDate}::text`.as("nextRunDate"),
           costCenterName: costCenters.name,
           categoryName: expenseCategories.name,
         })
@@ -1112,7 +1112,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           startDate: recurringIncomeTemplates.startDate,
           endDate: recurringIncomeTemplates.endDate,
           isActive: recurringIncomeTemplates.isActive,
-          nextRunDate: recurringIncomeTemplates.nextRunDate,
+          nextRunDate: sql<string>`${recurringIncomeTemplates.nextRunDate}::text`.as("nextRunDate"),
           costCenterName: costCenters.name,
           categoryName: incomeCategories.name,
         })
