@@ -52,6 +52,10 @@ type RecurringTemplate = {
   amount: number;
   description: string | null;
   vendorName: string | null;
+  gstin: string | null;
+  taxType: string | null;
+  invoiceNumber: string | null;
+  voucherNumber: string | null;
   frequency: string;
   dayOfMonth: number | null;
   dayOfWeek: number | null;
@@ -63,6 +67,14 @@ type RecurringTemplate = {
   categoryName: string | null;
   campusName?: string | null;
 };
+
+const TAX_TYPE_OPTIONS = [
+  { value: "", label: "—" },
+  { value: "no_gst", label: "No GST" },
+  { value: "gst_itc", label: "GST (ITC availed)" },
+  { value: "gst_rcm", label: "GST (Reverse Charge)" },
+  { value: "gst_no_itc", label: "GST (No ITC)" },
+];
 
 const FREQUENCY_LABELS: Record<string, string> = {
   monthly: "Monthly",
@@ -92,6 +104,10 @@ export default function AdminRecurringTemplates() {
     amount: "",
     description: "",
     vendorName: "",
+    gstin: "",
+    taxType: "",
+    invoiceNumber: "",
+    voucherNumber: "",
     frequency: "monthly" as "monthly" | "weekly" | "quarterly",
     dayOfMonth: 1,
     dayOfWeek: 0,
@@ -103,6 +119,10 @@ export default function AdminRecurringTemplates() {
     amount: "",
     description: "",
     vendorName: "",
+    gstin: "",
+    taxType: "",
+    invoiceNumber: "",
+    voucherNumber: "",
     frequency: "monthly" as "monthly" | "weekly" | "quarterly",
     dayOfMonth: 1,
     dayOfWeek: 0,
@@ -145,6 +165,16 @@ export default function AdminRecurringTemplates() {
     enabled: !!tenantId,
   });
 
+  const { data: vendorSuggestions = [] } = useQuery<string[]>({
+    queryKey: ["/api/admin/expenses/vendor-suggestions", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/expenses/vendor-suggestions${qs}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!tenantId && (createDialog || !!editDialog),
+  });
+
   const createMutation = useMutation({
     mutationFn: async (data: typeof createForm) => {
       const res = await apiRequest("POST", "/api/admin/recurring-templates", {
@@ -154,6 +184,10 @@ export default function AdminRecurringTemplates() {
         amount: Math.round(parseFloat(data.amount)),
         description: data.description || null,
         vendorName: data.vendorName || null,
+        gstin: data.gstin || null,
+        taxType: data.taxType || null,
+        invoiceNumber: data.invoiceNumber || null,
+        voucherNumber: data.voucherNumber || null,
         frequency: data.frequency,
         dayOfMonth: data.frequency === "monthly" || data.frequency === "quarterly" ? data.dayOfMonth : undefined,
         dayOfWeek: data.frequency === "weekly" ? data.dayOfWeek : undefined,
@@ -175,6 +209,10 @@ export default function AdminRecurringTemplates() {
         amount: "",
         description: "",
         vendorName: "",
+        gstin: "",
+        taxType: "",
+        invoiceNumber: "",
+        voucherNumber: "",
         frequency: "monthly",
         dayOfMonth: 1,
         dayOfWeek: 0,
@@ -193,6 +231,10 @@ export default function AdminRecurringTemplates() {
         ...data,
         amount: data.amount !== undefined ? Math.round(parseFloat(String(data.amount))) : undefined,
         endDate: data.endDate === "" ? null : data.endDate,
+        gstin: data.gstin === "" ? null : data.gstin,
+        taxType: data.taxType === "" ? null : data.taxType,
+        invoiceNumber: data.invoiceNumber === "" ? null : data.invoiceNumber,
+        voucherNumber: data.voucherNumber === "" ? null : data.voucherNumber,
       });
       if (!res.ok) {
         const err = await res.json();
@@ -242,6 +284,10 @@ export default function AdminRecurringTemplates() {
       amount: String(tpl.amount),
       description: tpl.description || "",
       vendorName: tpl.vendorName || "",
+      gstin: tpl.gstin || "",
+      taxType: tpl.taxType || "",
+      invoiceNumber: tpl.invoiceNumber || "",
+      voucherNumber: tpl.voucherNumber || "",
       frequency: tpl.frequency as "monthly" | "weekly" | "quarterly",
       dayOfMonth: tpl.dayOfMonth ?? 1,
       dayOfWeek: tpl.dayOfWeek ?? 0,
@@ -258,6 +304,10 @@ export default function AdminRecurringTemplates() {
       data: {
         ...editForm,
         amount: editForm.amount ? parseFloat(editForm.amount) : undefined,
+        gstin: editForm.gstin || undefined,
+        taxType: editForm.taxType || undefined,
+        invoiceNumber: editForm.invoiceNumber || undefined,
+        voucherNumber: editForm.voucherNumber || undefined,
       },
     });
   };
@@ -458,9 +508,55 @@ export default function AdminRecurringTemplates() {
             <div>
               <Label>Vendor Name</Label>
               <Input
+                list="vendor-suggestions-create"
                 value={createForm.vendorName}
                 onChange={(e) => setCreateForm((f) => ({ ...f, vendorName: e.target.value }))}
                 placeholder="e.g. Landlord Name"
+              />
+              <datalist id="vendor-suggestions-create">
+                {vendorSuggestions.map((v) => (
+                  <option key={v} value={v} />
+                ))}
+              </datalist>
+            </div>
+            <div>
+              <Label>GSTIN (optional)</Label>
+              <Input
+                value={createForm.gstin}
+                onChange={(e) => setCreateForm((f) => ({ ...f, gstin: e.target.value }))}
+                placeholder="15-character GSTIN"
+                maxLength={15}
+              />
+            </div>
+            <div>
+              <Label>Tax Type</Label>
+              <Select value={createForm.taxType || "none"} onValueChange={(v) => setCreateForm((f) => ({ ...f, taxType: v === "none" ? "" : v }))}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select tax treatment" />
+                </SelectTrigger>
+                <SelectContent>
+                  {TAX_TYPE_OPTIONS.map((o) => (
+                    <SelectItem key={o.value || "none"} value={o.value || "none"}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Invoice Number (optional)</Label>
+              <Input
+                value={createForm.invoiceNumber}
+                onChange={(e) => setCreateForm((f) => ({ ...f, invoiceNumber: e.target.value }))}
+                placeholder="e.g. RENT-2025-01"
+              />
+            </div>
+            <div>
+              <Label>Voucher Number (optional)</Label>
+              <Input
+                value={createForm.voucherNumber}
+                onChange={(e) => setCreateForm((f) => ({ ...f, voucherNumber: e.target.value }))}
+                placeholder="e.g. VOU-2025-00001"
               />
             </div>
             <div>
@@ -582,8 +678,55 @@ export default function AdminRecurringTemplates() {
               <div>
                 <Label>Vendor Name</Label>
                 <Input
+                  list="vendor-suggestions-edit"
                   value={editForm.vendorName}
                   onChange={(e) => setEditForm((f) => ({ ...f, vendorName: e.target.value }))}
+                  placeholder="e.g. Landlord Name"
+                />
+                <datalist id="vendor-suggestions-edit">
+                  {vendorSuggestions.map((v) => (
+                    <option key={v} value={v} />
+                  ))}
+                </datalist>
+              </div>
+              <div>
+                <Label>GSTIN (optional)</Label>
+                <Input
+                  value={editForm.gstin}
+                  onChange={(e) => setEditForm((f) => ({ ...f, gstin: e.target.value }))}
+                  placeholder="15-character GSTIN"
+                  maxLength={15}
+                />
+              </div>
+              <div>
+                <Label>Tax Type</Label>
+                <Select value={editForm.taxType || "none"} onValueChange={(v) => setEditForm((f) => ({ ...f, taxType: v === "none" ? "" : v }))}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select tax treatment" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TAX_TYPE_OPTIONS.map((o) => (
+                      <SelectItem key={o.value || "none"} value={o.value || "none"}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Invoice Number (optional)</Label>
+                <Input
+                  value={editForm.invoiceNumber}
+                  onChange={(e) => setEditForm((f) => ({ ...f, invoiceNumber: e.target.value }))}
+                  placeholder="e.g. RENT-2025-01"
+                />
+              </div>
+              <div>
+                <Label>Voucher Number (optional)</Label>
+                <Input
+                  value={editForm.voucherNumber}
+                  onChange={(e) => setEditForm((f) => ({ ...f, voucherNumber: e.target.value }))}
+                  placeholder="e.g. VOU-2025-00001"
                 />
               </div>
               <div>

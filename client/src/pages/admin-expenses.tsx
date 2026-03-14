@@ -1033,6 +1033,16 @@ export default function AdminExpenses() {
     enabled: canImportExpenses,
   });
 
+  const { data: vendorSuggestions = [] } = useQuery<string[]>({
+    queryKey: ["/api/admin/expenses/vendor-suggestions", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/expenses/vendor-suggestions${tenantId ? `?tenantId=${tenantId}` : ""}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+
   const { data: studentsForAdmin = [] } = useQuery<any[]>({
     queryKey: ["/api/admin/petty-cash/custodians"],
     queryFn: async () => {
@@ -1659,10 +1669,16 @@ export default function AdminExpenses() {
                 <div>
                   <Label>Vendor / Supplier Name</Label>
                   <Input
+                    list="vendor-suggestions-create"
                     value={createForm.vendorName}
                     onChange={(e) => setCreateForm((f) => ({ ...f, vendorName: e.target.value }))}
                     placeholder="e.g., ABC Supplies Pvt Ltd"
                   />
+                  <datalist id="vendor-suggestions-create">
+                    {vendorSuggestions.map((v) => (
+                      <option key={v} value={v} />
+                    ))}
+                  </datalist>
                 </div>
                 <div>
                   <Label>GSTIN (optional)</Label>
@@ -2193,6 +2209,7 @@ export default function AdminExpenses() {
               expense={editExpenseDialog}
               categories={categories}
               campuses={campuses}
+              vendorSuggestions={vendorSuggestions}
               onSave={(data) => updateExpenseMutation.mutate({ id: editExpenseDialog.id, data })}
               onCancel={() => setEditExpenseDialog(null)}
               isPending={updateExpenseMutation.isPending}
@@ -2288,6 +2305,7 @@ function EditExpenseForm({
   expense,
   categories,
   campuses,
+  vendorSuggestions = [],
   onSave,
   onCancel,
   isPending,
@@ -2295,6 +2313,7 @@ function EditExpenseForm({
   expense: ExpenseWithDetails;
   categories: ExpenseCategory[];
   campuses: Campus[];
+  vendorSuggestions?: string[];
   onSave: (data: Record<string, unknown>) => void;
   onCancel: () => void;
   isPending: boolean;
@@ -2390,7 +2409,17 @@ function EditExpenseForm({
       </div>
       <div>
         <Label>Vendor / Supplier Name</Label>
-        <Input value={vendorName} onChange={(e) => setVendorName(e.target.value)} placeholder="e.g., ABC Supplies Pvt Ltd" />
+        <Input
+          list="vendor-suggestions-edit"
+          value={vendorName}
+          onChange={(e) => setVendorName(e.target.value)}
+          placeholder="e.g., ABC Supplies Pvt Ltd"
+        />
+        <datalist id="vendor-suggestions-edit">
+          {vendorSuggestions.map((v) => (
+            <option key={v} value={v} />
+          ))}
+        </datalist>
       </div>
       <div>
         <Label>GSTIN (optional)</Label>

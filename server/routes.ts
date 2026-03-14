@@ -26,7 +26,7 @@ import {
   incomeTypes,
   cronRuns,
 } from "../shared/schema.js";
-import { createFinJoeData, generateExpensesFromTemplates, generateIncomeFromTemplates } from "../lib/finjoe-data.js";
+import { createFinJoeData, generateExpensesFromTemplates, generateIncomeFromTemplates, listDistinctVendorNames } from "../lib/finjoe-data.js";
 import { runBackfillEmbeddings } from "../lib/backfill-embeddings.js";
 import { runWeeklyInsights } from "../worker/src/weekly-insights.js";
 import { logCronRun } from "../lib/cron-logger.js";
@@ -1702,7 +1702,7 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.body?.tenantId ?? req.query?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { costCenterId, categoryId, amount, description, vendorName, frequency, dayOfMonth, dayOfWeek, startDate, endDate } = req.body;
+      const { costCenterId, categoryId, amount, description, vendorName, gstin, taxType, invoiceNumber, voucherNumber, frequency, dayOfMonth, dayOfWeek, startDate, endDate } = req.body;
       const amountNum = typeof amount === "number" ? Math.round(amount) : parseInt(String(amount ?? 0), 10);
       if (!categoryId || typeof categoryId !== "string") return res.status(400).json({ error: "categoryId required" });
       if (amountNum <= 0) return res.status(400).json({ error: "amount must be positive" });
@@ -1718,6 +1718,10 @@ export async function registerRoutes(app: Express) {
         amount: amountNum,
         description: description ? String(description) : null,
         vendorName: vendorName ? String(vendorName) : null,
+        gstin: gstin ? String(gstin) : null,
+        taxType: taxType ? String(taxType) : null,
+        invoiceNumber: invoiceNumber ? String(invoiceNumber) : null,
+        voucherNumber: voucherNumber ? String(voucherNumber) : null,
         frequency: freq,
         dayOfMonth: dayOfMonth != null ? Math.min(31, Math.max(1, Number(dayOfMonth))) : undefined,
         dayOfWeek: dayOfWeek != null ? Math.min(6, Math.max(0, Number(dayOfWeek))) : undefined,
@@ -1740,11 +1744,15 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.body?.tenantId ?? req.query?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { amount, description, vendorName, frequency, dayOfMonth, dayOfWeek, endDate, isActive } = req.body;
+      const { amount, description, vendorName, gstin, taxType, invoiceNumber, voucherNumber, frequency, dayOfMonth, dayOfWeek, endDate, isActive } = req.body;
       const updates: Record<string, unknown> = {};
       if (amount !== undefined) updates.amount = Math.round(Number(amount));
       if (description !== undefined) updates.description = description ? String(description) : null;
       if (vendorName !== undefined) updates.vendorName = vendorName ? String(vendorName) : null;
+      if (gstin !== undefined) updates.gstin = gstin ? String(gstin) : null;
+      if (taxType !== undefined) updates.taxType = taxType ? String(taxType) : null;
+      if (invoiceNumber !== undefined) updates.invoiceNumber = invoiceNumber ? String(invoiceNumber) : null;
+      if (voucherNumber !== undefined) updates.voucherNumber = voucherNumber ? String(voucherNumber) : null;
       if (frequency !== undefined) {
         const f = String(frequency).toLowerCase();
         if (["monthly", "weekly", "quarterly"].includes(f)) updates.frequency = f;
@@ -2177,6 +2185,21 @@ export async function registerRoutes(app: Express) {
   });
 
   // Expenses
+  app.get("/api/admin/expenses/vendor-suggestions", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const names = await listDistinctVendorNames(db, tid);
+      res.json(names);
+    } catch (e) {
+      logger.error("Vendor suggestions error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch vendor suggestions" });
+    }
+  });
+
   app.get("/api/admin/expenses", requireAdmin, async (req, res) => {
     try {
       const tenantId = getTenantId(req);

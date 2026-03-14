@@ -88,6 +88,10 @@ export type CreateRecurringTemplateInput = {
   amount: number;
   description?: string | null;
   vendorName?: string | null;
+  gstin?: string | null;
+  taxType?: string | null;
+  invoiceNumber?: string | null;
+  voucherNumber?: string | null;
   frequency: "monthly" | "weekly" | "quarterly";
   dayOfMonth?: number;
   dayOfWeek?: number;
@@ -875,6 +879,10 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           amount: data.amount,
           description: data.description ?? null,
           vendorName: data.vendorName ?? null,
+          gstin: data.gstin ?? null,
+          taxType: data.taxType ?? null,
+          invoiceNumber: data.invoiceNumber ?? null,
+          voucherNumber: data.voucherNumber ?? null,
           frequency: data.frequency,
           dayOfMonth: data.dayOfMonth ?? null,
           dayOfWeek: data.dayOfWeek ?? null,
@@ -898,6 +906,10 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           amount: recurringExpenseTemplates.amount,
           description: recurringExpenseTemplates.description,
           vendorName: recurringExpenseTemplates.vendorName,
+          gstin: recurringExpenseTemplates.gstin,
+          taxType: recurringExpenseTemplates.taxType,
+          invoiceNumber: recurringExpenseTemplates.invoiceNumber,
+          voucherNumber: recurringExpenseTemplates.voucherNumber,
           frequency: recurringExpenseTemplates.frequency,
           dayOfMonth: recurringExpenseTemplates.dayOfMonth,
           dayOfWeek: recurringExpenseTemplates.dayOfWeek,
@@ -925,6 +937,10 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         amount: number;
         description: string | null;
         vendorName: string | null;
+        gstin: string | null;
+        taxType: string | null;
+        invoiceNumber: string | null;
+        voucherNumber: string | null;
         frequency: "monthly" | "weekly" | "quarterly";
         dayOfMonth: number | null;
         dayOfWeek: number | null;
@@ -949,6 +965,10 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       if (updates.amount !== undefined) setValues.amount = updates.amount;
       if (updates.description !== undefined) setValues.description = updates.description;
       if (updates.vendorName !== undefined) setValues.vendorName = updates.vendorName;
+      if (updates.gstin !== undefined) setValues.gstin = updates.gstin;
+      if (updates.taxType !== undefined) setValues.taxType = updates.taxType;
+      if (updates.invoiceNumber !== undefined) setValues.invoiceNumber = updates.invoiceNumber;
+      if (updates.voucherNumber !== undefined) setValues.voucherNumber = updates.voucherNumber;
       if (updates.frequency !== undefined) setValues.frequency = updates.frequency;
       if (updates.dayOfMonth !== undefined) setValues.dayOfMonth = updates.dayOfMonth;
       if (updates.dayOfWeek !== undefined) setValues.dayOfWeek = updates.dayOfWeek;
@@ -1228,6 +1248,24 @@ export function advanceRecurringNextRun(
 
 export type FinJoeData = ReturnType<typeof createFinJoeData>;
 
+/** List distinct vendor names from expenses for autocomplete suggestions */
+export async function listDistinctVendorNames(db: FinJoeDb, tenantId: string): Promise<string[]> {
+  const rows = await db
+    .select({ vendorName: expenses.vendorName })
+    .from(expenses)
+    .where(and(eq(expenses.tenantId, tenantId), sql`${expenses.vendorName} IS NOT NULL AND ${expenses.vendorName} != ''`));
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const r of rows) {
+    const name = (r.vendorName as string)?.trim();
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      result.push(name);
+    }
+  }
+  return result.sort();
+}
+
 /** Max expenses to create per template per run (catch-up for missed cron runs) */
 const MAX_CATCH_UP_PER_TEMPLATE = 12;
 
@@ -1321,6 +1359,11 @@ export async function generateExpensesFromTemplates(
             expenseDate: nextRunStr,
             description,
             vendorName,
+            invoiceDate: nextRunStr,
+            gstin: (tpl.gstin as string | null) ?? undefined,
+            taxType: (tpl.taxType as string | null) ?? undefined,
+            invoiceNumber: (tpl.invoiceNumber as string | null) ?? undefined,
+            voucherNumber: (tpl.voucherNumber as string | null) ?? undefined,
             source: "recurring_template",
             recurringTemplateId: templateId,
           });
