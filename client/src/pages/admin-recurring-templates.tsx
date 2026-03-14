@@ -484,13 +484,15 @@ export default function AdminRecurringTemplates() {
 
       {/* Create Dialog */}
       <Dialog open={createDialog} onOpenChange={setCreateDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
+        <DialogContent className="max-w-md max-h-[90vh] flex flex-col overflow-hidden p-0 gap-0">
+          <DialogHeader className="px-6 pt-6 pb-2 flex-shrink-0 pr-10">
             <DialogTitle>Add Recurring Template</DialogTitle>
             <DialogDescription>Create a template for recurring expenses. Draft expenses will be generated daily by cron.</DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleCreate} className="space-y-4">
-            <div>
+          <form onSubmit={handleCreate} className="flex flex-col flex-1 min-h-0 overflow-hidden">
+            <div className="flex-1 overflow-y-auto px-6 py-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="sm:col-span-2">
               <Label>Category</Label>
               <Select value={createForm.categoryId} onValueChange={(v) => setCreateForm((f) => ({ ...f, categoryId: v }))} required>
                 <SelectTrigger>
@@ -540,7 +542,7 @@ export default function AdminRecurringTemplates() {
                 placeholder="e.g. Monthly rent"
               />
             </div>
-            <div>
+            <div className="sm:col-span-2">
               <Label>Vendor Name</Label>
               <Input
                 list="vendor-suggestions-create"
@@ -671,7 +673,9 @@ export default function AdminRecurringTemplates() {
                 onChange={(e) => setCreateForm((f) => ({ ...f, endDate: e.target.value }))}
               />
             </div>
-            <DialogFooter>
+              </div>
+            </div>
+            <DialogFooter className="flex-shrink-0 px-6 py-4 border-t mt-0">
               <Button type="button" variant="outline" onClick={() => setCreateDialog(false)}>
                 Cancel
               </Button>
@@ -686,13 +690,15 @@ export default function AdminRecurringTemplates() {
 
       {/* Edit Dialog */}
       <Dialog open={!!editDialog} onOpenChange={(o) => !o && setEditDialog(null)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
+        <DialogContent className="max-w-md max-h-[90vh] flex flex-col overflow-hidden p-0 gap-0">
+          <DialogHeader className="px-6 pt-6 pb-2 flex-shrink-0 pr-10">
             <DialogTitle>Edit Recurring Template</DialogTitle>
             <DialogDescription>Update amount, schedule, or deactivate. Category and {costCenterLabel} cannot be changed.</DialogDescription>
           </DialogHeader>
           {editDialog && (
-            <form onSubmit={handleUpdate} className="space-y-4">
+            <form onSubmit={handleUpdate} className="flex flex-col flex-1 min-h-0 overflow-hidden">
+              <div className="flex-1 overflow-y-auto px-6 py-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <Label>Amount (₹)</Label>
                 <Input
@@ -832,14 +838,16 @@ export default function AdminRecurringTemplates() {
                   onChange={(e) => setEditForm((f) => ({ ...f, endDate: e.target.value }))}
                 />
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 sm:col-span-2">
                 <Switch
                   checked={editForm.isActive}
                   onCheckedChange={(v) => setEditForm((f) => ({ ...f, isActive: v }))}
                 />
                 <Label>Active</Label>
               </div>
-              <DialogFooter>
+                </div>
+              </div>
+              <DialogFooter className="flex-shrink-0 px-6 py-4 border-t mt-0">
                 <Button type="button" variant="outline" onClick={() => setEditDialog(null)}>
                   Cancel
                 </Button>
