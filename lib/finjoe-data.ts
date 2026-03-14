@@ -59,6 +59,16 @@ const AUDIT_REQUIREMENTS: AuditRequirements = {
 function toDateString(val: unknown): string | null {
   if (val instanceof Date) return isNaN(val.getTime()) ? null : val.toISOString().slice(0, 10);
   if (typeof val === "string" && /^\d{4}-\d{2}-\d{2}/.test(val)) return val.slice(0, 10);
+  if (typeof val === "string" && /^\d+$/.test(val)) {
+    const n = parseInt(val, 10);
+    if (n < 100000) {
+      const d = new Date(Date.UTC(2000, 0, 1));
+      d.setUTCDate(d.getUTCDate() + n);
+      return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+    }
+    const d = n < 10000000000 ? new Date(n * 1000) : new Date(n);
+    return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  }
   if (typeof val === "number") {
     if (val < 100000) {
       const d = new Date(Date.UTC(2000, 0, 1));

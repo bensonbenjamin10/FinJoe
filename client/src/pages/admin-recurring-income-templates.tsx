@@ -72,7 +72,7 @@ const FREQUENCY_LABELS: Record<string, string> = {
 
 const DAYS_OF_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-/** Format nextRunDate for display; handles raw days-since-2000 number from API */
+/** Format nextRunDate for display; handles raw days-since-2000 number/string from API */
 function formatNextRunDate(value: unknown): string {
   if (value == null) return "—";
   let d: Date;
@@ -82,6 +82,14 @@ function formatNextRunDate(value: unknown): string {
       d.setUTCDate(d.getUTCDate() + value);
     } else {
       d = value < 10000000000 ? new Date(value * 1000) : new Date(value);
+    }
+  } else if (typeof value === "string" && /^\d+$/.test(value)) {
+    const n = parseInt(value, 10);
+    if (n < 100000) {
+      d = new Date(Date.UTC(2000, 0, 1));
+      d.setUTCDate(d.getUTCDate() + n);
+    } else {
+      d = n < 10000000000 ? new Date(n * 1000) : new Date(n);
     }
   } else {
     d = new Date(value as string | Date);
