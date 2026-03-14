@@ -10,6 +10,9 @@ import AdminDashboard from "@/pages/admin-dashboard";
 import AdminFinJoe from "@/pages/admin-finjoe";
 import AdminExpenses from "@/pages/admin-expenses";
 import AdminIncome from "@/pages/admin-income";
+import AdminRecurringTemplates from "@/pages/admin-recurring-templates";
+import AdminRecurringIncomeTemplates from "@/pages/admin-recurring-income-templates";
+import AdminCron from "@/pages/admin-cron";
 import AdminTenants from "@/pages/admin-tenants";
 import AdminTenantUsers from "@/pages/admin-tenant-users";
 import AdminAccountSettings from "@/pages/admin-account-settings";
@@ -34,6 +37,13 @@ function Router() {
           <ProtectedRoute requireRoles={["super_admin"]}>
             <AdminShell>
               <AdminAccountSettings />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/cron">
+          <ProtectedRoute requireRoles={["super_admin"]}>
+            <AdminShell>
+              <AdminCron />
             </AdminShell>
           </ProtectedRoute>
         </Route>
@@ -65,10 +75,24 @@ function Router() {
             </AdminShell>
           </ProtectedRoute>
         </Route>
+        <Route path="/admin/recurring-templates">
+          <ProtectedRoute>
+            <AdminShell>
+              <AdminRecurringTemplates />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
         <Route path="/admin/income">
           <ProtectedRoute>
             <AdminShell>
               <AdminIncome />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/recurring-income-templates">
+          <ProtectedRoute>
+            <AdminShell>
+              <AdminRecurringIncomeTemplates />
             </AdminShell>
           </ProtectedRoute>
         </Route>

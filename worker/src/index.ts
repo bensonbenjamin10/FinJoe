@@ -2,10 +2,11 @@ import "dotenv/config";
 import express from "express";
 import { handleWebhook } from "./webhook.js";
 import { runWeeklyInsights } from "./weekly-insights.js";
-import { generateExpensesFromTemplates } from "../../lib/finjoe-data.js";
+import { generateExpensesFromTemplates, generateIncomeFromTemplates } from "../../lib/finjoe-data.js";
 import { runBackfillEmbeddings } from "../../lib/backfill-embeddings.js";
 import { db, pool } from "./db.js";
 import { logger } from "./logger.js";
+import { logCronRun } from "../../lib/cron-logger.js";
 
 // Prevent unhandled rejections from crashing the process (can cause 502)
 process.on("unhandledRejection", (reason, promise) => {
@@ -38,8 +39,11 @@ app.get("/cron/weekly-insights", async (req, res) => {
     return;
   }
   try {
-    const result = await runWeeklyInsights();
-    res.json({ ok: true, ...result });
+    const result = await logCronRun(db, "weekly-insights", async () => {
+      const r = await runWeeklyInsights();
+      return { ok: true, ...r };
+    });
+    res.json(result);
   } catch (err) {
     logger.error("Weekly insights cron error", { err: String(err) });
     res.status(500).json({ error: "Failed to run weekly insights" });
@@ -53,12 +57,34 @@ app.get("/cron/recurring-expenses", async (req, res) => {
     return;
   }
   try {
-    const today = new Date().toISOString().slice(0, 10);
-    const result = await generateExpensesFromTemplates(db, today, pool);
-    res.json({ ok: true, generated: result.generated, errors: result.errors });
+    const result = await logCronRun(db, "recurring-expenses", async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const r = await generateExpensesFromTemplates(db, today, pool);
+      return { ok: true, generated: r.generated, errors: r.errors };
+    });
+    res.json(result);
   } catch (err) {
     logger.error("Recurring expenses cron error", { err: String(err) });
     res.status(500).json({ error: "Failed to run recurring expenses" });
+  }
+});
+
+app.get("/cron/recurring-income", async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.query?.secret !== secret) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  try {
+    const result = await logCronRun(db, "recurring-income", async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const r = await generateIncomeFromTemplates(db, today);
+      return { ok: true, generated: r.generated, errors: r.errors };
+    });
+    res.json(result);
+  } catch (err) {
+    logger.error("Recurring income cron error", { err: String(err) });
+    res.status(500).json({ error: "Failed to run recurring income" });
   }
 });
 
@@ -69,8 +95,11 @@ app.get("/cron/backfill-embeddings", async (req, res) => {
     return;
   }
   try {
-    const result = await runBackfillEmbeddings(pool);
-    res.json({ ok: true, ...result });
+    const result = await logCronRun(db, "backfill-embeddings", async () => {
+      const r = await runBackfillEmbeddings(pool);
+      return { ok: true, ...r };
+    });
+    res.json(result);
   } catch (err) {
     logger.error("Backfill embeddings cron error", { err: String(err) });
     res.status(500).json({ error: "Failed to run backfill embeddings" });

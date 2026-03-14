@@ -2,7 +2,7 @@ import express, { type Express } from "express";
 import multer from "multer";
 import passport from "passport";
 import { eq, and, desc, or, sql, inArray, isNull, gte, lte } from "drizzle-orm";
-import { db } from "./db.js";
+import { db, pool } from "./db.js";
 import { parseBankStatementCsv, isValidDateString } from "../lib/bank-statement-parser.js";
 import { analyzeImportSuggestions } from "../lib/import-analyzer.js";
 import { hashPassword, requireAdmin, requireSuperAdmin, getTenantId } from "./auth.js";
@@ -24,8 +24,12 @@ import {
   incomeCategories,
   incomeRecords,
   incomeTypes,
+  cronRuns,
 } from "../shared/schema.js";
-import { createFinJoeData } from "../lib/finjoe-data.js";
+import { createFinJoeData, generateExpensesFromTemplates, generateIncomeFromTemplates } from "../lib/finjoe-data.js";
+import { runBackfillEmbeddings } from "../lib/backfill-embeddings.js";
+import { runWeeklyInsights } from "../worker/src/weekly-insights.js";
+import { logCronRun } from "../lib/cron-logger.js";
 import { createTemplatesInTwilio, submitTemplatesForApproval } from "../lib/twilio-content-create.js";
 import { fetchApprovedTemplatesFromTwilio, fetchTemplateStatusesFromTwilio } from "../lib/twilio-content-sync.js";
 import { sendFinJoeEmail } from "../worker/src/email.js";
@@ -1672,6 +1676,272 @@ export async function registerRoutes(app: Express) {
     }
   });
 
+  // Recurring expense templates
+  app.get("/api/admin/recurring-templates", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const isActive = req.query?.isActive;
+      const filters = isActive !== undefined ? { isActive: isActive === "true" } : undefined;
+      const finJoeData = createFinJoeData(db, tid);
+      const rows = await finJoeData.listRecurringTemplates(filters);
+      res.json(rows);
+    } catch (e) {
+      logger.error("Recurring templates list error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch recurring templates" });
+    }
+  });
+
+  app.post("/api/admin/recurring-templates", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { costCenterId, categoryId, amount, description, vendorName, frequency, dayOfMonth, dayOfWeek, startDate, endDate } = req.body;
+      const amountNum = typeof amount === "number" ? Math.round(amount) : parseInt(String(amount ?? 0), 10);
+      if (!categoryId || typeof categoryId !== "string") return res.status(400).json({ error: "categoryId required" });
+      if (amountNum <= 0) return res.status(400).json({ error: "amount must be positive" });
+      const freq = String(frequency ?? "monthly").toLowerCase() as "monthly" | "weekly" | "quarterly";
+      if (!["monthly", "weekly", "quarterly"].includes(freq)) return res.status(400).json({ error: "frequency must be monthly, weekly, or quarterly" });
+      const startDateStr = typeof startDate === "string" ? startDate : new Date().toISOString().slice(0, 10);
+      const costCenterIdNorm = costCenterId === "__corporate__" || costCenterId === "null" || !costCenterId ? null : costCenterId;
+      const finJoeData = createFinJoeData(db, tid);
+      const result = await finJoeData.createRecurringTemplate({
+        tenantId: tid,
+        costCenterId: costCenterIdNorm,
+        categoryId,
+        amount: amountNum,
+        description: description ? String(description) : null,
+        vendorName: vendorName ? String(vendorName) : null,
+        frequency: freq,
+        dayOfMonth: dayOfMonth != null ? Math.min(31, Math.max(1, Number(dayOfMonth))) : undefined,
+        dayOfWeek: dayOfWeek != null ? Math.min(6, Math.max(0, Number(dayOfWeek))) : undefined,
+        startDate: startDateStr,
+        endDate: endDate ? String(endDate) : null,
+        createdById: (req.user as Express.User)?.id ?? null,
+      });
+      if (!result?.id) return res.status(500).json({ error: "Failed to create recurring template" });
+      res.status(201).json({ id: result.id });
+    } catch (e) {
+      logger.error("Recurring template create error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to create recurring template" });
+    }
+  });
+
+  app.patch("/api/admin/recurring-templates/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { amount, description, vendorName, frequency, dayOfMonth, dayOfWeek, endDate, isActive } = req.body;
+      const updates: Record<string, unknown> = {};
+      if (amount !== undefined) updates.amount = Math.round(Number(amount));
+      if (description !== undefined) updates.description = description ? String(description) : null;
+      if (vendorName !== undefined) updates.vendorName = vendorName ? String(vendorName) : null;
+      if (frequency !== undefined) {
+        const f = String(frequency).toLowerCase();
+        if (["monthly", "weekly", "quarterly"].includes(f)) updates.frequency = f;
+      }
+      if (dayOfMonth !== undefined) updates.dayOfMonth = Math.min(31, Math.max(1, Number(dayOfMonth)));
+      if (dayOfWeek !== undefined) updates.dayOfWeek = Math.min(6, Math.max(0, Number(dayOfWeek)));
+      if (endDate !== undefined) updates.endDate = endDate ? String(endDate) : null;
+      if (isActive !== undefined) updates.isActive = Boolean(isActive);
+      if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No fields to update" });
+      const finJoeData = createFinJoeData(db, tid);
+      const result = await finJoeData.updateRecurringTemplate(req.params.id, updates as any);
+      if (!result) return res.status(404).json({ error: "Recurring template not found" });
+      res.json({ id: result.id });
+    } catch (e) {
+      logger.error("Recurring template update error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to update recurring template" });
+    }
+  });
+
+  app.delete("/api/admin/recurring-templates/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const finJoeData = createFinJoeData(db, tid);
+      const deleted = await finJoeData.deleteRecurringTemplate(req.params.id);
+      if (!deleted) return res.status(404).json({ error: "Recurring template not found" });
+      res.status(204).send();
+    } catch (e) {
+      logger.error("Recurring template delete error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to delete recurring template" });
+    }
+  });
+
+  // Recurring income templates
+  app.get("/api/admin/recurring-income-templates", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const isActive = req.query?.isActive;
+      const filters = isActive !== undefined ? { isActive: isActive === "true" } : undefined;
+      const finJoeData = createFinJoeData(db, tid);
+      const rows = await finJoeData.listRecurringIncomeTemplates(filters);
+      res.json(rows);
+    } catch (e) {
+      logger.error("Recurring income templates list error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch recurring income templates" });
+    }
+  });
+
+  app.post("/api/admin/recurring-income-templates", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { costCenterId, categoryId, amount, particulars, incomeType, frequency, dayOfMonth, dayOfWeek, startDate, endDate } = req.body;
+      const amountNum = typeof amount === "number" ? Math.round(amount) : parseInt(String(amount ?? 0), 10);
+      if (!categoryId || typeof categoryId !== "string") return res.status(400).json({ error: "categoryId required" });
+      if (amountNum <= 0) return res.status(400).json({ error: "amount must be positive" });
+      const freq = String(frequency ?? "monthly").toLowerCase() as "monthly" | "weekly" | "quarterly";
+      if (!["monthly", "weekly", "quarterly"].includes(freq)) return res.status(400).json({ error: "frequency must be monthly, weekly, or quarterly" });
+      const startDateStr = typeof startDate === "string" ? startDate : new Date().toISOString().slice(0, 10);
+      const costCenterIdNorm = costCenterId === "__corporate__" || costCenterId === "null" || !costCenterId ? null : costCenterId;
+      const finJoeData = createFinJoeData(db, tid);
+      const result = await finJoeData.createRecurringIncomeTemplate({
+        tenantId: tid,
+        costCenterId: costCenterIdNorm,
+        categoryId,
+        amount: amountNum,
+        particulars: particulars ? String(particulars) : null,
+        incomeType: incomeType ? String(incomeType) : "other",
+        frequency: freq,
+        dayOfMonth: dayOfMonth != null ? Math.min(31, Math.max(1, Number(dayOfMonth))) : undefined,
+        dayOfWeek: dayOfWeek != null ? Math.min(6, Math.max(0, Number(dayOfWeek))) : undefined,
+        startDate: startDateStr,
+        endDate: endDate ? String(endDate) : null,
+        createdById: (req.user as Express.User)?.id ?? null,
+      });
+      if (!result?.id) return res.status(500).json({ error: "Failed to create recurring income template" });
+      res.status(201).json({ id: result.id });
+    } catch (e) {
+      logger.error("Recurring income template create error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to create recurring income template" });
+    }
+  });
+
+  app.patch("/api/admin/recurring-income-templates/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { amount, particulars, incomeType, frequency, dayOfMonth, dayOfWeek, endDate, isActive } = req.body;
+      const updates: Record<string, unknown> = {};
+      if (amount !== undefined) updates.amount = Math.round(Number(amount));
+      if (particulars !== undefined) updates.particulars = particulars ? String(particulars) : null;
+      if (incomeType !== undefined) updates.incomeType = incomeType ? String(incomeType) : "other";
+      if (frequency !== undefined) {
+        const f = String(frequency).toLowerCase();
+        if (["monthly", "weekly", "quarterly"].includes(f)) updates.frequency = f;
+      }
+      if (dayOfMonth !== undefined) updates.dayOfMonth = Math.min(31, Math.max(1, Number(dayOfMonth)));
+      if (dayOfWeek !== undefined) updates.dayOfWeek = Math.min(6, Math.max(0, Number(dayOfWeek)));
+      if (endDate !== undefined) updates.endDate = endDate ? String(endDate) : null;
+      if (isActive !== undefined) updates.isActive = Boolean(isActive);
+      if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No fields to update" });
+      const finJoeData = createFinJoeData(db, tid);
+      const result = await finJoeData.updateRecurringIncomeTemplate(req.params.id, updates as any);
+      if (!result) return res.status(404).json({ error: "Recurring income template not found" });
+      res.json({ id: result.id });
+    } catch (e) {
+      logger.error("Recurring income template update error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to update recurring income template" });
+    }
+  });
+
+  app.delete("/api/admin/recurring-income-templates/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const finJoeData = createFinJoeData(db, tid);
+      const deleted = await finJoeData.deleteRecurringIncomeTemplate(req.params.id);
+      if (!deleted) return res.status(404).json({ error: "Recurring income template not found" });
+      res.status(204).send();
+    } catch (e) {
+      logger.error("Recurring income template delete error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to delete recurring income template" });
+    }
+  });
+
+  // Cron trigger (admin-only, runs job logic directly on server)
+  app.post("/api/admin/cron/trigger", requireAdmin, async (req, res) => {
+    const { job } = req.body;
+    if (!job || typeof job !== "string") return res.status(400).json({ error: "job required (recurring-expenses, recurring-income, weekly-insights, backfill-embeddings)" });
+    const validJobs = ["recurring-expenses", "recurring-income", "weekly-insights", "backfill-embeddings"];
+    if (!validJobs.includes(job)) return res.status(400).json({ error: `job must be one of: ${validJobs.join(", ")}` });
+
+    try {
+      const result = await logCronRun(db, job, async () => {
+        if (job === "recurring-expenses") {
+          const today = new Date().toISOString().slice(0, 10);
+          const r = await generateExpensesFromTemplates(db, today, pool);
+          return { ok: true, job, generated: r.generated, errors: r.errors };
+        }
+        if (job === "recurring-income") {
+          const today = new Date().toISOString().slice(0, 10);
+          const r = await generateIncomeFromTemplates(db, today);
+          return { ok: true, job, generated: r.generated, errors: r.errors };
+        }
+        if (job === "weekly-insights") {
+          const r = await runWeeklyInsights();
+          return { ok: true, job, ...r };
+        }
+        if (job === "backfill-embeddings") {
+          const r = await runBackfillEmbeddings(pool);
+          return { ok: true, job, ...r };
+        }
+        throw new Error("Unknown job");
+      });
+      return res.json(result);
+    } catch (e) {
+      const errMsg = String(e);
+      logger.error("Cron trigger error", { requestId: req.requestId, job, err: errMsg });
+      res.status(500).json({ error: "Failed to run cron job", details: errMsg });
+    }
+  });
+
+  app.get("/api/admin/cron/history", requireAdmin, async (req, res) => {
+    try {
+      const limit = Math.min(50, parseInt(String(req.query?.limit ?? 20), 10) || 20);
+      const jobFilter = req.query?.job as string | undefined;
+      const validJobNames = ["recurring-expenses", "recurring-income", "weekly-insights", "backfill-embeddings"];
+      const conditions = jobFilter && validJobNames.includes(jobFilter) ? [eq(cronRuns.jobName, jobFilter)] : [];
+      const rows = await db
+        .select()
+        .from(cronRuns)
+        .where(conditions.length > 0 ? and(...conditions) : sql`true`)
+        .orderBy(desc(cronRuns.startedAt))
+        .limit(limit);
+      res.json(rows);
+    } catch (e) {
+      logger.error("Cron history error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch cron history" });
+    }
+  });
+
   // Expense/Income import from bank statement CSV
   app.post("/api/admin/expenses/import/preview", requireAdmin, upload.single("file"), async (req, res) => {
     try {
@@ -1957,6 +2227,7 @@ export async function registerRoutes(app: Express) {
           taxType: expenses.taxType,
           voucherNumber: expenses.voucherNumber,
           source: expenses.source,
+          recurringTemplateId: expenses.recurringTemplateId,
           createdAt: expenses.createdAt,
           costCenterName: costCenters.name,
           categoryName: expenseCategories.name,

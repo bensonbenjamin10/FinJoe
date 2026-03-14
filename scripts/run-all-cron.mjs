@@ -81,7 +81,24 @@ try {
   hadError = true;
 }
 
-// 2. Backfill embeddings (daily - processes expenses without embeddings for RAG)
+// 2. Recurring income (daily)
+console.log("Running recurring income...");
+try {
+  const res = await fetch(`${base}/cron/recurring-income?secret=${encodeURIComponent(CRON_SECRET)}`);
+  const contentType = res.headers.get("content-type") || "";
+  const data = contentType.includes("application/json") ? await res.json() : { error: await res.text() || res.statusText };
+  if (!res.ok || data.error) {
+    console.error("Recurring income error:", formatError(data.error || res.statusText));
+    hadError = true;
+  } else {
+    console.log("Recurring income OK:", data);
+  }
+} catch (err) {
+  console.error("Recurring income failed:", err.message);
+  hadError = true;
+}
+
+// 3. Backfill embeddings (daily - processes expenses without embeddings for RAG)
 console.log("Running backfill embeddings...");
 try {
   const res = await fetch(`${base}/cron/backfill-embeddings?secret=${encodeURIComponent(CRON_SECRET)}`);
@@ -104,7 +121,7 @@ try {
   hadError = true;
 }
 
-// 3. Weekly insights (Mondays only)
+// 4. Weekly insights (Mondays only)
 const now = new Date();
 if (now.getUTCDay() === 1) {
   console.log("Running weekly insights...");

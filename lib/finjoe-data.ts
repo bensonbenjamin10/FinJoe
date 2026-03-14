@@ -18,6 +18,7 @@ import {
   incomeCategories,
   incomeRecords,
   recurringExpenseTemplates,
+  recurringIncomeTemplates,
   tenants,
 } from "../shared/schema";
 
@@ -760,6 +761,8 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       particulars?: string | null;
       incomeType?: string;
       submittedByContactPhone?: string | null;
+      source?: string;
+      recurringTemplateId?: string | null;
     }): Promise<{ id: string } | null> {
       const costCenterIdForDb = data.costCenterId === "__corporate__" || data.costCenterId === "null" ? null : data.costCenterId;
       const [created] = await db
@@ -772,7 +775,8 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           incomeDate: new Date(data.incomeDate),
           particulars: data.particulars ?? null,
           incomeType: data.incomeType ?? "other",
-          source: "finjoe",
+          source: data.source ?? "finjoe",
+          recurringTemplateId: data.recurringTemplateId ?? null,
         })
         .returning({ id: incomeRecords.id });
       return created ?? null;
@@ -889,6 +893,8 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       const rows = await db
         .select({
           id: recurringExpenseTemplates.id,
+          costCenterId: recurringExpenseTemplates.costCenterId,
+          categoryId: recurringExpenseTemplates.categoryId,
           amount: recurringExpenseTemplates.amount,
           description: recurringExpenseTemplates.description,
           vendorName: recurringExpenseTemplates.vendorName,
@@ -990,6 +996,164 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
             eq(recurringExpenseTemplates.isActive, true),
             sql`${recurringExpenseTemplates.nextRunDate}::date <= ${today}::date`,
             sql`${recurringExpenseTemplates.startDate}::date <= ${today}::date`
+          )
+        );
+      const todayDate = new Date(today);
+      const endDateFiltered = rows.filter((r) => {
+        if (!r.endDate) return true;
+        const end = r.endDate instanceof Date ? r.endDate : new Date(r.endDate as string);
+        return end >= todayDate;
+      });
+      return endDateFiltered;
+    },
+
+    // Recurring income templates
+    async createRecurringIncomeTemplate(data: {
+      tenantId: string;
+      costCenterId: string | null;
+      categoryId: string;
+      amount: number;
+      particulars?: string | null;
+      incomeType?: string;
+      frequency: "monthly" | "weekly" | "quarterly";
+      dayOfMonth?: number;
+      dayOfWeek?: number;
+      startDate: string;
+      endDate?: string | null;
+      createdById?: string | null;
+    }): Promise<{ id: string } | null> {
+      const costCenterIdForDb = data.costCenterId === "__corporate__" || data.costCenterId === "null" ? null : data.costCenterId;
+      const nextRunDate = computeNextRunDate(data.startDate, data.frequency, data.dayOfMonth, data.dayOfWeek);
+      if (!nextRunDate) return null;
+      const [created] = await db
+        .insert(recurringIncomeTemplates)
+        .values({
+          tenantId: data.tenantId,
+          costCenterId: costCenterIdForDb,
+          categoryId: data.categoryId,
+          amount: data.amount,
+          particulars: data.particulars ?? null,
+          incomeType: data.incomeType ?? "other",
+          frequency: data.frequency,
+          dayOfMonth: data.dayOfMonth ?? null,
+          dayOfWeek: data.dayOfWeek ?? null,
+          startDate: new Date(data.startDate),
+          endDate: data.endDate ? new Date(data.endDate) : null,
+          nextRunDate: new Date(nextRunDate),
+          createdById: data.createdById ?? null,
+        })
+        .returning({ id: recurringIncomeTemplates.id });
+      return created ?? null;
+    },
+
+    async listRecurringIncomeTemplates(filters?: { isActive?: boolean }): Promise<Array<Record<string, unknown>>> {
+      const conditions = [eq(recurringIncomeTemplates.tenantId, tenantId)];
+      if (filters?.isActive !== undefined) conditions.push(eq(recurringIncomeTemplates.isActive, filters.isActive));
+      const rows = await db
+        .select({
+          id: recurringIncomeTemplates.id,
+          costCenterId: recurringIncomeTemplates.costCenterId,
+          categoryId: recurringIncomeTemplates.categoryId,
+          amount: recurringIncomeTemplates.amount,
+          particulars: recurringIncomeTemplates.particulars,
+          incomeType: recurringIncomeTemplates.incomeType,
+          frequency: recurringIncomeTemplates.frequency,
+          dayOfMonth: recurringIncomeTemplates.dayOfMonth,
+          dayOfWeek: recurringIncomeTemplates.dayOfWeek,
+          startDate: recurringIncomeTemplates.startDate,
+          endDate: recurringIncomeTemplates.endDate,
+          isActive: recurringIncomeTemplates.isActive,
+          nextRunDate: recurringIncomeTemplates.nextRunDate,
+          costCenterName: costCenters.name,
+          categoryName: incomeCategories.name,
+        })
+        .from(recurringIncomeTemplates)
+        .leftJoin(costCenters, eq(recurringIncomeTemplates.costCenterId, costCenters.id))
+        .leftJoin(incomeCategories, eq(recurringIncomeTemplates.categoryId, incomeCategories.id))
+        .where(and(...conditions))
+        .orderBy(recurringIncomeTemplates.nextRunDate);
+      return rows.map((r: Record<string, unknown>) => ({
+        ...r,
+        campusName: r.costCenterName,
+      }));
+    },
+
+    async updateRecurringIncomeTemplate(
+      id: string,
+      updates: Partial<{
+        amount: number;
+        particulars: string | null;
+        incomeType: string;
+        frequency: "monthly" | "weekly" | "quarterly";
+        dayOfMonth: number | null;
+        dayOfWeek: number | null;
+        endDate: string | null;
+        isActive: boolean;
+      }>
+    ): Promise<{ id: string } | null> {
+      const [existing] = await db
+        .select({
+          startDate: recurringIncomeTemplates.startDate,
+          nextRunDate: recurringIncomeTemplates.nextRunDate,
+          frequency: recurringIncomeTemplates.frequency,
+          dayOfMonth: recurringIncomeTemplates.dayOfMonth,
+          dayOfWeek: recurringIncomeTemplates.dayOfWeek,
+        })
+        .from(recurringIncomeTemplates)
+        .where(and(eq(recurringIncomeTemplates.id, id), eq(recurringIncomeTemplates.tenantId, tenantId)))
+        .limit(1);
+      if (!existing) return null;
+
+      const setValues: Record<string, unknown> = { updatedAt: new Date() };
+      if (updates.amount !== undefined) setValues.amount = updates.amount;
+      if (updates.particulars !== undefined) setValues.particulars = updates.particulars;
+      if (updates.incomeType !== undefined) setValues.incomeType = updates.incomeType;
+      if (updates.frequency !== undefined) setValues.frequency = updates.frequency;
+      if (updates.dayOfMonth !== undefined) setValues.dayOfMonth = updates.dayOfMonth;
+      if (updates.dayOfWeek !== undefined) setValues.dayOfWeek = updates.dayOfWeek;
+      if (updates.endDate !== undefined) setValues.endDate = updates.endDate ? new Date(updates.endDate) : null;
+      if (updates.isActive !== undefined) setValues.isActive = updates.isActive;
+
+      const scheduleChanged =
+        updates.frequency !== undefined || updates.dayOfMonth !== undefined || updates.dayOfWeek !== undefined;
+      if (scheduleChanged) {
+        const freq = (updates.frequency ?? existing.frequency) as "monthly" | "weekly" | "quarterly";
+        const dom = updates.dayOfMonth ?? existing.dayOfMonth;
+        const dow = updates.dayOfWeek ?? existing.dayOfWeek;
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const nextRun = computeNextRunDate(todayStr, freq, dom ?? undefined, dow ?? undefined);
+        if (nextRun) setValues.nextRunDate = new Date(nextRun);
+      }
+
+      const [updated] = await db
+        .update(recurringIncomeTemplates)
+        .set(setValues as Record<string, unknown>)
+        .where(eq(recurringIncomeTemplates.id, id))
+        .returning({ id: recurringIncomeTemplates.id });
+      return updated ?? null;
+    },
+
+    async deleteRecurringIncomeTemplate(id: string): Promise<boolean> {
+      const [existing] = await db
+        .select()
+        .from(recurringIncomeTemplates)
+        .where(and(eq(recurringIncomeTemplates.id, id), eq(recurringIncomeTemplates.tenantId, tenantId)))
+        .limit(1);
+      if (!existing) return false;
+      await db.delete(recurringIncomeTemplates).where(eq(recurringIncomeTemplates.id, id));
+      return true;
+    },
+
+    async getIncomeTemplatesDueForRun(today: string): Promise<Array<Record<string, unknown>>> {
+      const rows = await db
+        .select()
+        .from(recurringIncomeTemplates)
+        .where(
+          and(
+            eq(recurringIncomeTemplates.tenantId, tenantId),
+            eq(recurringIncomeTemplates.isActive, true),
+            sql`${recurringIncomeTemplates.nextRunDate}::date <= ${today}::date`,
+            sql`${recurringIncomeTemplates.startDate}::date <= ${today}::date`
           )
         );
       const todayDate = new Date(today);
@@ -1166,6 +1330,106 @@ export async function generateExpensesFromTemplates(
         }
       } catch (err) {
         errors.push(`Template ${tpl.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  return { generated, errors };
+}
+
+/** Run recurring income generation for all tenants. Call from scheduled job. */
+export async function generateIncomeFromTemplates(db: FinJoeDb, today: string): Promise<{ generated: number; errors: string[] }> {
+  const tenantRows = await db.select({ id: tenants.id }).from(tenants).where(eq(tenants.isActive, true));
+  let generated = 0;
+  const errors: string[] = [];
+
+  for (const { id: tenantId } of tenantRows) {
+    const finJoeData = createFinJoeData(db, tenantId);
+    const templates = await finJoeData.getIncomeTemplatesDueForRun(today);
+
+    for (const tpl of templates) {
+      try {
+        const templateId = tpl.id as string;
+        const costCenterId = tpl.costCenterId as string | null;
+        const categoryId = tpl.categoryId as string;
+        const amount = tpl.amount as number;
+        const particulars = (tpl.particulars as string) ?? `Recurring income`;
+        const incomeType = (tpl.incomeType as string) ?? "other";
+        const frequency = tpl.frequency as "monthly" | "weekly" | "quarterly";
+        const dayOfMonth = tpl.dayOfMonth as number | null;
+        const dayOfWeek = tpl.dayOfWeek as number | null;
+        let nextRunStr = tpl.nextRunDate instanceof Date ? tpl.nextRunDate.toISOString().slice(0, 10) : String(tpl.nextRunDate).slice(0, 10);
+
+        const [catExists] = await db
+          .select({ id: incomeCategories.id })
+          .from(incomeCategories)
+          .where(and(eq(incomeCategories.id, categoryId), eq(incomeCategories.tenantId, tenantId), eq(incomeCategories.isActive, true)))
+          .limit(1);
+        if (!catExists) {
+          errors.push(`Income template ${templateId}: category ${categoryId} not found or inactive`);
+          continue;
+        }
+        if (costCenterId) {
+          const [ccExists] = await db
+            .select({ id: costCenters.id })
+            .from(costCenters)
+            .where(and(eq(costCenters.id, costCenterId), eq(costCenters.tenantId, tenantId), eq(costCenters.isActive, true)))
+            .limit(1);
+          if (!ccExists) {
+            errors.push(`Income template ${templateId}: cost center ${costCenterId} not found or inactive`);
+            continue;
+          }
+        }
+
+        let createdThisTemplate = 0;
+        while (nextRunStr <= today && createdThisTemplate < MAX_CATCH_UP_PER_TEMPLATE) {
+          const [existingIncome] = await db
+            .select({ id: incomeRecords.id })
+            .from(incomeRecords)
+            .where(
+              and(
+                eq(incomeRecords.tenantId, tenantId),
+                eq(incomeRecords.recurringTemplateId, templateId),
+                sql`${incomeRecords.incomeDate}::date = ${nextRunStr}::date`
+              )
+            )
+            .limit(1);
+          if (existingIncome) {
+            const nextRun = advanceRecurringNextRun(nextRunStr, frequency, dayOfMonth ?? undefined, dayOfWeek ?? undefined);
+            if (!nextRun) break;
+            nextRunStr = nextRun;
+            continue;
+          }
+
+          const income = await finJoeData.createIncome({
+            tenantId,
+            costCenterId,
+            categoryId,
+            amount,
+            incomeDate: nextRunStr,
+            particulars,
+            incomeType,
+            source: "recurring_template",
+            recurringTemplateId: templateId,
+          });
+
+          if (income?.id) {
+            generated++;
+            createdThisTemplate++;
+          }
+          const nextRun = advanceRecurringNextRun(nextRunStr, frequency, dayOfMonth ?? undefined, dayOfWeek ?? undefined);
+          if (!nextRun) break;
+          nextRunStr = nextRun;
+        }
+
+        if (nextRunStr) {
+          await db
+            .update(recurringIncomeTemplates)
+            .set({ nextRunDate: new Date(nextRunStr), updatedAt: new Date() })
+            .where(eq(recurringIncomeTemplates.id, templateId));
+        }
+      } catch (err) {
+        errors.push(`Income template ${tpl.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }

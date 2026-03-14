@@ -40,6 +40,8 @@ import {
   ChevronDown,
   TrendingUp,
   Receipt,
+  Repeat,
+  Zap,
 } from "lucide-react";
 import type { Tenant } from "@shared/schema";
 
@@ -90,9 +92,14 @@ export function AdminShell({ children }: AdminShellProps) {
       : []),
     { href: "/admin/finjoe", label: "FinJoe", icon: MessageCircle },
     { href: "/admin/expenses", label: "Expenses", icon: Receipt },
+    { href: "/admin/recurring-templates", label: "Recurring Expenses", icon: Repeat },
     { href: "/admin/income", label: "Income", icon: TrendingUp },
+    { href: "/admin/recurring-income-templates", label: "Recurring Income", icon: Repeat },
     ...(isSuperAdmin
-      ? [{ href: "/admin/account-settings", label: "Account Settings", icon: Settings }]
+      ? [
+          { href: "/admin/cron", label: "Cron Jobs", icon: Zap },
+          { href: "/admin/account-settings", label: "Account Settings", icon: Settings },
+        ]
       : []),
   ];
 

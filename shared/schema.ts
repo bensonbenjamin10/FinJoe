@@ -312,6 +312,29 @@ export const incomeCategories = pgTable("income_categories", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// Recurring income templates (monthly fees, rent, etc.)
+export const recurringIncomeTemplates = pgTable("recurring_income_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  costCenterId: varchar("cost_center_id").references(() => costCenters.id),
+  categoryId: varchar("category_id").references(() => incomeCategories.id).notNull(),
+  amount: integer("amount").notNull(),
+  particulars: text("particulars"),
+  incomeType: text("income_type").notNull().default("other"),
+  frequency: text("frequency").notNull(),
+  dayOfMonth: integer("day_of_month"),
+  dayOfWeek: integer("day_of_week"),
+  startDate: timestamp("start_date").notNull(),
+  endDate: timestamp("end_date"),
+  isActive: boolean("is_active").notNull().default(true),
+  nextRunDate: timestamp("next_run_date").notNull(),
+  createdById: varchar("created_by_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // Income records
 export const incomeRecords = pgTable("income_records", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -325,6 +348,7 @@ export const incomeRecords = pgTable("income_records", {
   particulars: text("particulars"),
   incomeType: text("income_type").notNull().default("other"),
   source: text("source").notNull().default("manual"),
+  recurringTemplateId: varchar("recurring_template_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -336,6 +360,17 @@ export const platformSettings = pgTable("platform_settings", {
   defaultResendFromEmail: text("default_resend_from_email"),
   defaultSmsFrom: text("default_sms_from"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Cron run history (admin-triggered and worker cron)
+export const cronRuns = pgTable("cron_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  jobName: varchar("job_name").notNull(),
+  status: varchar("status").notNull(),
+  resultJson: jsonb("result_json"),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  finishedAt: timestamp("finished_at"),
+  errorMessage: text("error_message"),
 });
 
 // Relations

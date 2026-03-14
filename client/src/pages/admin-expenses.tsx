@@ -48,6 +48,7 @@ import {
   Wallet,
   Eye,
   TrendingUp,
+  Repeat,
 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -1436,8 +1437,20 @@ export default function AdminExpenses() {
                       {expenses.map((exp) => (
                         <TableRow key={exp.id}>
                           <TableCell>{format(new Date(exp.expenseDate), "dd MMM yyyy")}</TableCell>
-                          <TableCell className="max-w-[200px] truncate" title={exp.description || exp.particulars || undefined}>
-                            {exp.description || exp.particulars || "—"}
+                          <TableCell className="max-w-[200px]">
+                            <div className="flex items-center gap-2 truncate">
+                              {(exp as ExpenseWithDetails).recurringTemplateId && (
+                                <Link href={tenantId ? `/admin/recurring-templates?tenantId=${tenantId}` : "/admin/recurring-templates"}>
+                                  <Badge variant="secondary" className="shrink-0 text-xs gap-1 cursor-pointer hover:bg-secondary/80">
+                                    <Repeat className="h-3 w-3" />
+                                    Recurring
+                                  </Badge>
+                                </Link>
+                              )}
+                              <span className="truncate" title={exp.description || exp.particulars || undefined}>
+                                {exp.description || exp.particulars || "—"}
+                              </span>
+                            </div>
                           </TableCell>
                           <TableCell className="max-w-[120px] truncate" title={(exp as any).invoiceNumber}>
                             {(exp as any).invoiceNumber || "—"}

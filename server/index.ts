@@ -8,7 +8,7 @@ import { setupAuth } from "./auth.js";
 import { setupVite, serveStatic } from "./vite.js";
 import { handleWebhook } from "../worker/src/webhook.js";
 import { runWeeklyInsights } from "../worker/src/weekly-insights.js";
-import { generateExpensesFromTemplates } from "../lib/finjoe-data.js";
+import { generateExpensesFromTemplates, generateIncomeFromTemplates } from "../lib/finjoe-data.js";
 import { runBackfillEmbeddings } from "../lib/backfill-embeddings.js";
 import { db, pool } from "./db.js";
 
@@ -76,6 +76,23 @@ app.get("/cron/recurring-expenses", async (req, res) => {
   } catch (err) {
     logger.error("Recurring expenses cron error", { err: String(err) });
     res.status(500).json({ error: "Failed to run recurring expenses" });
+  }
+});
+
+// Cron: recurring income (same as worker - for single-service deployment)
+app.get("/cron/recurring-income", async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.query?.secret !== secret) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const result = await generateIncomeFromTemplates(db, today);
+    res.json({ ok: true, generated: result.generated, errors: result.errors });
+  } catch (err) {
+    logger.error("Recurring income cron error", { err: String(err) });
+    res.status(500).json({ error: "Failed to run recurring income" });
   }
 });
 
