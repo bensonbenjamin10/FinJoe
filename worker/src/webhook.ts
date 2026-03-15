@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { db } from "./db.js";
-import { logger } from "./logger.js";
+import { logger, serializeError } from "./logger.js";
 import {
   finJoeContacts,
   finJoeConversations,
@@ -25,7 +25,7 @@ async function withConversationLock(conversationId: string, fn: () => Promise<vo
   const ours = prev
     .then(() => fn())
     .catch((err) => {
-      logger.error("Conversation lock task failed", { conversationId, err: String(err) });
+      logger.error("Conversation lock task failed", { conversationId, ...serializeError(err) });
       throw err;
     });
   conversationLocks.set(conversationId, ours);
@@ -174,7 +174,7 @@ export async function handleWebhook(req: Request, res: Response) {
               sizeBytes: buffer.length,
             });
           } catch (err) {
-            logger.error("Failed to store media", { traceId, mediaIndex: i, err: String(err) });
+            logger.error("Failed to store media", { traceId, mediaIndex: i, ...serializeError(err) });
           }
         }
       }
@@ -200,9 +200,7 @@ export async function handleWebhook(req: Request, res: Response) {
             contact.costCenterId ?? undefined
           );
         } catch (err) {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          const errStack = err instanceof Error ? err.stack : undefined;
-          logger.error("Agent processing error", { traceId, err: errMsg, stack: errStack });
+          logger.error("Agent processing error", { traceId, ...serializeError(err) });
           reply = "Something went wrong on my side. Please try again in a moment, or send your message again.";
         }
       } else {
@@ -233,9 +231,7 @@ export async function handleWebhook(req: Request, res: Response) {
 
     res.status(200).type("text/xml").send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    const errStack = err instanceof Error ? err.stack : undefined;
-    logger.error("Webhook error", { traceId, err: errMsg, stack: errStack });
+    logger.error("Webhook error", { traceId, ...serializeError(err) });
     res.status(500).send("Internal Server Error");
   }
 }

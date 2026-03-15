@@ -27,6 +27,24 @@ function log(level: LogLevel, msg: string, ctx?: LogContext) {
   }
 }
 
+/** Serialize error for logging: includes message, cause, code (e.g. ECONNREFUSED), and stack */
+export function serializeError(err: unknown): Record<string, unknown> {
+  if (err == null) return { err: null };
+  const e = err as Error & { cause?: unknown; code?: string };
+  const out: Record<string, unknown> = {
+    err: String(err),
+    message: e.message,
+    ...(e.code && { code: e.code }),
+    ...(e.stack && { stack: e.stack }),
+  };
+  if (e.cause != null) {
+    out.cause = e.cause instanceof Error
+      ? { message: e.cause.message, code: (e.cause as Error & { code?: string }).code }
+      : String(e.cause);
+  }
+  return out;
+}
+
 export const logger = {
   info: (msg: string, ctx?: LogContext) => log("info", msg, ctx),
   warn: (msg: string, ctx?: LogContext) => log("warn", msg, ctx),

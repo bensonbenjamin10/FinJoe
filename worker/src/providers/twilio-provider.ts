@@ -5,7 +5,7 @@
 
 import twilio from "twilio";
 const { validateIncomingRequest } = twilio;
-import { logger } from "../logger.js";
+import { logger, serializeError } from "../logger.js";
 import { downloadTwilioMedia } from "../media.js";
 import type { WabaProviderCredentials } from "./types.js";
 
@@ -94,14 +94,19 @@ export function sendTypingIndicator(
   const body = new URLSearchParams({ messageId: messageSid, channel: "whatsapp" });
   const auth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10_000);
   fetch(url, {
     method: "POST",
+    signal: controller.signal,
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       Authorization: `Basic ${auth}`,
     },
     body: body.toString(),
-  }).catch((err) => logger.warn("Typing indicator failed", { traceId, err: String(err) }));
+  })
+    .finally(() => clearTimeout(timeoutId))
+    .catch((err) => logger.warn("Typing indicator failed", { traceId, ...serializeError(err) }));
 }
 
 /** Download media from Twilio MediaUrl */

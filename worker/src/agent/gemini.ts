@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, type FunctionDeclaration } from "@google/genai";
-import { logger } from "../logger.js";
+import { logger, serializeError } from "../logger.js";
 
 // Use gemini-2.5-flash by default; gemini-3 requires thought_signature which the SDK may not expose
 const MODEL_ID = process.env.GEMINI_MODEL || "gemini-2.5-flash";
@@ -711,6 +711,7 @@ export async function agentTurnWithFunctionResponse(
       contents,
       config: {
         tools: [{ functionDeclarations: getFunctionDeclarationsForRole(input.contactRole) }],
+        httpOptions: { timeout: 120_000 },
       },
     });
     type RespPart = { text?: string };
@@ -721,7 +722,7 @@ export async function agentTurnWithFunctionResponse(
   try {
     return await doTurn(MODEL_ID);
   } catch (err) {
-    logger.error("Agent turn with function response error", { traceId, err: String(err) });
+    logger.error("Agent turn with function response error", { traceId, ...serializeError(err) });
     if (MODEL_ID !== FALLBACK_MODEL) {
       try {
         return await doTurn(FALLBACK_MODEL);
@@ -813,6 +814,7 @@ Respond naturally. CRITICAL: Check PENDING EXPENSE and Missing fields. If the us
       ],
       config: {
         tools: [{ functionDeclarations: getFunctionDeclarationsForRole(contactRole) }],
+        httpOptions: { timeout: 120_000 },
       },
     });
 
@@ -842,13 +844,13 @@ Respond naturally. CRITICAL: Check PENDING EXPENSE and Missing fields. If the us
   try {
     return await doAgentTurn(MODEL_ID);
   } catch (err) {
-    logger.error("Agent turn error", { traceId, err: String(err) });
+    logger.error("Agent turn error", { traceId, ...serializeError(err) });
     if (MODEL_ID !== FALLBACK_MODEL) {
       try {
         logger.info("Agent turn fallback to FALLBACK_MODEL", { traceId, fallback: FALLBACK_MODEL });
         return await doAgentTurn(FALLBACK_MODEL);
       } catch (fallbackErr) {
-        logger.error("Agent turn fallback also failed", { traceId, err: String(fallbackErr) });
+        logger.error("Agent turn fallback also failed", { traceId, ...serializeError(fallbackErr) });
       }
     }
     return { text: "I'm having trouble right now. Please try again in a moment." };
@@ -956,6 +958,7 @@ ${textContext ? `Additional context from user: "${textContext}"` : ""}`;
       config: {
         responseMimeType: "application/json",
         responseSchema: EXTRACTED_EXPENSE_JSON_SCHEMA,
+        httpOptions: { timeout: 120_000 },
       },
     });
     const text = (response as { text?: string })?.text?.trim() || "";
@@ -978,6 +981,7 @@ ${textContext ? `Additional context from user: "${textContext}"` : ""}`;
           ],
         },
       ],
+      config: { httpOptions: { timeout: 120_000 } },
     });
     const text = (response as { text?: string })?.text?.trim() || "";
     const cleaned = text.replace(/```json\n?|\n?```/g, "").trim();
@@ -991,7 +995,7 @@ ${textContext ? `Additional context from user: "${textContext}"` : ""}`;
     try {
       return await doExtractStructured(model);
     } catch (structErr) {
-      logger.warn("Structured extraction failed, falling back to legacy parse", { traceId, model, err: String(structErr) });
+      logger.warn("Structured extraction failed, falling back to legacy parse", { traceId, model, ...serializeError(structErr) });
       return await doExtractFallback(model);
     }
   };
@@ -999,7 +1003,7 @@ ${textContext ? `Additional context from user: "${textContext}"` : ""}`;
   try {
     return await doExtract(MODEL_ID);
   } catch (err) {
-    logger.error("Expense extraction error", { traceId, err: String(err) });
+    logger.error("Expense extraction error", { traceId, ...serializeError(err) });
     if (MODEL_ID !== FALLBACK_MODEL) {
       try {
         return await doExtract(FALLBACK_MODEL);
@@ -1066,6 +1070,7 @@ ${textContext ? `Additional context from user: "${textContext}"` : ""}`;
       config: {
         responseMimeType: "application/json",
         responseSchema: EXTRACTION_RESULT_JSON_SCHEMA,
+        httpOptions: { timeout: 120_000 },
       },
     });
     const text = (response as { text?: string })?.text?.trim() || "";
@@ -1117,7 +1122,7 @@ ${textContext ? `Additional context from user: "${textContext}"` : ""}`;
   try {
     return await doExtract(MODEL_ID);
   } catch (err) {
-    logger.error("Extraction error", { traceId, err: String(err) });
+    logger.error("Extraction error", { traceId, ...serializeError(err) });
     if (MODEL_ID !== FALLBACK_MODEL) {
       try {
         return await doExtract(FALLBACK_MODEL);

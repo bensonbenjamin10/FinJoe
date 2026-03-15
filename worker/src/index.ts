@@ -1,3 +1,7 @@
+// Railway: prefer IPv4 for outbound fetch (Gemini, Twilio) – avoids "fetch failed" when IPv6 fails
+import dns from "dns";
+dns.setDefaultResultOrder("ipv4first");
+
 import "dotenv/config";
 import express from "express";
 import { handleWebhook } from "./webhook.js";
