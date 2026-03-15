@@ -1,5 +1,31 @@
 # Migration & Cron Setup
 
+## Railway Postgres Migration (Neon → Railway)
+
+To migrate from Neon to Railway Postgres (resolves Railway→Neon connectivity issues):
+
+**Option A: Docker + Railway CLI** (no pg_dump/pg_restore install needed)
+
+```powershell
+$env:NEON_DATABASE_URL = "postgresql://user:pass@host/db?sslmode=require"
+.\scripts\railway-postgres-migrate-docker.ps1
+```
+
+**Option B: Manual steps** (requires PostgreSQL client tools)
+
+```bash
+./scripts/railway-postgres-migrate.sh   # Linux/macOS
+.\scripts\railway-postgres-migrate.ps1  # Windows PowerShell
+```
+
+The scripts use Railway CLI to:
+1. Deploy the pgvector template (`railway deploy -t 3jJFCA`)
+2. Dump from Neon → restore to Railway (Docker script does both; manual script guides you)
+3. Set `DATABASE_URL=${{ pgvector.DATABASE_URL }}` on finjoe-api, cron, worker
+4. Redeploy
+
+Use the **pgvector** template (not default Postgres) for expense embeddings (RAG).
+
 ## Session Store Migration
 
 The session store migration (`019_session_store.sql`) creates the `session` table for PostgreSQL-backed sessions. Run when `DATABASE_URL` is reachable:

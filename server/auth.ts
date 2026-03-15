@@ -5,6 +5,7 @@ import session from "express-session";
 import MemoryStore from "memorystore";
 import connectPgSimple from "connect-pg-simple";
 import { db, pool } from "./db.js";
+import { logger } from "./logger.js";
 import { users } from "../shared/schema.js";
 import { eq } from "drizzle-orm";
 import type { Express } from "express";
@@ -12,18 +13,29 @@ import type { Express } from "express";
 const PgSession = connectPgSimple(session);
 const Store = MemoryStore(session);
 
-export function setupAuth(app: Express) {
-  const sessionSecret = process.env.SESSION_SECRET || "finjoe-dev-secret-change-in-production";
+/** Test DB reachability; if unreachable (e.g. Railway→Neon), fall back to MemoryStore so app can serve. */
+async function getSessionStore(): Promise<session.Store> {
+  if (!process.env.DATABASE_URL) {
+    return new Store({ checkPeriod: 86400000 });
+  }
+  try {
+    const client = await pool.connect();
+    client.release();
+    return new PgSession({
+      pool,
+      createTableIfMissing: true,
+      tableName: "session",
+      pruneSessionInterval: false,
+    });
+  } catch (err) {
+    logger.warn("Database unreachable at startup, using MemoryStore for sessions", { err: String(err) });
+    return new Store({ checkPeriod: 86400000 });
+  }
+}
 
-  // Use shared pool from db.ts - same connection that serves /api/setup/status etc.
-  const sessionStore = process.env.DATABASE_URL
-    ? new PgSession({
-        pool,
-        createTableIfMissing: true,
-        tableName: "session",
-        pruneSessionInterval: false,
-      })
-    : new Store({ checkPeriod: 86400000 });
+export async function setupAuth(app: Express) {
+  const sessionSecret = process.env.SESSION_SECRET || "finjoe-dev-secret-change-in-production";
+  const sessionStore = await getSessionStore();
 
   app.use(
     session({

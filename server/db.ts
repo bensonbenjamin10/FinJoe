@@ -8,6 +8,6 @@ if (!process.env.DATABASE_URL) {
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  connectionTimeoutMillis: 15000, // Railway→Neon can be slow; default may timeout
+  connectionTimeoutMillis: 5000, // Railway Postgres same-network; Neon may need higher
 });
 export const db = drizzle({ client: pool, schema });
