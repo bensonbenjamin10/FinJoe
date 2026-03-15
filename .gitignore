@@ -14,6 +14,9 @@ worker/dist/
 *.log
 npm-debug.log*
 
+# Migration dumps (local only, may contain sensitive data)
+neon_backup.dump
+
 # IDE
 .idea/
 .vscode/

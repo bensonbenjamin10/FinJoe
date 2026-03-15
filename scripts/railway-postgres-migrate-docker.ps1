@@ -49,19 +49,31 @@ if (-not (Test-Path $DumpFile)) {
   Write-Host "Dump failed." -ForegroundColor Red
   exit 1
 }
-Write-Host "Dump saved to $DumpFile" -ForegroundColor Green
+$DumpSize = (Get-Item $DumpFile).Length
+if ($DumpSize -lt 100) {
+  Write-Host "Dump file is empty or too small ($DumpSize bytes). Check pg_dump output above." -ForegroundColor Red
+  exit 1
+}
+Write-Host "Dump saved to $DumpFile ($([math]::Round($DumpSize/1MB, 2)) MB)" -ForegroundColor Green
 
 # Step 2: Restore to Railway (use public URL – private DATABASE_URL is unreachable from local machine)
+# Use docker cp + exec to avoid volume mount issues on Windows (paths with spaces, etc.)
 Write-Host ""
 Write-Host "Step 2: Restoring to Railway pgvector..." -ForegroundColor Yellow
 railway service link pgvector
 $RestoreUrl = $env:RAILWAY_DATABASE_PUBLIC_URL
-if ($RestoreUrl) {
-  Write-Host "  Using RAILWAY_DATABASE_PUBLIC_URL from environment" -ForegroundColor Gray
-  docker run --rm -v "${BackupPath}:/backup" -e "RESTORE_URL=$RestoreUrl" postgres:17 sh -c "pg_restore -d \"\$RESTORE_URL\" --no-owner --no-acl --clean --if-exists /backup/$DumpFile"
-} else {
-  Write-Host "  (If 'no connection', set RAILWAY_DATABASE_PUBLIC_URL or enable TCP proxy: pgvector -> Settings -> Networking)" -ForegroundColor Gray
-  railway run docker run --rm -v "${BackupPath}:/backup" -e DATABASE_PUBLIC_URL postgres:17 sh -c "pg_restore -d \"`$DATABASE_PUBLIC_URL\" --no-owner --no-acl --clean --if-exists /backup/$DumpFile"
+if (-not $RestoreUrl) {
+  Write-Host "Set RAILWAY_DATABASE_PUBLIC_URL first (from pgvector Variables, enable Public Networking if needed)." -ForegroundColor Red
+  exit 1
+}
+Write-Host "  Using RAILWAY_DATABASE_PUBLIC_URL" -ForegroundColor Gray
+$ContainerId = docker run -d postgres:17 tail -f /dev/null
+try {
+  docker cp $DumpFile "${ContainerId}:/tmp/$DumpFile"
+  docker exec -e "RESTORE_URL=$RestoreUrl" $ContainerId sh -c 'pg_restore -d "$RESTORE_URL" --no-owner --no-acl --clean --if-exists /tmp/neon_backup.dump'
+} finally {
+  docker stop $ContainerId 2>$null
+  docker rm $ContainerId 2>$null
 }
 
 Write-Host "Restore complete." -ForegroundColor Green
@@ -70,13 +82,13 @@ Write-Host "Restore complete." -ForegroundColor Green
 Write-Host ""
 Write-Host "Step 3: Point finjoe-api to Railway Postgres:" -ForegroundColor Yellow
 railway service link FinJoe
-railway variable set "DATABASE_URL=`${{ pgvector.DATABASE_URL }}"
+railway variable set "DATABASE_URL=`${{ pgvector.DATABASE_URL_PRIVATE }}"
 railway up
 
 Write-Host ""
 Write-Host "Done. If you have finjoe-cron or finjoe-worker, run:" -ForegroundColor Green
 Write-Host "  railway service link finjoe-cron"
-Write-Host '  railway variable set "DATABASE_URL=${{ pgvector.DATABASE_URL }}"'
+Write-Host '  railway variable set "DATABASE_URL=${{ pgvector.DATABASE_URL_PRIVATE }}"'
 Write-Host "  railway service link finjoe-worker"
-Write-Host '  railway variable set "DATABASE_URL=${{ pgvector.DATABASE_URL }}"'
+Write-Host '  railway variable set "DATABASE_URL=${{ pgvector.DATABASE_URL_PRIVATE }}"'
 Write-Host ""

@@ -5,6 +5,10 @@
  * MODE=server or unset → run main Express server
  */
 
+// Railway: prefer IPv4 for outbound fetch (Gemini, Twilio) – avoids ENETUNREACH when IPv6 fails
+import dns from "dns";
+dns.setDefaultResultOrder("ipv4first");
+
 if (process.env.MODE === "cron") {
   await import("./scripts/run-all-cron.mjs");
 } else {

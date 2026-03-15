@@ -13,7 +13,7 @@ import type { Express } from "express";
 const PgSession = connectPgSimple(session);
 const Store = MemoryStore(session);
 
-/** Test DB reachability; if unreachable (e.g. Railway→Neon), fall back to MemoryStore so app can serve. */
+/** Test DB reachability; if unreachable, fall back to MemoryStore so app can serve. */
 async function getSessionStore(): Promise<session.Store> {
   if (!process.env.DATABASE_URL) {
     return new Store({ checkPeriod: 86400000 });

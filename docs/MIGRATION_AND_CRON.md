@@ -21,16 +21,28 @@ $env:NEON_DATABASE_URL = "postgresql://user:pass@host/db?sslmode=require"
 The scripts use Railway CLI to:
 1. Deploy the pgvector template (`railway deploy -t 3jJFCA`)
 2. Dump from Neon → restore to Railway (Docker script does both; manual script guides you)
-3. Set `DATABASE_URL=${{ pgvector.DATABASE_URL }}` on finjoe-api, cron, worker
+3. Set `DATABASE_URL=${{ pgvector.DATABASE_URL_PRIVATE }}` on finjoe-api, cron, worker (use PRIVATE for internal Railway services)
 4. Redeploy
 
 Use the **pgvector** template (not default Postgres) for expense embeddings (RAG).
+
+**After migration:** Rotate Neon DB password (credentials were used in migration). Delete `neon_backup.dump` locally if no longer needed. Remove Neon from `.env` if present.
 
 **Restore fails with "no connection to the server"?** Railway's `DATABASE_URL` is private (internal-only). For local restore you need the public URL:
 
 1. Railway → pgvector → Settings → Networking → enable **Public Networking** (TCP proxy)
 2. Copy `DATABASE_PUBLIC_URL` from Variables
 3. Run: `$env:RAILWAY_DATABASE_PUBLIC_URL = "postgresql://..."; .\scripts\railway-postgres-migrate-docker.ps1`
+
+**Restore fails with "input file is too short"?** Docker on Windows can fail to mount paths with spaces. Manual restore from a path without spaces (run from repo root after dump):
+
+```powershell
+$RestoreDir = Join-Path $env:TEMP "finjoe_restore"
+New-Item -ItemType Directory -Force -Path $RestoreDir | Out-Null
+Copy-Item ".\neon_backup.dump" $RestoreDir
+$MountSource = $RestoreDir -replace '\\', '/'
+docker run --rm -v "${MountSource}:/backup" -e "RESTORE_URL=$env:RAILWAY_DATABASE_PUBLIC_URL" postgres:17 sh -c "pg_restore -d \"\$RESTORE_URL\" --no-owner --no-acl --clean --if-exists /backup/neon_backup.dump"
+```
 
 ## Session Store Migration
 
