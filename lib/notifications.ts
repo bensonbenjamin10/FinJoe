@@ -12,14 +12,17 @@ import {
   finJoeRoleChangeRequests,
   users,
 } from "../shared/schema.js";
-import { toShortExpenseId } from "./expense-id.js";
+import { toShortExpenseId, toShortUuid } from "./expense-id.js";
 import { normalizePhone } from "../worker/src/twilio.js";
 import {
   sendWith24hRouting,
   getExpenseApprovalTemplateConfig,
   notifySubmitterForApprovalRejection as workerNotifySubmitterForApprovalRejection,
 } from "../worker/src/send.js";
+import { sendFinJoeEmail } from "../worker/src/email.js";
 import { logger } from "../server/logger.js";
+
+const REASON_MAX_LENGTH = 200;
 
 export type ExtractedExpenseForNotification = {
   amount?: number;
@@ -105,6 +108,10 @@ export async function notifyFinanceForApproval(
         eq(finJoeContacts.isActive, true)
       )
     );
+  if (financeContacts.length === 0) {
+    logger.warn("No finance contacts for tenant - skipping approval notification", { traceId, tenantId, expenseId });
+    return;
+  }
   const lineItem = extracted.description || categoryName || extracted.vendorName;
   const shortId = toShortExpenseId(expenseId);
   const msg = `New expense #${shortId} needs approval: ₹${(extracted.amount ?? 0).toLocaleString("en-IN")}${lineItem ? ` - ${lineItem}` : ""}. Reply APPROVE ${shortId} or REJECT ${shortId} to act.`;
@@ -135,31 +142,50 @@ export async function notifySubmitterForApprovalRejectionFromExpense(
   traceId?: string
 ): Promise<boolean> {
   const contact = await resolveSubmitterContact(expenseId, tenantId);
-  const phone = contact.phone;
-  if (!phone) {
-    logger.info("No submitter phone for expense - skipping approval/rejection notification", {
-      traceId,
+  const shortId = toShortExpenseId(expenseId);
+  const truncatedReason = reason && reason.length > REASON_MAX_LENGTH ? reason.slice(0, REASON_MAX_LENGTH) + "…" : reason;
+
+  if (contact.phone) {
+    return workerNotifySubmitterForApprovalRejection(
+      contact.phone,
       expenseId,
-      hasEmail: !!contact.email,
-    });
-    if (contact.email) {
-      // Email-only fallback via critical option - we need a "to" for sendWith24hRouting which expects phone
-      // The worker's notifySubmitterForApprovalRejection requires phone. For email-only we'd need a different path.
-      // For now, skip - the plan says "call with phone (or email-only if no phone)" but sendWith24hRouting
-      // is built around phone (WhatsApp/SMS). We could add email-only support later.
+      type,
+      tenantId,
+      truncatedReason,
+      traceId,
+      contact.email ?? null
+    );
+  }
+
+  if (contact.email) {
+    const subject = type === "approved"
+      ? `FinJoe: Expense #${shortId} approved`
+      : `FinJoe: Expense #${shortId} rejected`;
+    const body = type === "approved"
+      ? `Good news! Your expense #${shortId} has been approved.`
+      : `Your expense #${shortId} has been rejected.${truncatedReason ? ` Reason: ${truncatedReason}` : ""}`;
+    const html = `<p>${body.replace(/\n/g, "<br>")}</p>`;
+    try {
+      const sent = await sendFinJoeEmail(
+        [contact.email],
+        subject,
+        html,
+        { tenantId, idempotencyKey: traceId ? `finjoe-${traceId}` : undefined },
+        traceId
+      );
+      logger.info("Sent email-only approval/rejection notification", { traceId, expenseId, type });
+      return sent;
+    } catch (err) {
+      logger.error("Failed to send email-only approval/rejection", { traceId, expenseId, err: String(err) });
       return false;
     }
-    return false;
   }
-  return workerNotifySubmitterForApprovalRejection(
-    phone,
-    expenseId,
-    type,
-    tenantId,
-    reason,
+
+  logger.info("No submitter phone or email for expense - skipping approval/rejection notification", {
     traceId,
-    contact.email ?? null
-  );
+    expenseId,
+  });
+  return false;
 }
 
 /** Notify role request requester when their request is approved or rejected (e.g. via web admin). */
@@ -171,12 +197,13 @@ export async function notifyRoleRequestRequester(
   reason?: string,
   traceId?: string
 ): Promise<boolean> {
-  const shortId = requestId.slice(-8);
+  const shortId = toShortUuid(requestId);
+  const truncatedReason = reason && reason.length > REASON_MAX_LENGTH ? reason.slice(0, REASON_MAX_LENGTH) + "…" : reason;
   if (type === "approved") {
     const msg = `Good news! Your role change request #${shortId} has been approved. You can now use FinJoe with your new role.`;
     return sendWith24hRouting(contactPhone, msg, null, traceId, tenantId, { critical: true });
   } else {
-    const msg = `Your role change request #${shortId} has been rejected.${reason ? ` Reason: ${reason}` : ""}`;
+    const msg = `Your role change request #${shortId} has been rejected.${truncatedReason ? ` Reason: ${truncatedReason}` : ""}`;
     return sendWith24hRouting(contactPhone, msg, null, traceId, tenantId, { critical: true });
   }
 }
@@ -204,13 +231,35 @@ export async function notifySubmitterForPayoutFromExpense(
   traceId?: string
 ): Promise<boolean> {
   const contact = await resolveSubmitterContact(expenseId, tenantId);
-  const phone = contact.phone;
-  if (!phone) {
-    logger.info("No submitter phone for expense - skipping payout notification", {
-      traceId,
-      expenseId,
-    });
-    return false;
+  const shortId = toShortExpenseId(expenseId);
+
+  if (contact.phone) {
+    return notifySubmitterForPayout(contact.phone, expenseId, tenantId, traceId, contact.email ?? null);
   }
-  return notifySubmitterForPayout(phone, expenseId, tenantId, traceId, contact.email ?? null);
+
+  if (contact.email) {
+    const subject = `FinJoe: Expense #${shortId} marked as paid`;
+    const body = `Your expense #${shortId} has been marked as paid.`;
+    const html = `<p>${body}</p>`;
+    try {
+      const sent = await sendFinJoeEmail(
+        [contact.email],
+        subject,
+        html,
+        { tenantId, idempotencyKey: traceId ? `finjoe-${traceId}` : undefined },
+        traceId
+      );
+      logger.info("Sent email-only payout notification", { traceId, expenseId });
+      return sent;
+    } catch (err) {
+      logger.error("Failed to send email-only payout", { traceId, expenseId, err: String(err) });
+      return false;
+    }
+  }
+
+  logger.info("No submitter phone or email for expense - skipping payout notification", {
+    traceId,
+    expenseId,
+  });
+  return false;
 }

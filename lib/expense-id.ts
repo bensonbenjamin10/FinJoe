@@ -2,8 +2,13 @@
  * Expense ID utilities for short display and resolution.
  */
 
-/** Last 8 hex chars of UUID for user-facing display (e.g. 5a9f615e) */
+/** Last 8 hex chars of UUID for user-facing display (e.g. 5a9f615e). Use for expense IDs, role request IDs, etc. */
 export function toShortExpenseId(uuid: string): string {
+  return toShortUuid(uuid);
+}
+
+/** Last 8 hex chars of any UUID for user-facing display */
+export function toShortUuid(uuid: string): string {
   if (!uuid || typeof uuid !== "string") return "";
   return uuid.replace(/-/g, "").slice(-8);
 }
