@@ -4,26 +4,49 @@ import bcrypt from "bcrypt";
 import session from "express-session";
 import MemoryStore from "memorystore";
 import connectPgSimple from "connect-pg-simple";
+import pg from "pg";
 import { db } from "./db.js";
 import { users } from "../shared/schema.js";
 import { eq } from "drizzle-orm";
 import type { Express } from "express";
+import { logger } from "./logger.js";
 
 const PgSession = connectPgSimple(session);
 const Store = MemoryStore(session);
 
-export function setupAuth(app: Express) {
+async function canConnectToDb(connectionString: string): Promise<boolean> {
+  const client = new pg.Client({ connectionString, connectionTimeoutMillis: 5000 });
+  try {
+    await client.connect();
+    await client.query("SELECT 1");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await client.end();
+  }
+}
+
+export async function setupAuth(app: Express) {
   const sessionSecret = process.env.SESSION_SECRET || "finjoe-dev-secret-change-in-production";
 
-  // Use PostgreSQL session store when DATABASE_URL is set; fallback to MemoryStore for dev without DB
-  const sessionStore = process.env.DATABASE_URL
-    ? new PgSession({
+  let sessionStore: session.Store;
+  if (process.env.DATABASE_URL) {
+    const dbReachable = await canConnectToDb(process.env.DATABASE_URL);
+    if (dbReachable) {
+      sessionStore = new PgSession({
         conString: process.env.DATABASE_URL,
         createTableIfMissing: true,
         tableName: "session",
         pruneSessionInterval: false, // Disable prune to avoid noisy errors when DB is unreachable
-      })
-    : new Store({ checkPeriod: 86400000 });
+      });
+    } else {
+      logger.warn("Database unreachable at startup, using MemoryStore for sessions (sessions will not persist across restarts)");
+      sessionStore = new Store({ checkPeriod: 86400000 });
+    }
+  } else {
+    sessionStore = new Store({ checkPeriod: 86400000 });
+  }
 
   app.use(
     session({
