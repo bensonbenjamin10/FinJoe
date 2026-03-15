@@ -2,6 +2,10 @@
 import dns from "dns";
 dns.setDefaultResultOrder("ipv4first");
 
+// Railway: increase connect timeout – default 10s causes UND_ERR_CONNECT_TIMEOUT to Google/Twilio APIs
+import { setGlobalDispatcher, Agent } from "undici";
+setGlobalDispatcher(new Agent({ connectTimeout: 30_000 }));
+
 import "dotenv/config";
 import express from "express";
 import { handleWebhook } from "./webhook.js";

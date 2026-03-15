@@ -57,6 +57,7 @@
     "recharts": "^2.15.0",
     "resend": "^6.9.3",
     "tailwind-merge": "^2.6.0",
+    "undici": "^7.16.0",
     "twilio": "^5.10.4",
     "wouter": "^3.3.5",
     "zod": "^3.24.2"
