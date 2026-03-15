@@ -10,11 +10,8 @@
  */
 
 import "dotenv/config";
-import { Pool, neonConfig } from "@neondatabase/serverless";
-import ws from "ws";
+import { Pool } from "pg";
 import { runBackfillEmbeddings } from "../lib/backfill-embeddings.js";
-
-neonConfig.webSocketConstructor = ws;
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;

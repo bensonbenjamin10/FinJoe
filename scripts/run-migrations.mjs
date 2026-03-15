@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Run FinJoe migrations using Neon pool (no psql required).
+ * Run FinJoe migrations using pg (no psql required).
  * Usage: node scripts/run-migrations.mjs
  */
 
@@ -8,11 +8,9 @@ import "dotenv/config";
 import { readFileSync, readdirSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { Pool, neonConfig } from "@neondatabase/serverless";
-import ws from "ws";
+import pg from "pg";
 
-neonConfig.webSocketConstructor = ws;
-
+const { Pool } = pg;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, "..");
 const migrationsDir = join(rootDir, "migrations");
