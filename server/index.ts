@@ -131,7 +131,7 @@ app.get("/cron/weekly-insights", async (req, res) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-await setupAuth(app);
+setupAuth(app);
 const server = await registerRoutes(app);
 
 app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
