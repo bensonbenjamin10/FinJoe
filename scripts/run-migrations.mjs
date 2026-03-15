@@ -21,7 +21,7 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
-const pool = new Pool({ connectionString: DATABASE_URL });
+const pool = new Pool({ connectionString: DATABASE_URL, connectionTimeoutMillis: 15000 });
 
 const files = readdirSync(migrationsDir)
   .filter((f) => f.endsWith(".sql"))

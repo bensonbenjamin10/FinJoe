@@ -22,7 +22,7 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
-const pool = new Pool({ connectionString: DATABASE_URL });
+const pool = new Pool({ connectionString: DATABASE_URL, connectionTimeoutMillis: 15000 });
 
 async function main() {
   // 1. Get tenant_id for slug

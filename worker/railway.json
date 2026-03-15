@@ -5,7 +5,7 @@
     "buildCommand": "cd .. && npm install && npm run worker:build"
   },
   "deploy": {
-    "startCommand": "node dist/index.js",
+    "startCommand": "node --dns-result-order=ipv4first dist/index.js",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE",

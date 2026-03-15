@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "esbuild src/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
-    "start": "node dist/index.js"
+    "start": "node --dns-result-order=ipv4first dist/index.js"
   },
   "dependencies": {
     "@google/genai": "^1.44.0",

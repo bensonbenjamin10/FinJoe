@@ -25,7 +25,7 @@ if (!GEMINI_API_KEY) {
   process.exit(1);
 }
 
-const pool = new Pool({ connectionString: DATABASE_URL });
+const pool = new Pool({ connectionString: DATABASE_URL, connectionTimeoutMillis: 15000 });
 
 async function main() {
   // Manual run: no limit (or use BACKFILL_EMBEDDINGS_MAX_PER_RUN env for partial runs)

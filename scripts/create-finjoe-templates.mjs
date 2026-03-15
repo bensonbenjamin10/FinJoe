@@ -134,7 +134,7 @@ async function main() {
     return;
   }
 
-  const pool = new Pool({ connectionString: databaseUrl });
+  const pool = new Pool({ connectionString: databaseUrl, connectionTimeoutMillis: 15000 });
   try {
     let tenantId = tenantSlugOrId;
     const slugRow = await pool.query("SELECT id FROM tenants WHERE slug = $1 LIMIT 1", [tenantSlugOrId]);
