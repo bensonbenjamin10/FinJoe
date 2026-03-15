@@ -41,8 +41,18 @@ $RestoreDir = Join-Path $env:TEMP "finjoe_restore"
 New-Item -ItemType Directory -Force -Path $RestoreDir | Out-Null
 Copy-Item ".\neon_backup.dump" $RestoreDir
 $MountSource = $RestoreDir -replace '\\', '/'
-docker run --rm -v "${MountSource}:/backup" -e "RESTORE_URL=$env:RAILWAY_DATABASE_PUBLIC_URL" postgres:17 sh -c "pg_restore -d \"\$RESTORE_URL\" --no-owner --no-acl --clean --if-exists /backup/neon_backup.dump"
+docker run --rm -v "${MountSource}:/backup" -e "RESTORE_URL=$env:RAILWAY_DATABASE_PUBLIC_URL" postgres:18 sh -c "pg_restore -d \"\$RESTORE_URL\" --no-owner --no-acl --clean --if-exists /backup/neon_backup.dump"
 ```
+
+**Restore fails with "unexpected message type 0x58 during COPY from stdin"?** This occurs when `pg_restore` disconnects during COPY (often due to version mismatch or timeout). Fixes:
+
+1. **Use postgres:18** – Railway runs PostgreSQL 18; the migration script uses `postgres:18` to match. If using manual restore, ensure the Docker image matches (e.g. `postgres:18`).
+2. **Fallback: use plain SQL format** – Dump and restore as SQL instead of custom format (avoids COPY protocol; slower but more robust):
+   ```powershell
+   docker run --rm -v "${BackupPath}:/backup" postgres:18 pg_dump $env:NEON_DATABASE_URL --no-owner --no-acl -F p -f /backup/neon_backup.sql
+   docker run --rm -v "${BackupPath}:/backup" -e "RESTORE_URL=$env:RAILWAY_DATABASE_PUBLIC_URL" postgres:18 sh -c "psql -d \"\$RESTORE_URL\" -f /backup/neon_backup.sql"
+   ```
+   Note: Plain format uses INSERTs instead of COPY; for large datasets this is slower but avoids the protocol error.
 
 ## Session Store Migration
 

@@ -40,10 +40,10 @@ try {
   exit 1
 }
 
-# Step 1: Dump from Neon (Docker) – use postgres:17 to match Neon server version
+# Step 1: Dump from Neon (Docker) – use postgres:18 to match Railway PostgreSQL 18
 Write-Host ""
 Write-Host "Step 1: Dumping from Neon..." -ForegroundColor Yellow
-docker run --rm -v "${BackupPath}:/backup" postgres:17 pg_dump $NeonUrl --no-owner --no-acl -F c -f /backup/$DumpFile
+docker run --rm -v "${BackupPath}:/backup" postgres:18 pg_dump $NeonUrl --no-owner --no-acl -F c -f /backup/$DumpFile
 
 if (-not (Test-Path $DumpFile)) {
   Write-Host "Dump failed." -ForegroundColor Red
@@ -67,9 +67,10 @@ if (-not $RestoreUrl) {
   exit 1
 }
 Write-Host "  Using RAILWAY_DATABASE_PUBLIC_URL" -ForegroundColor Gray
-$ContainerId = docker run -d postgres:17 tail -f /dev/null
+$ContainerId = docker run -d postgres:18 tail -f /dev/null
 try {
   docker cp $DumpFile "${ContainerId}:/tmp/$DumpFile"
+  # Use postgres:18 to match Railway PostgreSQL 18 (avoids COPY protocol sync errors)
   docker exec -e "RESTORE_URL=$RestoreUrl" $ContainerId sh -c 'pg_restore -d "$RESTORE_URL" --no-owner --no-acl --clean --if-exists /tmp/neon_backup.dump'
 } finally {
   docker stop $ContainerId 2>$null
