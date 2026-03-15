@@ -9,7 +9,7 @@
     "worker:build": "cd worker && esbuild src/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "worker:start": "node worker/dist/index.js",
     "build": "vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
-    "start": "node start.mjs",
+    "start": "node --dns-result-order=ipv4first start.mjs",
     "db:migrate": "node scripts/run-migrations.mjs",
     "cron:weekly-insights": "node scripts/run-weekly-insights.mjs",
     "cron:recurring-expenses": "node scripts/run-recurring-expenses.mjs",
