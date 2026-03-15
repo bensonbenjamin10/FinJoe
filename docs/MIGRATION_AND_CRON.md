@@ -26,6 +26,12 @@ The scripts use Railway CLI to:
 
 Use the **pgvector** template (not default Postgres) for expense embeddings (RAG).
 
+**Restore fails with "no connection to the server"?** Railway's `DATABASE_URL` is private (internal-only). For local restore you need the public URL:
+
+1. Railway → pgvector → Settings → Networking → enable **Public Networking** (TCP proxy)
+2. Copy `DATABASE_PUBLIC_URL` from Variables
+3. Run: `$env:RAILWAY_DATABASE_PUBLIC_URL = "postgresql://..."; .\scripts\railway-postgres-migrate-docker.ps1`
+
 ## Session Store Migration
 
 The session store migration (`019_session_store.sql`) creates the `session` table for PostgreSQL-backed sessions. Run when `DATABASE_URL` is reachable:

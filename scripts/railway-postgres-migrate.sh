@@ -34,7 +34,7 @@ railway deploy -t 3jJFCA
 
 echo ""
 echo "Wait for the pgvector service to be ACTIVE, then run the data migration."
-echo "Get Railway Postgres DATABASE_URL from: railway open → pgvector service → Variables"
+echo "Get Railway Postgres DATABASE_PUBLIC_URL from: railway open → pgvector service → Variables (enable Public Networking if needed)"
 echo ""
 
 # Step 2: Data migration (user runs with env vars)
@@ -43,8 +43,8 @@ echo ""
 echo "  # Dump from Neon"
 echo "  pg_dump \"\$NEON_DATABASE_URL\" --no-owner --no-acl -F c -f neon_backup.dump"
 echo ""
-echo "  # Restore to Railway (replace with your Railway Postgres DATABASE_URL)"
-echo "  pg_restore -d \"\$RAILWAY_DATABASE_URL\" --no-owner --no-acl --clean --if-exists neon_backup.dump"
+echo "  # Restore to Railway (use DATABASE_PUBLIC_URL from pgvector Variables - private URL unreachable from local)"
+echo "  pg_restore -d \"\$RAILWAY_DATABASE_PUBLIC_URL\" --no-owner --no-acl --clean --if-exists neon_backup.dump"
 echo ""
 echo "  # Or: run migrations on empty Railway DB first, then import data"
 echo "  DATABASE_URL=\"\$RAILWAY_DATABASE_URL\" npm run db:migrate"

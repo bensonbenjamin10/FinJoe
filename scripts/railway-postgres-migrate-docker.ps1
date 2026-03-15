@@ -6,6 +6,8 @@
 #
 # Usage:
 #   $env:NEON_DATABASE_URL = "postgresql://user:pass@host/db?sslmode=require"
+#   # Optional: if restore fails with "no connection", get public URL from Railway -> pgvector -> Variables
+#   $env:RAILWAY_DATABASE_PUBLIC_URL = "postgresql://..."
 #   .\scripts\railway-postgres-migrate-docker.ps1
 
 $ErrorActionPreference = "Stop"
@@ -49,11 +51,18 @@ if (-not (Test-Path $DumpFile)) {
 }
 Write-Host "Dump saved to $DumpFile" -ForegroundColor Green
 
-# Step 2: Restore to Railway (Railway CLI injects DATABASE_URL, Docker runs pg_restore)
+# Step 2: Restore to Railway (use public URL – private DATABASE_URL is unreachable from local machine)
 Write-Host ""
 Write-Host "Step 2: Restoring to Railway pgvector..." -ForegroundColor Yellow
 railway service link pgvector
-railway run docker run --rm -v "${BackupPath}:/backup" -e DATABASE_URL postgres:17 sh -c "pg_restore -d `$DATABASE_URL --no-owner --no-acl --clean --if-exists /backup/$DumpFile"
+$RestoreUrl = $env:RAILWAY_DATABASE_PUBLIC_URL
+if ($RestoreUrl) {
+  Write-Host "  Using RAILWAY_DATABASE_PUBLIC_URL from environment" -ForegroundColor Gray
+  docker run --rm -v "${BackupPath}:/backup" -e "RESTORE_URL=$RestoreUrl" postgres:17 sh -c "pg_restore -d \"\$RESTORE_URL\" --no-owner --no-acl --clean --if-exists /backup/$DumpFile"
+} else {
+  Write-Host "  (If 'no connection', set RAILWAY_DATABASE_PUBLIC_URL or enable TCP proxy: pgvector -> Settings -> Networking)" -ForegroundColor Gray
+  railway run docker run --rm -v "${BackupPath}:/backup" -e DATABASE_PUBLIC_URL postgres:17 sh -c "pg_restore -d \"`$DATABASE_PUBLIC_URL\" --no-owner --no-acl --clean --if-exists /backup/$DumpFile"
+}
 
 Write-Host "Restore complete." -ForegroundColor Green
 
