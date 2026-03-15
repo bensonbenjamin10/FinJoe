@@ -17,7 +17,12 @@ export function setupAuth(app: Express) {
 
   // Use PostgreSQL session store when DATABASE_URL is set; fallback to MemoryStore for dev without DB
   const sessionStore = process.env.DATABASE_URL
-    ? new PgSession({ conString: process.env.DATABASE_URL, createTableIfMissing: true, tableName: "session" })
+    ? new PgSession({
+        conString: process.env.DATABASE_URL,
+        createTableIfMissing: true,
+        tableName: "session",
+        pruneSessionInterval: false, // Disable prune to avoid noisy errors when DB is unreachable
+      })
     : new Store({ checkPeriod: 86400000 });
 
   app.use(
