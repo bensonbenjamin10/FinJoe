@@ -1981,6 +1981,91 @@ export async function registerRoutes(app: Express) {
     }
   });
 
+  // --- Bank import deduplication utilities ---
+  type DuplicateInfo = {
+    potentialDuplicate: boolean;
+    matchConfidence?: "exact" | "probable";
+    matchedExpenseId?: string;
+    matchedExpenseStatus?: string;
+    matchedExpenseSource?: string;
+  };
+
+  function findDuplicateExpenses(
+    csvRows: Array<{ date: string; particulars: string; amount: number }>,
+    existingExpenses: Array<{ id: string; amount: number; expenseDate: Date; description: string | null; vendorName: string | null; status: string; source: string }>
+  ): DuplicateInfo[] {
+    const byDateAmount = new Map<string, typeof existingExpenses>();
+    for (const e of existingExpenses) {
+      const key = `${e.expenseDate.toISOString().slice(0, 10)}|${e.amount}`;
+      const arr = byDateAmount.get(key);
+      if (arr) arr.push(e);
+      else byDateAmount.set(key, [e]);
+    }
+    return csvRows.map((row) => {
+      const key = `${row.date}|${row.amount}`;
+      const candidates = byDateAmount.get(key);
+      if (!candidates || candidates.length === 0) {
+        const fuzzyKey1 = `${shiftDate(row.date, 1)}|${row.amount}`;
+        const fuzzyKey2 = `${shiftDate(row.date, -1)}|${row.amount}`;
+        const fuzzyCandidates = [...(byDateAmount.get(fuzzyKey1) ?? []), ...(byDateAmount.get(fuzzyKey2) ?? [])];
+        if (fuzzyCandidates.length > 0) {
+          const textMatch = fuzzyCandidates.find((e) => textsOverlap(row.particulars, e.description, e.vendorName));
+          if (textMatch) return { potentialDuplicate: true, matchConfidence: "probable" as const, matchedExpenseId: textMatch.id, matchedExpenseStatus: textMatch.status, matchedExpenseSource: textMatch.source };
+        }
+        return { potentialDuplicate: false };
+      }
+      const exact = candidates.find((e) => textsOverlap(row.particulars, e.description, e.vendorName));
+      if (exact) return { potentialDuplicate: true, matchConfidence: "exact" as const, matchedExpenseId: exact.id, matchedExpenseStatus: exact.status, matchedExpenseSource: exact.source };
+      return { potentialDuplicate: true, matchConfidence: "probable" as const, matchedExpenseId: candidates[0].id, matchedExpenseStatus: candidates[0].status, matchedExpenseSource: candidates[0].source };
+    });
+  }
+
+  function findDuplicateIncome(
+    csvRows: Array<{ date: string; particulars: string; amount: number }>,
+    existingIncome: Array<{ id: string; amount: number; incomeDate: Date; particulars: string | null; source: string }>
+  ): DuplicateInfo[] {
+    const byDateAmount = new Map<string, typeof existingIncome>();
+    for (const e of existingIncome) {
+      const key = `${e.incomeDate.toISOString().slice(0, 10)}|${e.amount}`;
+      const arr = byDateAmount.get(key);
+      if (arr) arr.push(e);
+      else byDateAmount.set(key, [e]);
+    }
+    return csvRows.map((row) => {
+      const key = `${row.date}|${row.amount}`;
+      const candidates = byDateAmount.get(key);
+      if (!candidates || candidates.length === 0) return { potentialDuplicate: false };
+      const exact = candidates.find((e) => e.particulars && row.particulars && (e.particulars.toLowerCase().includes(row.particulars.toLowerCase().slice(0, 20)) || row.particulars.toLowerCase().includes(e.particulars.toLowerCase().slice(0, 20))));
+      if (exact) return { potentialDuplicate: true, matchConfidence: "exact" as const, matchedExpenseId: exact.id, matchedExpenseStatus: "income", matchedExpenseSource: exact.source };
+      return { potentialDuplicate: true, matchConfidence: "probable" as const, matchedExpenseId: candidates[0].id, matchedExpenseStatus: "income", matchedExpenseSource: candidates[0].source };
+    });
+  }
+
+  function textsOverlap(particulars: string | undefined, description: string | null, vendorName: string | null): boolean {
+    if (!particulars) return false;
+    const p = particulars.toLowerCase();
+    if (description) {
+      const d = description.toLowerCase();
+      if (d.includes(p.slice(0, 20)) || p.includes(d.slice(0, 20))) return true;
+    }
+    if (vendorName) {
+      if (p.includes(vendorName.toLowerCase())) return true;
+    }
+    return false;
+  }
+
+  function shiftDate(dateStr: string, days: number): string {
+    const d = new Date(dateStr + "T12:00:00Z");
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+
+  function getDateRange(rows: Array<{ date: string }>): { minDate: string; maxDate: string } | null {
+    const dates = rows.map((r) => r.date).filter(Boolean).sort();
+    if (dates.length === 0) return null;
+    return { minDate: dates[0], maxDate: dates[dates.length - 1] };
+  }
+
   // Expense/Income import from bank statement CSV
   app.post("/api/admin/expenses/import/preview", requireAdmin, upload.single("file"), async (req, res) => {
     try {
@@ -2044,11 +2129,39 @@ export async function registerRoutes(app: Express) {
         incCats.length > 0 ? incCats : [{ id: "", name: "Other", slug: "other" }]
       );
 
+      // Duplicate detection: query existing records in the CSV's date range
+      let expDuplicates: DuplicateInfo[] = [];
+      let incDuplicates: DuplicateInfo[] = [];
+      const expDateRange = getDateRange(expRows);
+      const incDateRange = getDateRange(incRows);
+      if (expDateRange) {
+        const minD = new Date(expDateRange.minDate + "T00:00:00Z");
+        const maxD = new Date(expDateRange.maxDate + "T23:59:59Z");
+        minD.setUTCDate(minD.getUTCDate() - 1);
+        maxD.setUTCDate(maxD.getUTCDate() + 1);
+        const existingExp = await db
+          .select({ id: expenses.id, amount: expenses.amount, expenseDate: expenses.expenseDate, description: expenses.description, vendorName: expenses.vendorName, status: expenses.status, source: expenses.source })
+          .from(expenses)
+          .where(and(eq(expenses.tenantId, tid), gte(expenses.expenseDate, minD), lte(expenses.expenseDate, maxD)));
+        expDuplicates = findDuplicateExpenses(expRows, existingExp);
+      }
+      if (incDateRange) {
+        const minD = new Date(incDateRange.minDate + "T00:00:00Z");
+        const maxD = new Date(incDateRange.maxDate + "T23:59:59Z");
+        minD.setUTCDate(minD.getUTCDate() - 1);
+        maxD.setUTCDate(maxD.getUTCDate() + 1);
+        const existingInc = await db
+          .select({ id: incomeRecords.id, amount: incomeRecords.amount, incomeDate: incomeRecords.incomeDate, particulars: incomeRecords.particulars, source: incomeRecords.source })
+          .from(incomeRecords)
+          .where(and(eq(incomeRecords.tenantId, tid), gte(incomeRecords.incomeDate, minD), lte(incomeRecords.incomeDate, maxD)));
+        incDuplicates = findDuplicateIncome(incRows, existingInc);
+      }
+
       res.json({
-        preview: expRows.map((r) => ({ date: r.date, particulars: r.particulars, amount: r.amount, majorHead: r.majorHead ?? "", branch: r.branch ?? "", categoryMatch: r.categoryMatch })),
+        preview: expRows.map((r, i) => ({ date: r.date, particulars: r.particulars, amount: r.amount, majorHead: r.majorHead ?? "", branch: r.branch ?? "", categoryMatch: r.categoryMatch, ...(expDuplicates[i] ?? {}) })),
         totalRows: expRows.length,
         totalAmount: totalExpAmount,
-        incomePreview: incRows.map((r) => ({ date: r.date, particulars: r.particulars, amount: r.amount, categoryMatch: r.categoryMatch })),
+        incomePreview: incRows.map((r, i) => ({ date: r.date, particulars: r.particulars, amount: r.amount, categoryMatch: r.categoryMatch, ...(incDuplicates[i] ?? {}) })),
         incomeTotalRows: incRows.length,
         incomeTotalAmount: totalIncAmount,
         skippedZero,
@@ -2075,6 +2188,8 @@ export async function registerRoutes(app: Express) {
       let expenseOverrides: Record<string, string> = {};
       let incomeOverrides: Record<string, string> = {};
       let costCenterOverrides: Record<string, string | null> = {};
+      let skipExpenseIndices = new Set<number>();
+      let skipIncomeIndices = new Set<number>();
       try {
         if (req.body?.expenseOverrides && typeof req.body.expenseOverrides === "string") {
           expenseOverrides = JSON.parse(req.body.expenseOverrides) || {};
@@ -2084,6 +2199,14 @@ export async function registerRoutes(app: Express) {
         }
         if (req.body?.costCenterOverrides && typeof req.body.costCenterOverrides === "string") {
           costCenterOverrides = JSON.parse(req.body.costCenterOverrides) || {};
+        }
+        if (req.body?.skipExpenseIndices && typeof req.body.skipExpenseIndices === "string") {
+          const arr = JSON.parse(req.body.skipExpenseIndices);
+          if (Array.isArray(arr)) skipExpenseIndices = new Set(arr.map(Number));
+        }
+        if (req.body?.skipIncomeIndices && typeof req.body.skipIncomeIndices === "string") {
+          const arr = JSON.parse(req.body.skipIncomeIndices);
+          if (Array.isArray(arr)) skipIncomeIndices = new Set(arr.map(Number));
         }
       } catch (_) {}
 
@@ -2130,6 +2253,7 @@ export async function registerRoutes(app: Express) {
         source: string;
       }> = [];
       for (let i = 0; i < expRows.length; i++) {
+        if (skipExpenseIndices.has(i)) continue;
         const r = expRows[i];
         if (!isValidDateString(r.date)) continue;
         const overrideCat = expenseOverrides[String(i)];
@@ -2163,6 +2287,7 @@ export async function registerRoutes(app: Express) {
         source: string;
       }> = [];
       for (let i = 0; i < incRows.length; i++) {
+        if (skipIncomeIndices.has(i)) continue;
         const r = incRows[i];
         if (!isValidDateString(r.date)) continue;
         const overrideCat = incomeOverrides[String(i)];
@@ -2196,7 +2321,7 @@ export async function registerRoutes(app: Express) {
         }
       });
 
-      res.json({ imported, incomeImported });
+      res.json({ imported, incomeImported, skippedExpenses: skipExpenseIndices.size, skippedIncome: skipIncomeIndices.size });
     } catch (e) {
       logger.error("Import execute error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to import" });

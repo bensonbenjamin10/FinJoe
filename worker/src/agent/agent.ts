@@ -393,7 +393,7 @@ async function executeFunctionCall(
       if (!expense?.id) return { success: false, error: USER_FACING_ERROR };
       await finJoeData.submitExpense(expense.id, contactStudentId);
       const categoryName = execCtx.categories.find((c) => c.id === d.categoryId)?.name ?? null;
-      await notifyFinanceForApproval(expense.id, { amount: d.amount, vendorName: d.vendorName, invoiceNumber: d.invoiceNumber, invoiceDate: d.invoiceDate, description: d.description, gstin: d.gstin, taxType: d.taxType }, tenantId, traceId, categoryName);
+      await notifyFinanceForApproval(expense.id, { amount: d.amount, vendorName: d.vendorName ?? undefined, invoiceNumber: d.invoiceNumber ?? undefined, invoiceDate: d.invoiceDate ?? undefined, description: d.description ?? undefined, gstin: d.gstin ?? undefined, taxType: d.taxType ?? undefined }, tenantId, traceId, categoryName);
       return { success: true, data: { expenseId: expense.id } };
     }
 
@@ -430,26 +430,36 @@ async function executeFunctionCall(
       let campusId = args.campusId ? String(args.campusId) : null;
       if (categoryId && !validCategoryIds.includes(categoryId)) {
         const resolved = resolveCategoryFromMessage(categoryId, execCtx.categories);
-        if (resolved) categoryId = resolved;
+        categoryId = resolved ?? "";
       }
       if (campusId && !validCampusIds.includes(campusId)) {
         const resolved = resolveCampusFromMessage(campusId, execCtx.campuses);
         if (resolved) campusId = resolved;
       }
+      if (!categoryId) {
+        if (validCategoryIds.length === 1) {
+          categoryId = validCategoryIds[0];
+        } else {
+          const names = execCtx.categories.map((c) => c.name).join(", ");
+          return { success: false, error: `Category is required. Please ask the user which category this expense belongs to. Available categories: ${names}. If none fit, suggest the user contact an admin to create a new category.` };
+        }
+      }
+      const today = new Date().toISOString().slice(0, 10);
+      const parsedInvoiceDate = args.invoiceDate ? parseDateToISO(String(args.invoiceDate)) : null;
       const expenseData = {
         amount: amount ?? 0,
-        expenseDate: parseDateToISO(String(args.invoiceDate ?? new Date().toISOString().slice(0, 10))) ?? new Date().toISOString().slice(0, 10),
-        categoryId: categoryId || validCategoryIds[0] || "",
+        expenseDate: parseDateToISO(String(args.invoiceDate ?? today)) ?? today,
+        categoryId,
         campusId,
         description: args.description ? String(args.description) : null,
         invoiceNumber: args.invoiceNumber ? String(args.invoiceNumber) : null,
-        invoiceDate: args.invoiceDate ? (parseDateToISO(String(args.invoiceDate)) ?? String(args.invoiceDate)) : null,
+        invoiceDate: parsedInvoiceDate ?? (args.invoiceDate ? today : null),
         vendorName: args.vendorName ? String(args.vendorName) : null,
         gstin: args.gstin ? String(args.gstin) : null,
         taxType: args.taxType ? String(args.taxType) : null,
       };
 
-      const validation = validateExpenseData(expenseData, validCategoryIds, validCampusIds, requireAuditAbove);
+      const validation = validateExpenseData(expenseData, execCtx.categories, execCtx.campuses, requireAuditAbove);
       if (!validation.valid) {
         return { success: false, error: `I need: ${validation.errors.join(". ")}. Please provide the missing information.` };
       }
@@ -537,17 +547,23 @@ async function executeFunctionCall(
       let campusId = args.campusId ? String(args.campusId) : null;
       if (categoryId && !validIncomeCategoryIds.includes(categoryId)) {
         const resolved = resolveIncomeCategoryFromMessage(categoryId, incCats);
-        if (resolved) categoryId = resolved;
+        categoryId = resolved ?? "";
       }
       if (campusId && !execCtx.validCampusIds.includes(campusId)) {
         const resolved = resolveCampusFromMessage(campusId, execCtx.campuses);
         if (resolved) campusId = resolved;
       }
-      const finalCategoryId = categoryId || validIncomeCategoryIds[0];
+      let finalCategoryId = categoryId;
       if (!finalCategoryId) {
-        return { success: false, error: "No income categories configured. Ask admin to add income categories." };
+        if (validIncomeCategoryIds.length === 1) {
+          finalCategoryId = validIncomeCategoryIds[0];
+        } else {
+          const names = incCats.map((c) => c.name).join(", ");
+          return { success: false, error: `Income category is required. Please ask the user which category this income belongs to. Available income categories: ${names}. If none fit, suggest the user contact an admin to create a new income category.` };
+        }
       }
-      const incomeDate = parseDateToISO(String(args.incomeDate ?? new Date().toISOString().slice(0, 10))) ?? new Date().toISOString().slice(0, 10);
+      const today = new Date().toISOString().slice(0, 10);
+      const incomeDate = parseDateToISO(String(args.incomeDate ?? today)) ?? today;
       const particulars = args.particulars ? String(args.particulars) : null;
 
       const incomeData = {
@@ -614,7 +630,7 @@ async function executeFunctionCall(
       }
 
       const today = new Date().toISOString().slice(0, 10);
-      const defaultCategoryId = validCategoryIds[0];
+      const defaultCategoryId = validCategoryIds.length === 1 ? validCategoryIds[0] : "";
       const expenseItems: Array<{
         amount: number;
         expenseDate: string;
@@ -637,27 +653,31 @@ async function executeFunctionCall(
         let campusId = campusVal != null && campusVal !== "" ? String(campusVal) : null;
         if (categoryId && !validCategoryIds.includes(categoryId)) {
           const resolved = resolveCategoryFromMessage(categoryId, execCtx.categories);
-          if (resolved) categoryId = resolved;
+          categoryId = resolved ?? "";
         }
         if (campusId && !validCampusIds.includes(campusId)) {
           const resolved = resolveCampusFromMessage(campusId, execCtx.campuses);
           if (resolved) campusId = resolved;
         }
+        if (!categoryId) {
+          const names = execCtx.categories.map((c) => c.name).join(", ");
+          return { success: false, error: `Expense ${i + 1}: category is required. Please ask which category to use. Available: ${names}.` };
+        }
         const rawDate = String(r.invoiceDate ?? r.expenseDate ?? today);
-        const expenseDate = parseDateToISO(rawDate) ?? rawDate;
+        const expenseDate = parseDateToISO(rawDate) ?? today;
         const expenseData = {
           amount,
           expenseDate,
-          categoryId: categoryId || defaultCategoryId,
+          categoryId,
           campusId,
           description: (r.description ?? r.particulars) ? String(r.description ?? r.particulars) : null,
           invoiceNumber: null as string | null,
-          invoiceDate: r.invoiceDate ? (parseDateToISO(String(r.invoiceDate)) ?? String(r.invoiceDate)) : null,
+          invoiceDate: r.invoiceDate ? (parseDateToISO(String(r.invoiceDate)) ?? today) : null,
           vendorName: (r.vendorName ?? r.name) ? String(r.vendorName ?? r.name) : null,
           gstin: null as string | null,
           taxType: null as string | null,
         };
-        const validation = validateExpenseData(expenseData, validCategoryIds, validCampusIds, requireAuditAbove);
+        const validation = validateExpenseData(expenseData, execCtx.categories, execCtx.campuses, requireAuditAbove);
         if (!validation.valid) {
           return { success: false, error: `Expense ${i + 1}: ${validation.errors.join(". ")}` };
         }
@@ -738,7 +758,7 @@ async function executeFunctionCall(
         campusId: campusId ?? undefined,
         studentId: studentId ?? undefined,
       };
-      const validation = validateRoleChangeData(roleData, validCampusIds);
+      const validation = validateRoleChangeData(roleData, execCtx.campuses);
       if (!validation.valid) {
         return { success: false, error: `I need: ${validation.errors.join(". ")}. Please provide the missing information.` };
       }
@@ -773,6 +793,16 @@ async function executeFunctionCall(
       }
       const amountVal = typeof args.amount === "number" ? Math.round(args.amount) : parseAmount(args.amount);
       const missingFields = Array.isArray(args.missingFields) ? args.missingFields.map(String) : [];
+      let pendingCategoryId = args.categoryId ? String(args.categoryId) : undefined;
+      if (pendingCategoryId && !validCategoryIds.includes(pendingCategoryId)) {
+        const resolved = resolveCategoryFromMessage(pendingCategoryId, execCtx.categories);
+        pendingCategoryId = resolved ?? undefined;
+      }
+      let pendingCampusId: string | null | undefined = args.campusId ? String(args.campusId) : undefined;
+      if (pendingCampusId && !validCampusIds.includes(pendingCampusId)) {
+        const resolved = resolveCampusFromMessage(pendingCampusId, execCtx.campuses);
+        pendingCampusId = resolved ?? undefined;
+      }
       const extracted: ExtractedExpense & { categoryId?: string; campusId?: string | null } = {
         amount: amountVal ?? undefined,
         vendorName: args.vendorName ? String(args.vendorName) : undefined,
@@ -781,6 +811,8 @@ async function executeFunctionCall(
         description: args.description ? String(args.description) : undefined,
         gstin: args.gstin ? String(args.gstin) : undefined,
         taxType: args.taxType ? String(args.taxType) : undefined,
+        categoryId: pendingCategoryId,
+        campusId: pendingCampusId !== undefined ? pendingCampusId : undefined,
       };
       return {
         success: true,
@@ -851,7 +883,12 @@ async function executeFunctionCall(
       let campusId = args.campusId !== undefined ? (args.campusId ? String(args.campusId) : null) : undefined;
       if (categoryId && !validCategoryIds.includes(categoryId)) {
         const resolved = resolveCategoryFromMessage(categoryId, execCtx.categories);
-        if (resolved) categoryId = resolved;
+        if (resolved) {
+          categoryId = resolved;
+        } else {
+          const names = execCtx.categories.map((c) => c.name).join(", ");
+          return { success: false, error: `Invalid category. Please ask the user to choose from: ${names}. If none fit, suggest contacting an admin to create a new category.` };
+        }
       }
       if (campusId !== undefined && campusId && !validCampusIds.includes(campusId)) {
         const resolved = resolveCampusFromMessage(campusId, execCtx.campuses);
@@ -873,8 +910,9 @@ async function executeFunctionCall(
       if (amt !== undefined) updates.amount = amt;
       if (args.vendorName !== undefined) updates.vendorName = args.vendorName ? String(args.vendorName) : null;
       if (args.invoiceNumber !== undefined) updates.invoiceNumber = args.invoiceNumber ? String(args.invoiceNumber) : null;
-      if (args.invoiceDate !== undefined) updates.invoiceDate = args.invoiceDate ? (parseDateToISO(String(args.invoiceDate)) ?? String(args.invoiceDate)) : null;
-      if (args.expenseDate !== undefined) updates.expenseDate = parseDateToISO(String(args.expenseDate)) ?? String(args.expenseDate);
+      const today = new Date().toISOString().slice(0, 10);
+      if (args.invoiceDate !== undefined) updates.invoiceDate = args.invoiceDate ? (parseDateToISO(String(args.invoiceDate)) ?? today) : null;
+      if (args.expenseDate !== undefined) updates.expenseDate = parseDateToISO(String(args.expenseDate)) ?? today;
       if (args.description !== undefined) updates.description = args.description ? String(args.description) : null;
       if (categoryId) updates.categoryId = categoryId;
       if (campusId !== undefined) updates.costCenterId = campusId;
@@ -882,6 +920,15 @@ async function executeFunctionCall(
       if (args.taxType !== undefined) updates.taxType = args.taxType ? String(args.taxType) : null;
       if (Object.keys(updates).length === 0) {
         return { success: false, error: "No fields to update. Specify at least one: amount, vendorName, invoiceNumber, invoiceDate, description, categoryId, campusId, gstin, taxType." };
+      }
+      const validationData = { ...updates, categoryId: updates.categoryId, campusId: updates.costCenterId };
+      if (validationData.categoryId && !validCategoryIds.includes(validationData.categoryId)) {
+        const names = execCtx.categories.map((c) => c.name).join(", ");
+        return { success: false, error: `Invalid category. Valid options: ${names}` };
+      }
+      if (validationData.campusId && validationData.campusId !== "__corporate__" && validCampusIds.length > 0 && !validCampusIds.includes(validationData.campusId)) {
+        const names = execCtx.campuses.map((c) => c.name).join(", ");
+        return { success: false, error: `Invalid cost center. Valid options: ${names}` };
       }
       const result = await finJoeData.updateExpense(expenseId, updates);
       if (!result) return { success: false, error: `Could not update expense #${expenseIdInput}. It may not be in draft status.` };
@@ -949,7 +996,7 @@ async function executeFunctionCall(
         limit: 20,
       });
       const combinedIds = new Set([...searchResults.map((r: any) => r.id), ...listResults.map((r: any) => r.id)]);
-      const byId = new Map([...searchResults.map((r: any) => [r.id, r]), ...listResults.map((r: any) => [r.id, r])]);
+      const byId = new Map([...searchResults.map((r: any) => [r.id, r] as [string, any]), ...listResults.map((r: any) => [r.id, r] as [string, any])]);
       const expenses = Array.from(byId.values()).slice(0, 20);
       let summary = null;
       if (startDate && endDate) {
@@ -1104,11 +1151,19 @@ async function executeFunctionCall(
       if (campusId === "null" || campusId === "__corporate__" || campusId === "") campusId = null;
       if (categoryId && !validCategoryIds.includes(categoryId)) {
         const resolved = resolveCategoryFromMessage(categoryId, execCtx.categories);
-        if (resolved) categoryId = resolved;
+        categoryId = resolved ?? "";
       }
       if (campusId && !validCampusIds.includes(campusId)) {
         const resolved = resolveCampusFromMessage(campusId, execCtx.campuses);
         if (resolved) campusId = resolved;
+      }
+      if (!categoryId) {
+        if (validCategoryIds.length === 1) {
+          categoryId = validCategoryIds[0];
+        } else {
+          const names = execCtx.categories.map((c) => c.name).join(", ");
+          return { success: false, error: `Category is required for recurring template. Please ask the user which category to use. Available categories: ${names}.` };
+        }
       }
       const frequency = String(args.frequency ?? "monthly").toLowerCase() as "monthly" | "weekly" | "quarterly";
       if (!["monthly", "weekly", "quarterly"].includes(frequency)) {
@@ -1125,7 +1180,7 @@ async function executeFunctionCall(
       const template = await finJoeData.createRecurringTemplate({
         tenantId,
         costCenterId: campusId,
-        categoryId: categoryId || validCategoryIds[0] || "",
+        categoryId,
         amount,
         description: args.description ? String(args.description) : null,
         vendorName: args.vendorName ? String(args.vendorName) : null,

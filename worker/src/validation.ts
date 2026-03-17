@@ -4,6 +4,8 @@
 
 export type ValidationResult = { valid: boolean; errors: string[] };
 
+export type NamedItem = { id: string; name: string };
+
 export type ExpenseData = {
   amount?: number;
   expenseDate?: string;
@@ -23,11 +25,13 @@ const VALID_TAX_TYPES = ["no_gst", "gst_itc", "gst_rcm", "gst_no_itc"];
 /** Validate expense data before creating/updating in DB */
 export function validateExpenseData(
   data: ExpenseData,
-  validCategoryIds: string[],
-  validCampusIds: string[],
+  validCategories: string[] | NamedItem[],
+  validCampuses: string[] | NamedItem[],
   requireAuditFieldsAboveAmount?: number | null
 ): ValidationResult {
   const errors: string[] = [];
+  const categoryIds = validCategories.map((c) => typeof c === "string" ? c : c.id);
+  const campusIds = validCampuses.map((c) => typeof c === "string" ? c : c.id);
 
   if (!data.amount || data.amount <= 0) {
     errors.push("Amount must be greater than 0");
@@ -37,11 +41,13 @@ export function validateExpenseData(
   }
   if (!data.categoryId) {
     errors.push("Expense category is required");
-  } else if (validCategoryIds.length > 0 && !validCategoryIds.includes(data.categoryId)) {
-    errors.push(`Invalid category. Valid: ${validCategoryIds.join(", ")}`);
+  } else if (categoryIds.length > 0 && !categoryIds.includes(data.categoryId)) {
+    const display = validCategories.map((c) => typeof c === "string" ? c : c.name).join(", ");
+    errors.push(`Invalid category. Valid options: ${display}`);
   }
-  if (data.campusId && data.campusId !== "__corporate__" && validCampusIds.length > 0 && !validCampusIds.includes(data.campusId)) {
-    errors.push(`Invalid campus. Valid: ${validCampusIds.join(", ")}`);
+  if (data.campusId && data.campusId !== "__corporate__" && campusIds.length > 0 && !campusIds.includes(data.campusId)) {
+    const display = validCampuses.map((c) => typeof c === "string" ? c : c.name).join(", ");
+    errors.push(`Invalid cost center. Valid options: ${display}`);
   }
   if (data.gstin && data.gstin.length !== 15) {
     errors.push("GSTIN must be 15 characters if provided");
@@ -81,9 +87,10 @@ const VALID_ROLES = ["vendor", "faculty", "student"];
 /** Validate role change request data before creating in DB */
 export function validateRoleChangeData(
   data: RoleChangeData,
-  validCampusIds: string[]
+  validCampuses: string[] | NamedItem[]
 ): ValidationResult {
   const errors: string[] = [];
+  const campusIds = validCampuses.map((c) => typeof c === "string" ? c : c.id);
 
   if (!data.contactPhone || data.contactPhone.trim().length === 0) {
     errors.push("Contact phone is required");
@@ -98,8 +105,9 @@ export function validateRoleChangeData(
   }
   if (["vendor", "faculty"].includes(data.requestedRole) && !data.campusId) {
     errors.push("Campus is required for vendor and faculty roles");
-  } else if (data.campusId && validCampusIds.length > 0 && !validCampusIds.includes(data.campusId)) {
-    errors.push(`Invalid campus. Valid: ${validCampusIds.join(", ")}`);
+  } else if (data.campusId && campusIds.length > 0 && !campusIds.includes(data.campusId)) {
+    const display = validCampuses.map((c) => typeof c === "string" ? c : c.name).join(", ");
+    errors.push(`Invalid cost center. Valid options: ${display}`);
   }
 
   return {

@@ -27,7 +27,8 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 === RECORDING INCOME ===
 - Use create_income when the user wants to record income (fees, donations, sales, etc.). Required: amount, categoryId (income category). Optional: cost center, particulars, income date.
 - Income categories are separate from expense categories—use the income category list from SYSTEM DATA.
-- Use today's date for incomeDate if not provided. Default category: first from the provided income category list.
+- Use today's date for incomeDate if not provided.
+- When the user hasn't specified an income category and multiple income categories exist, list the available income categories and ask the user to choose one. Only auto-select if there is exactly one income category configured.
 
 === RECORDING EXPENSES ===
 - Required: amount. Also cost center (or Corporate Office for HQ expenses). Use the terminology from SYSTEM DATA (e.g. campus, branch, department).
@@ -35,7 +36,8 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 - Audit: for larger or formal expenses, invoice number, invoice date, and vendor name are typically required (see injected audit rules).
 - Tax types: no_gst (unregistered vendor), gst_itc (GST paid, claiming ITC), gst_rcm (reverse charge), gst_no_itc (GST paid, not claiming ITC). Ask for GSTIN (15 chars) when invoice shows GST.
 - PENDING EXPENSE: You receive extracted data and missingFields. Use them—do not ignore. Map user replies to missing fields. When the last missing field is filled, call create_expense immediately. Otherwise call store_pending_expense with updated missingFields and ask for the rest.
-- Use today's date for invoiceDate if not provided. Default category: first from the provided category list, or ask user to specify if none configured.
+- Use today's date for invoiceDate if not provided.
+- When the user hasn't specified a category and multiple categories exist, list the available categories and ask the user to choose one. Only auto-select if there is exactly one category configured. If no categories exist, ask the user to contact admin.
 
 === ONBOARDING (ROLE REQUESTS) ===
 - Roles: vendor, faculty, student.
@@ -52,7 +54,10 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 === CATEGORY & COST CENTER MAPPING ===
 - Map user words to the provided expense category list by name or slug. Use the category list from SYSTEM DATA; do not assume fixed mappings.
 - Map user words to cost centers: match by name or slug from the provided list. Use the terminology from SYSTEM DATA (e.g. campus, branch).
-- Default category when unclear: first from the provided category list. If no categories exist, ask the user to specify or suggest they contact admin.
+- When the user hasn't specified a category and multiple categories exist, list the available categories and ask the user to choose one. Only auto-select if there is exactly one category configured.
+- If the user's description doesn't clearly match any existing category, present the available categories and ask the user to pick the closest match. If none fit, suggest the user contact an admin to create a new category.
+- If no categories exist at all, ask the user to contact admin to set up categories.
+- Do NOT silently default to the first category. Always confirm the category with the user when it is ambiguous.
 - Corporate Office: use __corporate__ or null for campusId when expense is for HQ.
 
 === ERROR HANDLING ===
@@ -208,6 +213,8 @@ const FINJOE_FUNCTION_DECLARATIONS = [
         description: { type: Type.STRING },
         gstin: { type: Type.STRING },
         taxType: { type: Type.STRING },
+        categoryId: { type: Type.STRING, description: "Expense category ID or slug if already known" },
+        campusId: { type: Type.STRING, description: "Cost center ID, slug, or name if already known" },
         missingFields: {
           type: Type.ARRAY,
           items: { type: Type.STRING },
@@ -586,7 +593,7 @@ export function parseAmount(value: unknown): number | undefined {
     return n > 0 ? n : undefined;
   }
   if (typeof value === "string") {
-    const cleaned = value.replace(/,/g, "").trim();
+    const cleaned = value.replace(/[₹$,]/g, "").replace(/^(Rs\.?|INR)\s*/i, "").trim();
     const n = parseFloat(cleaned);
     return Number.isFinite(n) && n > 0 ? Math.round(n) : undefined;
   }

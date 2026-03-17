@@ -49,6 +49,7 @@ import {
   Eye,
   TrendingUp,
   Repeat,
+  AlertTriangle,
 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -62,8 +63,8 @@ import type {
   Campus,
 } from "@shared/schema";
 
-type PreviewRow = { date: string; particulars: string; amount: number; majorHead?: string; branch?: string; categoryMatch: string };
-type IncomePreviewRow = { date: string; particulars: string; amount: number; categoryMatch: string };
+type PreviewRow = { date: string; particulars: string; amount: number; majorHead?: string; branch?: string; categoryMatch: string; potentialDuplicate?: boolean; matchConfidence?: "exact" | "probable"; matchedExpenseId?: string; matchedExpenseStatus?: string; matchedExpenseSource?: string };
+type IncomePreviewRow = { date: string; particulars: string; amount: number; categoryMatch: string; potentialDuplicate?: boolean; matchConfidence?: "exact" | "probable"; matchedExpenseId?: string; matchedExpenseSource?: string };
 
 const ROW_HEIGHT = 52;
 
@@ -82,6 +83,10 @@ function ImportPreviewVirtualizedRows({
   setCostCenterOverrides,
   slugToExpCatId,
   slugToIncCatId,
+  skippedExpenseIndices,
+  skippedIncomeIndices,
+  setSkippedExpenseIndices,
+  setSkippedIncomeIndices,
 }: {
   expRows: PreviewRow[];
   incRows: IncomePreviewRow[];
@@ -97,6 +102,10 @@ function ImportPreviewVirtualizedRows({
   setCostCenterOverrides: React.Dispatch<React.SetStateAction<Record<string, string | null>>>;
   slugToExpCatId: Record<string, string>;
   slugToIncCatId: Record<string, string>;
+  skippedExpenseIndices: Set<number>;
+  skippedIncomeIndices: Set<number>;
+  setSkippedExpenseIndices: React.Dispatch<React.SetStateAction<Set<number>>>;
+  setSkippedIncomeIndices: React.Dispatch<React.SetStateAction<Set<number>>>;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const allRows = useMemo(() => {
@@ -117,7 +126,8 @@ function ImportPreviewVirtualizedRows({
 
   return (
     <div className="border rounded">
-      <div className="grid grid-cols-[90px_100px_1fr_100px_140px_160px] gap-2 px-4 py-2 border-b bg-muted/50 text-sm font-medium">
+      <div className="grid grid-cols-[50px_80px_90px_1fr_90px_130px_150px] gap-2 px-4 py-2 border-b bg-muted/50 text-sm font-medium">
+        <div>Skip</div>
         <div>Type</div>
         <div>Date</div>
         <div>Particulars</div>
@@ -141,6 +151,7 @@ function ImportPreviewVirtualizedRows({
             if (item.type === "expense") {
               const r = item.row as PreviewRow;
               const i = item.index;
+              const isSkipped = skippedExpenseIndices.has(i);
               return (
                 <div
                   key={`exp-${i}`}
@@ -152,14 +163,26 @@ function ImportPreviewVirtualizedRows({
                     transform: `translateY(${virtualRow.start}px)`,
                     height: ROW_HEIGHT,
                   }}
-                  className="grid grid-cols-[90px_100px_1fr_100px_140px_160px] gap-2 items-center border-b px-4 py-1"
+                  className={cn("grid grid-cols-[50px_80px_90px_1fr_90px_130px_150px] gap-2 items-center border-b px-4 py-1", isSkipped && "opacity-50")}
                 >
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      checked={isSkipped}
+                      onChange={() => setSkippedExpenseIndices((prev) => { const next = new Set(prev); if (next.has(i)) next.delete(i); else next.add(i); return next; })}
+                      className="h-4 w-4"
+                      title={r.potentialDuplicate ? `Potential duplicate (${r.matchConfidence}) — ${r.matchedExpenseSource ?? ""}` : "Skip this row"}
+                    />
+                    {r.potentialDuplicate && (
+                      <AlertTriangle className={cn("h-3.5 w-3.5", r.matchConfidence === "exact" ? "text-destructive" : "text-yellow-500")} />
+                    )}
+                  </div>
                   <div>
                     <Badge variant="outline">Expense</Badge>
                   </div>
-                  <div>{r.date}</div>
-                  <div className="truncate min-w-0" title={r.particulars}>{r.particulars}</div>
-                  <div>₹ {r.amount.toLocaleString("en-IN")}</div>
+                  <div className="text-xs">{r.date}</div>
+                  <div className="truncate min-w-0 text-sm" title={r.particulars}>{r.particulars}</div>
+                  <div className="text-sm">₹ {r.amount.toLocaleString("en-IN")}</div>
                   <div className="min-w-0">
                     <Select
                       value={
@@ -200,6 +223,7 @@ function ImportPreviewVirtualizedRows({
             } else {
               const r = item.row as IncomePreviewRow;
               const i = item.index;
+              const isSkipped = skippedIncomeIndices.has(i);
               return (
                 <div
                   key={`inc-${i}`}
@@ -211,14 +235,26 @@ function ImportPreviewVirtualizedRows({
                     transform: `translateY(${virtualRow.start}px)`,
                     height: ROW_HEIGHT,
                   }}
-                  className="grid grid-cols-[90px_100px_1fr_100px_140px_160px] gap-2 items-center border-b px-4 py-1"
+                  className={cn("grid grid-cols-[50px_80px_90px_1fr_90px_130px_150px] gap-2 items-center border-b px-4 py-1", isSkipped && "opacity-50")}
                 >
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      checked={isSkipped}
+                      onChange={() => setSkippedIncomeIndices((prev) => { const next = new Set(prev); if (next.has(i)) next.delete(i); else next.add(i); return next; })}
+                      className="h-4 w-4"
+                      title={r.potentialDuplicate ? `Potential duplicate (${r.matchConfidence}) — ${r.matchedExpenseSource ?? ""}` : "Skip this row"}
+                    />
+                    {r.potentialDuplicate && (
+                      <AlertTriangle className={cn("h-3.5 w-3.5", r.matchConfidence === "exact" ? "text-destructive" : "text-yellow-500")} />
+                    )}
+                  </div>
                   <div>
                     <Badge className="bg-green-600">Income</Badge>
                   </div>
-                  <div>{r.date}</div>
-                  <div className="truncate min-w-0" title={r.particulars}>{r.particulars}</div>
-                  <div className="text-green-600">₹ {r.amount.toLocaleString("en-IN")}</div>
+                  <div className="text-xs">{r.date}</div>
+                  <div className="truncate min-w-0 text-sm" title={r.particulars}>{r.particulars}</div>
+                  <div className="text-green-600 text-sm">₹ {r.amount.toLocaleString("en-IN")}</div>
                   <div>—</div>
                   <div className="min-w-0">
                     <Select
@@ -336,6 +372,8 @@ function ImportWizard({
   const [bulkMapPattern, setBulkMapPattern] = useState("");
   const [bulkMapType, setBulkMapType] = useState<"expense" | "income">("expense");
   const [bulkMapCategoryId, setBulkMapCategoryId] = useState("");
+  const [skippedExpenseIndices, setSkippedExpenseIndices] = useState<Set<number>>(new Set());
+  const [skippedIncomeIndices, setSkippedIncomeIndices] = useState<Set<number>>(new Set());
 
   const slugToExpCatId = Object.fromEntries(expenseCategories.map((c) => [c.slug, c.id]));
   const slugToIncCatId = Object.fromEntries(incomeCategories.map((c) => [c.slug, c.id]));
@@ -366,6 +404,16 @@ function ImportWizard({
       setExpenseOverrides(expOverrides);
       setIncomeOverrides(incOverrides);
       setCostCenterOverrides({});
+      const autoSkipExp = new Set<number>();
+      (data.preview ?? []).forEach((r: PreviewRow, i: number) => {
+        if (r.potentialDuplicate) autoSkipExp.add(i);
+      });
+      setSkippedExpenseIndices(autoSkipExp);
+      const autoSkipInc = new Set<number>();
+      (data.incomePreview ?? []).forEach((r: IncomePreviewRow, i: number) => {
+        if (r.potentialDuplicate) autoSkipInc.add(i);
+      });
+      setSkippedIncomeIndices(autoSkipInc);
       setStep(2);
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -379,14 +427,18 @@ function ImportWizard({
       form.append("expenseOverrides", JSON.stringify(expenseOverrides));
       form.append("incomeOverrides", JSON.stringify(incomeOverrides));
       form.append("costCenterOverrides", JSON.stringify(costCenterOverrides));
+      if (skippedExpenseIndices.size > 0) form.append("skipExpenseIndices", JSON.stringify([...skippedExpenseIndices]));
+      if (skippedIncomeIndices.size > 0) form.append("skipIncomeIndices", JSON.stringify([...skippedIncomeIndices]));
       const res = await fetch("/api/admin/expenses/import/execute", { method: "POST", body: form, credentials: "include" });
       if (!res.ok) throw new Error((await res.json()).error || "Import failed");
       return res.json();
     },
     onSuccess: (data) => {
+      const skipped = (data.skippedExpenses ?? 0) + (data.skippedIncome ?? 0);
+      const skipPart = skipped > 0 ? `, ${skipped} duplicates skipped` : "";
       const msg = data.incomeImported > 0
-        ? `${data.imported} expenses, ${data.incomeImported} income imported`
-        : `${data.imported} expenses imported`;
+        ? `${data.imported} expenses, ${data.incomeImported} income imported${skipPart}`
+        : `${data.imported} expenses imported${skipPart}`;
       toast({ title: "Import complete", description: msg });
       setFile(null);
       setPreview(null);
@@ -561,6 +613,15 @@ function ImportWizard({
               </div>
             </div>
           )}
+          {(skippedExpenseIndices.size > 0 || skippedIncomeIndices.size > 0) && (
+            <div className="flex items-center gap-2 rounded-lg border border-yellow-300 dark:border-yellow-700 bg-yellow-50 dark:bg-yellow-950/30 px-4 py-2 text-sm">
+              <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 shrink-0" />
+              <span>
+                <strong>{skippedExpenseIndices.size + skippedIncomeIndices.size}</strong> of {expRows.length + incRows.length} rows appear to match existing records and will be skipped.
+                Uncheck to import anyway.
+              </span>
+            </div>
+          )}
           <ImportPreviewVirtualizedRows
             expRows={expRows}
             incRows={incRows}
@@ -576,6 +637,10 @@ function ImportWizard({
             setCostCenterOverrides={setCostCenterOverrides}
             slugToExpCatId={slugToExpCatId}
             slugToIncCatId={slugToIncCatId}
+            skippedExpenseIndices={skippedExpenseIndices}
+            skippedIncomeIndices={skippedIncomeIndices}
+            setSkippedExpenseIndices={setSkippedExpenseIndices}
+            setSkippedIncomeIndices={setSkippedIncomeIndices}
           />
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
@@ -593,10 +658,15 @@ function ImportWizard({
               <CardDescription>Review and confirm the import</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
-              <p><strong>{preview.totalRows}</strong> expenses • ₹ {preview.totalAmount.toLocaleString("en-IN")}</p>
+              <p><strong>{preview.totalRows - skippedExpenseIndices.size}</strong> expenses to import • ₹ {expRows.filter((_, i) => !skippedExpenseIndices.has(i)).reduce((s, r) => s + r.amount, 0).toLocaleString("en-IN")}</p>
               {preview.incomeTotalRows && preview.incomeTotalRows > 0 && (
                 <p className="text-green-600 dark:text-green-400">
-                  <strong>{preview.incomeTotalRows}</strong> income • ₹ {(preview.incomeTotalAmount ?? 0).toLocaleString("en-IN")}
+                  <strong>{(preview.incomeTotalRows ?? 0) - skippedIncomeIndices.size}</strong> income to import • ₹ {incRows.filter((_, i) => !skippedIncomeIndices.has(i)).reduce((s, r) => s + r.amount, 0).toLocaleString("en-IN")}
+                </p>
+              )}
+              {(skippedExpenseIndices.size > 0 || skippedIncomeIndices.size > 0) && (
+                <p className="text-yellow-600 dark:text-yellow-400 text-sm">
+                  {skippedExpenseIndices.size + skippedIncomeIndices.size} potential duplicate(s) will be skipped
                 </p>
               )}
             </CardContent>

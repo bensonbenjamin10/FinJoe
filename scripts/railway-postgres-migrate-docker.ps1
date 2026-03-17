@@ -9,11 +9,16 @@
 #   # Optional: if restore fails with "no connection", get public URL from Railway -> pgvector -> Variables
 #   $env:RAILWAY_DATABASE_PUBLIC_URL = "postgresql://..."
 #   .\scripts\railway-postgres-migrate-docker.ps1
+#
+# If restore fails with "unexpected message type 0x58 during COPY from stdin", use plain SQL format:
+#   $env:USE_PLAIN_SQL_MIGRATION = "1"
+#   .\scripts\railway-postgres-migrate-docker.ps1
 
 $ErrorActionPreference = "Stop"
 
 $NeonUrl = $env:NEON_DATABASE_URL
-$DumpFile = "neon_backup.dump"
+$UsePlainSql = $env:USE_PLAIN_SQL_MIGRATION -eq "1"
+$DumpFile = if ($UsePlainSql) { "neon_backup.sql" } else { "neon_backup.dump" }
 $BackupPath = (Get-Location).Path
 
 Write-Host "=== FinJoe Railway Postgres Migration (Docker + Railway CLI) ===" -ForegroundColor Cyan
@@ -43,7 +48,12 @@ try {
 # Step 1: Dump from Neon (Docker) – use postgres:18 to match Railway PostgreSQL 18
 Write-Host ""
 Write-Host "Step 1: Dumping from Neon..." -ForegroundColor Yellow
-docker run --rm -v "${BackupPath}:/backup" postgres:18 pg_dump $NeonUrl --no-owner --no-acl -F c -f /backup/$DumpFile
+if ($UsePlainSql) {
+  Write-Host "  Using plain SQL format (avoids COPY protocol errors)" -ForegroundColor Gray
+  docker run --rm -v "${BackupPath}:/backup" postgres:18 pg_dump $NeonUrl --no-owner --no-acl --clean -F p -f /backup/$DumpFile
+} else {
+  docker run --rm -v "${BackupPath}:/backup" postgres:18 pg_dump $NeonUrl --no-owner --no-acl -F c -f /backup/$DumpFile
+}
 
 if (-not (Test-Path $DumpFile)) {
   Write-Host "Dump failed." -ForegroundColor Red
@@ -70,8 +80,12 @@ Write-Host "  Using RAILWAY_DATABASE_PUBLIC_URL" -ForegroundColor Gray
 $ContainerId = docker run -d postgres:18 tail -f /dev/null
 try {
   docker cp $DumpFile "${ContainerId}:/tmp/$DumpFile"
-  # Use postgres:18 to match Railway PostgreSQL 18 (avoids COPY protocol sync errors)
-  docker exec -e "RESTORE_URL=$RestoreUrl" $ContainerId sh -c 'pg_restore -d "$RESTORE_URL" --no-owner --no-acl --clean --if-exists /tmp/neon_backup.dump'
+  if ($UsePlainSql) {
+    docker exec -e "RESTORE_URL=$RestoreUrl" $ContainerId sh -c 'psql -d "$RESTORE_URL" -f /tmp/neon_backup.sql'
+  } else {
+    # Use postgres:18 to match Railway PostgreSQL 18 (avoids COPY protocol sync errors)
+    docker exec -e "RESTORE_URL=$RestoreUrl" $ContainerId sh -c 'pg_restore -d "$RESTORE_URL" --no-owner --no-acl --clean --if-exists /tmp/neon_backup.dump'
+  }
 } finally {
   docker stop $ContainerId 2>$null
   docker rm $ContainerId 2>$null

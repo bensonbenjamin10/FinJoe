@@ -16,6 +16,8 @@ npm-debug.log*
 
 # Migration dumps (local only, may contain sensitive data)
 neon_backup.dump
+neon_backup.sql
+*.sql.bak
 
 # IDE
 .idea/
