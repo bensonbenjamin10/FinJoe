@@ -5,10 +5,12 @@ import {
   finJoeTasks,
   finJoeMessages,
   finJoeConversations,
+  finJoeRoleChangeRequests,
   users,
 } from "../../../shared/schema.js";
 import { eq, and, desc, or } from "drizzle-orm";
 import { sendWith24hRouting, getExpenseApprovalTemplateConfig, notifySubmitterForApprovalRejection } from "../send.js";
+import { notifySubmitterForPayoutFromExpense, notifyRoleRequestRequester } from "../../../lib/notifications.js";
 import { logger } from "../logger.js";
 import {
   agentTurn,
@@ -1104,8 +1106,20 @@ async function executeFunctionCall(
       }
       if (!contactStudentId) return { success: false, error: "To approve role requests via WhatsApp, your contact must be linked to a user. Ask an admin to add you in FinJoe Contacts—they can link to your existing account or create one for you." };
       const requestId = String(args.requestId ?? "");
+      const [reqRow] = await db
+        .select({ contactPhone: finJoeRoleChangeRequests.contactPhone, tenantId: finJoeRoleChangeRequests.tenantId })
+        .from(finJoeRoleChangeRequests)
+        .where(eq(finJoeRoleChangeRequests.id, requestId))
+        .limit(1);
       const result = await finJoeData.approveRoleRequest(requestId, contactStudentId);
       if (!result) return { success: false, error: `Could not approve role request #${requestId}. It may not be pending.` };
+      if (reqRow?.contactPhone && reqRow?.tenantId) {
+        try {
+          await notifyRoleRequestRequester(reqRow.contactPhone, "approved", requestId, reqRow.tenantId, undefined, traceId);
+        } catch (notifyErr) {
+          logger.error("Failed to notify role request requester of approval", { traceId, requestId, err: String(notifyErr) });
+        }
+      }
       return { success: true, data: { requestId, approved: true } };
     }
 
@@ -1116,8 +1130,20 @@ async function executeFunctionCall(
       if (!contactStudentId) return { success: false, error: "To approve or reject role requests via WhatsApp, your contact must be linked to a user. Ask an admin to add you in FinJoe Contacts—they can link to your existing account or create one for you." };
       const requestId = String(args.requestId ?? "");
       const reason = String(args.reason ?? "Rejected via FinJoe");
+      const [reqRow] = await db
+        .select({ contactPhone: finJoeRoleChangeRequests.contactPhone, tenantId: finJoeRoleChangeRequests.tenantId })
+        .from(finJoeRoleChangeRequests)
+        .where(eq(finJoeRoleChangeRequests.id, requestId))
+        .limit(1);
       const result = await finJoeData.rejectRoleRequest(requestId, contactStudentId, reason);
       if (!result) return { success: false, error: `Could not reject role request #${requestId}. It may not be pending.` };
+      if (reqRow?.contactPhone && reqRow?.tenantId) {
+        try {
+          await notifyRoleRequestRequester(reqRow.contactPhone, "rejected", requestId, reqRow.tenantId, reason, traceId);
+        } catch (notifyErr) {
+          logger.error("Failed to notify role request requester of rejection", { traceId, requestId, err: String(notifyErr) });
+        }
+      }
       return { success: true, data: { requestId, rejected: true, reason } };
     }
 
@@ -1133,6 +1159,11 @@ async function executeFunctionCall(
       const payoutRef = String(args.payoutRef ?? "marked via FinJoe WhatsApp").trim() || "marked via FinJoe WhatsApp";
       const result = await finJoeData.recordExpensePayout(expenseId, payoutMethod, payoutRef);
       if (!result) return { success: false, error: `Could not record payout for expense #${expenseIdInput}. It may not be approved.` };
+      try {
+        await notifySubmitterForPayoutFromExpense(expenseId, tenantId, traceId);
+      } catch (notifyErr) {
+        logger.error("Failed to notify submitter of payout", { traceId, expenseId, err: String(notifyErr) });
+      }
       return { success: true, data: { expenseId, paid: true, payoutMethod, payoutRef } };
     }
 
@@ -1279,7 +1310,7 @@ async function notifyAdminForRoleRequest(
   }
 }
 
-/** Notify finance contacts about expense needing approval */
+/** Notify finance and admin contacts about expense needing approval */
 async function notifyFinanceForApproval(
   expenseId: string,
   extracted: ExtractedExpense,
@@ -1287,10 +1318,16 @@ async function notifyFinanceForApproval(
   traceId?: string,
   categoryName?: string | null
 ) {
-  const financeContacts = await db
+  const financeAndAdmin = await db
     .select()
     .from(finJoeContacts)
-    .where(and(eq(finJoeContacts.tenantId, tenantId), eq(finJoeContacts.role, "finance"), eq(finJoeContacts.isActive, true)));
+    .where(
+      and(
+        eq(finJoeContacts.tenantId, tenantId),
+        eq(finJoeContacts.isActive, true),
+        or(eq(finJoeContacts.role, "finance"), eq(finJoeContacts.role, "admin"))
+      )
+    );
   const lineItem = extracted.description || categoryName || extracted.vendorName;
   const shortId = toShortExpenseId(expenseId);
   const msg = `New expense #${shortId} needs approval: ₹${extracted.amount?.toLocaleString("en-IN")}${lineItem ? ` - ${lineItem}` : ""}. Reply APPROVE ${shortId} or REJECT ${shortId} to act.`;
@@ -1302,8 +1339,12 @@ async function notifyFinanceForApproval(
     extracted.description,
     categoryName
   );
-  logger.info("Notifying finance for approval", { traceId, expenseId, count: financeContacts.length });
-  for (const c of financeContacts) {
+  if (financeAndAdmin.length === 0) {
+    logger.warn("No finance/admin contacts for tenant - skipping approval notification", { traceId, tenantId, expenseId });
+    return;
+  }
+  logger.info("Notifying finance/admin for approval", { traceId, expenseId, count: financeAndAdmin.length });
+  for (const c of financeAndAdmin) {
     try {
       await sendWith24hRouting(c.phone, msg, templateConfig, traceId, tenantId, { critical: true });
     } catch (err) {

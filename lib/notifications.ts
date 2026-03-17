@@ -4,7 +4,7 @@
  * Uses worker's send infrastructure for 24h routing (WhatsApp/SMS/email).
  */
 
-import { eq, and } from "drizzle-orm";
+import { eq, and, or } from "drizzle-orm";
 import { db } from "../server/db.js";
 import {
   expenses,
@@ -90,7 +90,7 @@ async function getSubmitterEmailFromContact(contactPhone: string, tenantId: stri
   return user?.email ?? null;
 }
 
-/** Notify finance contacts about expense needing approval (e.g. after web submit). */
+/** Notify finance and admin contacts about expense needing approval (e.g. after web submit). */
 export async function notifyFinanceForApproval(
   expenseId: string,
   extracted: ExtractedExpenseForNotification,
@@ -98,18 +98,18 @@ export async function notifyFinanceForApproval(
   traceId?: string,
   categoryName?: string | null
 ): Promise<void> {
-  const financeContacts = await db
+  const financeAndAdmin = await db
     .select()
     .from(finJoeContacts)
     .where(
       and(
         eq(finJoeContacts.tenantId, tenantId),
-        eq(finJoeContacts.role, "finance"),
-        eq(finJoeContacts.isActive, true)
+        eq(finJoeContacts.isActive, true),
+        or(eq(finJoeContacts.role, "finance"), eq(finJoeContacts.role, "admin"))
       )
     );
-  if (financeContacts.length === 0) {
-    logger.warn("No finance contacts for tenant - skipping approval notification", { traceId, tenantId, expenseId });
+  if (financeAndAdmin.length === 0) {
+    logger.warn("No finance/admin contacts for tenant - skipping approval notification", { traceId, tenantId, expenseId });
     return;
   }
   const lineItem = extracted.description || categoryName || extracted.vendorName;
@@ -123,8 +123,8 @@ export async function notifyFinanceForApproval(
     extracted.description ?? undefined,
     categoryName ?? undefined
   );
-  logger.info("Notifying finance for approval (web)", { traceId, expenseId, count: financeContacts.length });
-  for (const c of financeContacts) {
+  logger.info("Notifying finance/admin for approval (web)", { traceId, expenseId, count: financeAndAdmin.length });
+  for (const c of financeAndAdmin) {
     try {
       await sendWith24hRouting(c.phone, msg, templateConfig, traceId, tenantId, { critical: true });
     } catch (err) {
