@@ -117,6 +117,21 @@ type PredictionsData = {
   avgDailyExpense: number;
   avgDailyIncome: number;
   startingBalance?: number;
+  cashRequiredNextWeek?: number;
+  cashRequiredHorizon?: number;
+  forecastRange?: { min: number; max: number };
+  confidence?: "low" | "medium" | "high";
+  driverFactors?: string[];
+  model?: string;
+  engine?: string;
+  accuracyTelemetry?: {
+    method: string;
+    backtestDays: number;
+    trainingDays: number;
+    expenseMape7d: number | null;
+    incomeMape7d: number | null;
+    overallMape7d: number | null;
+  };
 };
 
 function formatCurrency(n: number) {
@@ -227,9 +242,13 @@ export default function AdminDashboard() {
   });
 
   const { data: predictions, isLoading: predictionsLoading, isError: predictionsError, refetch: refetchPredictions } = useQuery<PredictionsData>({
-    queryKey: ["/api/admin/analytics/predictions", tenantId],
+    queryKey: ["/api/admin/analytics/predictions", tenantId, costCenterFilter],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/analytics/predictions?tenantId=${tenantId}&horizonDays=30`, {
+      const params = new URLSearchParams();
+      params.append("tenantId", String(tenantId));
+      params.append("horizonDays", "30");
+      if (costCenterFilter && costCenterFilter !== "all") params.append("costCenterId", costCenterFilter);
+      const res = await fetch(`/api/admin/analytics/predictions?${params.toString()}`, {
         credentials: "include",
       });
       if (!res.ok) throw new Error("Failed to fetch");
@@ -573,9 +592,47 @@ export default function AdminDashboard() {
             <Card>
               <CardHeader>
                 <CardTitle>Cash Flow Forecast</CardTitle>
-                <CardDescription>30-day projected net position (rolling average)</CardDescription>
+                <CardDescription>30-day projected net position with required-cash estimate</CardDescription>
               </CardHeader>
               <CardContent>
+                {predictionsLoading ? (
+                  <div className="grid grid-cols-2 gap-3 mb-4">
+                    <div className="rounded-lg border p-3">
+                      <div className="text-xs text-muted-foreground">Cash Required (Next 7d)</div>
+                      <div className="text-sm font-semibold text-muted-foreground">—</div>
+                    </div>
+                    <div className="rounded-lg border p-3">
+                      <div className="text-xs text-muted-foreground">Cash Required (30d)</div>
+                      <div className="text-sm font-semibold text-muted-foreground">—</div>
+                    </div>
+                  </div>
+                ) : predictionsError ? (
+                  <div className="grid grid-cols-2 gap-3 mb-4">
+                    <div className="rounded-lg border p-3">
+                      <div className="text-xs text-muted-foreground">Cash Required (Next 7d)</div>
+                      <div className="text-sm font-semibold text-muted-foreground">—</div>
+                    </div>
+                    <div className="rounded-lg border p-3">
+                      <div className="text-xs text-muted-foreground">Cash Required (30d)</div>
+                      <div className="text-sm font-semibold text-muted-foreground">—</div>
+                    </div>
+                  </div>
+                ) : predictions ? (
+                  <div className="grid grid-cols-2 gap-3 mb-4">
+                    <div className="rounded-lg border p-3">
+                      <div className="text-xs text-muted-foreground">Cash Required (Next 7d)</div>
+                      <div className="text-sm font-semibold">
+                        {predictions.cashRequiredNextWeek != null ? formatCurrency(predictions.cashRequiredNextWeek) : "—"}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border p-3">
+                      <div className="text-xs text-muted-foreground">Cash Required (30d)</div>
+                      <div className="text-sm font-semibold">
+                        {predictions.cashRequiredHorizon != null ? formatCurrency(predictions.cashRequiredHorizon) : "—"}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
                 {predictionsLoading ? (
                   <div className="h-[280px] flex items-center justify-center">
                     <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -614,6 +671,9 @@ export default function AdminDashboard() {
                         <Area type="monotone" dataKey="netPosition" stroke="#0ea5e9" fill="#0ea5e9" fillOpacity={0.4} />
                       </AreaChart>
                     </ChartContainer>
+                    <div className="mt-3 text-xs text-muted-foreground">
+                      Range: {formatCurrency(predictions?.forecastRange?.min ?? 0)} to {formatCurrency(predictions?.forecastRange?.max ?? 0)}. Confidence: {(predictions?.confidence ?? "medium").toUpperCase()}.
+                    </div>
                   </div>
                 ) : (
                   <div className="h-[280px] flex items-center justify-center text-muted-foreground">
@@ -652,6 +712,27 @@ export default function AdminDashboard() {
                 ) : (
                   <div className="py-8 text-center text-muted-foreground">No alerts at this time</div>
                 )}
+                {predictions?.driverFactors && predictions.driverFactors.length > 0 ? (
+                  <div className="mt-4">
+                    <p className="text-xs font-medium text-muted-foreground mb-2">Key drivers</p>
+                    <ul className="text-xs text-muted-foreground space-y-1">
+                      {predictions.driverFactors.slice(0, 4).map((d, idx) => (
+                        <li key={`${d}-${idx}`}>- {d}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {predictions?.accuracyTelemetry ? (
+                  <div className="mt-3 text-xs text-muted-foreground">
+                    Backtest ({predictions.accuracyTelemetry.backtestDays}d) MAPE:
+                    {" "}
+                    {predictions.accuracyTelemetry.overallMape7d != null
+                      ? `${predictions.accuracyTelemetry.overallMape7d}% overall`
+                      : "insufficient history"}
+                    {" "}
+                    ({predictions.accuracyTelemetry.method})
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
           </div>

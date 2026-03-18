@@ -470,10 +470,25 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       return query;
     },
 
-    async searchExpenses(query: string, limit = 20): Promise<Array<Record<string, unknown>>> {
+    async searchExpenses(
+      query: string,
+      limit = 20,
+      filters?: { startDate?: string; endDate?: string; campusId?: string | null; categoryId?: string }
+    ): Promise<Array<Record<string, unknown>>> {
       const q = query.trim();
       if (!q) return [];
       const pattern = `%${q}%`;
+      const conditions = [eq(expenses.tenantId, tenantId)];
+      if (filters?.startDate) conditions.push(sql`${expenses.expenseDate} >= ${filters.startDate}::date`);
+      if (filters?.endDate) conditions.push(sql`${expenses.expenseDate} <= ${filters.endDate}::date`);
+      if (filters?.categoryId) conditions.push(eq(expenses.categoryId, filters.categoryId));
+      if (filters?.campusId !== undefined && filters?.campusId !== null && filters?.campusId !== "") {
+        if (filters.campusId === "null" || filters.campusId === "__corporate__") {
+          conditions.push(sql`${expenses.costCenterId} IS NULL`);
+        } else {
+          conditions.push(eq(expenses.costCenterId, filters.campusId));
+        }
+      }
       const rows = await db
         .select({
           id: expenses.id,
@@ -490,11 +505,12 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
         .where(
           and(
-            eq(expenses.tenantId, tenantId),
+            ...conditions,
             or(
               sql`${expenses.vendorName}::text ILIKE ${pattern}`,
               sql`${expenses.invoiceNumber}::text ILIKE ${pattern}`,
-              sql`${expenses.description}::text ILIKE ${pattern}`
+              sql`${expenses.description}::text ILIKE ${pattern}`,
+              sql`${expenses.particulars}::text ILIKE ${pattern}`
             )
           )
         )
@@ -565,7 +581,8 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           categoryName: r.category_name,
           shortId: toShortExpenseId(r.id as string),
         }));
-      } catch {
+      } catch (err) {
+        console.error("[finjoe-data] searchExpensesByEmbedding failed", err);
         return [];
       }
     },
@@ -575,11 +592,13 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       endDate?: string;
       costCenterId?: string | null;
       campusId?: string | null;
+      categoryId?: string;
       groupBy?: "status" | "campus" | "category";
     }): Promise<Record<string, unknown>> {
       const conditions = [eq(expenses.tenantId, tenantId)];
       if (filters?.startDate) conditions.push(sql`${expenses.expenseDate} >= ${filters.startDate}::date`);
       if (filters?.endDate) conditions.push(sql`${expenses.expenseDate} <= ${filters.endDate}::date`);
+      if (filters?.categoryId) conditions.push(eq(expenses.categoryId, filters.categoryId));
       const ccId = filters?.costCenterId ?? filters?.campusId;
       if (ccId !== undefined && ccId !== null && ccId !== "" && ccId !== "__corporate__") {
         if (ccId === "null") {

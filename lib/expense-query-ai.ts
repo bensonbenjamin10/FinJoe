@@ -99,7 +99,7 @@ Return JSON with searchQuery, startDate, endDate, campusId, categoryHint. Output
 
   try {
     const response = await gemini.models.generateContent({
-      model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
+      model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
       contents: prompt,
       config: {
         responseMimeType: "application/json",

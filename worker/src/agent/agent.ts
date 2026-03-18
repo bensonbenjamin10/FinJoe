@@ -29,6 +29,7 @@ import { getMedia } from "../../../lib/media-storage.js";
 import { parseExpenseQuery, parseDateToISO } from "../../../lib/expense-query-ai.js";
 import { embedQuery } from "../../../lib/expense-embeddings.js";
 import { normalizePhone } from "../twilio.js";
+import { getPredictions } from "../../../server/analytics.js";
 
 const HISTORY_LIMIT = 10;
 
@@ -965,20 +966,43 @@ async function executeFunctionCall(
       const question = String(args.question ?? "").trim();
       if (!question) return { success: false, error: "Please provide a question about expenses." };
       const parsed = await parseExpenseQuery(question, execCtx.campuses);
-      if (!parsed) {
-        return {
-          success: true,
-          data: {
-            message: "I couldn't parse that question. Try asking with specific keywords like 'stationery' or 'travel', and a time range like 'last month'.",
-            expenses: [],
-            summary: null,
-          },
-        };
+      const searchQuery = parsed?.searchQuery ?? question;
+      const startDate = parsed?.startDate; // Already normalized by parseExpenseQuery (YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY)
+      const endDate = parsed?.endDate;
+      let campusId = parsed?.campusId ?? undefined;
+      if (campusId && !execCtx.validCampusIds.includes(campusId)) {
+        campusId = resolveCampusFromMessage(campusId, execCtx.campuses) ?? campusId;
       }
-      const searchQuery = parsed.searchQuery ?? question;
-      const startDate = parsed.startDate; // Already normalized by parseExpenseQuery (YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY)
-      const endDate = parsed.endDate;
-      const campusId = parsed.campusId ?? undefined;
+      if (execCtx.contactRole === "campus_coordinator") {
+        if (!execCtx.contactCampusId) {
+          return {
+            success: true,
+            data: {
+              message: "You can only access your assigned cost center data, but your contact is not mapped to a cost center yet. Please ask an admin to map your contact.",
+              expenses: [],
+              summary: null,
+            },
+          };
+        }
+        if (campusId && campusId !== execCtx.contactCampusId) {
+          return {
+            success: true,
+            data: {
+              message: "Access denied. You can only view expenses for your assigned cost center.",
+              expenses: [],
+              summary: null,
+              parsedQuery: { searchQuery, startDate, endDate, campusId: execCtx.contactCampusId },
+            },
+          };
+        }
+      }
+      if (!campusId && execCtx.contactRole === "campus_coordinator" && execCtx.contactCampusId) {
+        campusId = execCtx.contactCampusId;
+      }
+      const categoryId =
+        parsed?.categoryHint
+          ? resolveCategoryFromMessage(parsed.categoryHint, execCtx.categories)
+          : undefined;
       let searchResults: Array<Record<string, unknown>> = [];
       const queryEmbedding = await embedQuery(question);
       if (queryEmbedding) {
@@ -989,27 +1013,34 @@ async function executeFunctionCall(
         });
       }
       if (searchResults.length === 0) {
-        searchResults = await finJoeData.searchExpenses(searchQuery, 20);
+        searchResults = await finJoeData.searchExpenses(searchQuery, 20, {
+          startDate,
+          endDate,
+          campusId: campusId ?? null,
+          categoryId,
+        });
       }
-      const listResults = await finJoeData.listExpenses({
-        startDate,
-        endDate,
-        campusId: campusId ?? null,
-        limit: 20,
-      });
-      const combinedIds = new Set([...searchResults.map((r: any) => r.id), ...listResults.map((r: any) => r.id)]);
-      const byId = new Map([...searchResults.map((r: any) => [r.id, r] as [string, any]), ...listResults.map((r: any) => [r.id, r] as [string, any])]);
-      const expenses = Array.from(byId.values()).slice(0, 20);
+      let expenses = searchResults.slice(0, 20);
+      if (expenses.length === 0) {
+        expenses = await finJoeData.listExpenses({
+          startDate,
+          endDate,
+          campusId: campusId ?? null,
+          categoryId,
+          limit: 20,
+        });
+      }
       let summary = null;
       if (startDate && endDate) {
-        summary = await finJoeData.getExpenseSummary({ startDate, endDate, campusId });
+        summary = await finJoeData.getExpenseSummary({ startDate, endDate, campusId, categoryId });
       }
       return {
         success: true,
         data: {
           expenses,
           summary,
-          parsedQuery: { searchQuery, startDate, endDate, campusId },
+          parsedQuery: { searchQuery, startDate, endDate, campusId, categoryId },
+          ...(parsed ? {} : { message: "I used a broader semantic match because I couldn't fully parse the date/cost center filters." }),
         },
       };
     }
@@ -1018,7 +1049,29 @@ async function executeFunctionCall(
       const query = String(args.query ?? "").trim();
       if (!query) return { success: false, error: "Search query is required." };
       const limit = typeof args.limit === "number" ? Math.min(Math.max(1, args.limit), 50) : 20;
-      const rows = await finJoeData.searchExpenses(query, limit);
+      const campusId = execCtx.contactRole === "campus_coordinator" ? execCtx.contactCampusId : undefined;
+      if (execCtx.contactRole === "campus_coordinator") {
+        if (!execCtx.contactCampusId) {
+          return {
+            success: true,
+            data: {
+              message: "You can only access your assigned cost center data, but your contact is not mapped to a cost center yet. Please ask an admin to map your contact.",
+              expenses: [],
+            },
+          };
+        }
+        const requestedCampusFromQuery = resolveCampusFromMessage(query, execCtx.campuses);
+        if (requestedCampusFromQuery && requestedCampusFromQuery !== execCtx.contactCampusId) {
+          return {
+            success: true,
+            data: {
+              message: "Access denied. You can only view expenses for your assigned cost center.",
+              expenses: [],
+            },
+          };
+        }
+      }
+      const rows = await finJoeData.searchExpenses(query, limit, { campusId });
       return { success: true, data: { expenses: rows } };
     }
 
@@ -1047,6 +1100,51 @@ async function executeFunctionCall(
       const campusId = args.campusId ? String(args.campusId) : undefined;
       const rows = await finJoeData.getPettyCashSummary(campusId ?? undefined);
       return { success: true, data: { pettyCashFunds: rows } };
+    }
+
+    case "predict_cash_requirement": {
+      const parsed = typeof args.horizonDays === "number" ? Math.round(args.horizonDays) : 7;
+      const horizonDays = Math.min(90, Math.max(1, isNaN(parsed) ? 7 : parsed));
+      const prediction = await getPredictions({
+        tenantId,
+        horizonDays,
+      });
+      const p = prediction as Record<string, unknown>;
+      const driverFactors = Array.isArray(p.driverFactors) ? (p.driverFactors as string[]) : [];
+      const alerts = Array.isArray(p.alerts) ? (p.alerts as Array<{ message?: string }>) : [];
+      const forecastRange = (p.forecastRange as { min?: number; max?: number } | undefined) ?? {};
+      const explanationParts: string[] = [];
+      if (driverFactors.length) explanationParts.push(`Key drivers: ${driverFactors.slice(0, 3).join("; ")}`);
+      if (typeof forecastRange.min === "number" && typeof forecastRange.max === "number") {
+        explanationParts.push(
+          `Range: ₹${Math.round(forecastRange.min).toLocaleString("en-IN")} to ₹${Math.round(forecastRange.max).toLocaleString("en-IN")}`
+        );
+      }
+      if (alerts.length) {
+        const alertText = alerts
+          .slice(0, 2)
+          .map((a) => a?.message)
+          .filter(Boolean)
+          .join(" | ");
+        if (alertText) explanationParts.push(`Alerts: ${alertText}`);
+      }
+      return {
+        success: true,
+        data: {
+          horizonDays,
+          cashRequiredNextWeek: p.cashRequiredNextWeek ?? 0,
+          cashRequiredHorizon: p.cashRequiredHorizon ?? 0,
+          forecastRange: p.forecastRange ?? null,
+          confidence: p.confidence ?? "medium",
+          driverFactors,
+          alerts: p.alerts ?? [],
+          cashflowForecast: p.cashflowForecast ?? [],
+          engine: p.engine ?? "unknown",
+          model: p.model ?? "unknown",
+          accuracyTelemetry: p.accuracyTelemetry ?? null,
+          explanation: explanationParts.join(". "),
+        },
+      };
     }
 
     case "approve_expense": {

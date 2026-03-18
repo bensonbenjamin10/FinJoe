@@ -217,6 +217,26 @@ export const finJoeMessages = pgTable("fin_joe_messages", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// FinJoe outbound send idempotency (prevents duplicate sends across retries/restarts)
+export const finJoeOutboundIdempotency = pgTable("fin_joe_outbound_idempotency", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  conversationId: varchar("conversation_id")
+    .notNull()
+    .references(() => finJoeConversations.id, { onDelete: "cascade" }),
+  inboundMessageSid: varchar("inbound_message_sid").notNull(),
+  idempotencyKey: varchar("idempotency_key").notNull(),
+  payloadHash: varchar("payload_hash").notNull(),
+  status: text("status").notNull().default("in_flight"),
+  providerMessageSid: varchar("provider_message_sid"),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // FinJoe media
 export const finJoeMedia = pgTable("fin_joe_media", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -451,6 +471,11 @@ export const finJoeMessagesRelations = relations(finJoeMessages, ({ one, many })
   media: many(finJoeMedia),
 }));
 
+export const finJoeOutboundIdempotencyRelations = relations(finJoeOutboundIdempotency, ({ one }) => ({
+  conversation: one(finJoeConversations, { fields: [finJoeOutboundIdempotency.conversationId], references: [finJoeConversations.id] }),
+  tenant: one(tenants, { fields: [finJoeOutboundIdempotency.tenantId], references: [tenants.id] }),
+}));
+
 export const finJoeMediaRelations = relations(finJoeMedia, ({ one }) => ({
   message: one(finJoeMessages, { fields: [finJoeMedia.messageId], references: [finJoeMessages.id] }),
 }));
@@ -498,6 +523,8 @@ export type FinJoeConversation = typeof finJoeConversations.$inferSelect;
 export type InsertFinJoeConversation = typeof finJoeConversations.$inferSelect;
 export type FinJoeMessage = typeof finJoeMessages.$inferSelect;
 export type InsertFinJoeMessage = typeof finJoeMessages.$inferInsert;
+export type FinJoeOutboundIdempotency = typeof finJoeOutboundIdempotency.$inferSelect;
+export type InsertFinJoeOutboundIdempotency = typeof finJoeOutboundIdempotency.$inferInsert;
 export type FinJoeMedia = typeof finJoeMedia.$inferSelect;
 export type InsertFinJoeMedia = typeof finJoeMedia.$inferInsert;
 export type FinJoeRoleChangeRequest = typeof finJoeRoleChangeRequests.$inferSelect;

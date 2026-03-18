@@ -6,6 +6,7 @@ import {
   finJoeConversations,
   finJoeMessages,
   finJoeMedia,
+  finJoeOutboundIdempotency,
 } from "../../shared/schema.js";
 import { eq, and, sql } from "drizzle-orm";
 import { sendFinJoeWhatsApp, sendTypingIndicator, normalizePhone } from "./twilio.js";
@@ -16,9 +17,106 @@ import { sendReEngagementIfNeeded } from "./send.js";
 import { resolveTenantAndProvider } from "./providers/resolver.js";
 import { validateTwilioWebhook } from "./providers/twilio-provider.js";
 import { saveMedia } from "../../lib/media-storage.js";
+import { createHash } from "crypto";
 
 /** Per-conversation lock to serialize processing and preserve message order */
 const conversationLocks = new Map<string, Promise<void>>();
+const FALLBACK_REPLY = "I received your message, but I hit a temporary delivery issue. Please try again in a minute.";
+
+type OutboundSendReservation =
+  | { state: "new" | "retry"; rowId: string }
+  | { state: "already_sent"; providerMessageSid?: string | null }
+  | { state: "in_flight" };
+
+function makePayloadHash(payload: string): string {
+  return createHash("sha256").update(payload).digest("hex");
+}
+
+function buildOutboundIdempotencyKey(
+  conversationId: string,
+  inboundMessageSid: string,
+  type: "primary" | "fallback",
+  payloadHash: string
+): string {
+  return `${conversationId}:${inboundMessageSid}:${type}:${payloadHash.slice(0, 16)}`;
+}
+
+async function reserveOutboundSend(
+  tenantId: string,
+  conversationId: string,
+  inboundMessageSid: string,
+  key: string,
+  payloadHash: string
+): Promise<OutboundSendReservation> {
+  const [inserted] = await db
+    .insert(finJoeOutboundIdempotency)
+    .values({
+      tenantId,
+      conversationId,
+      inboundMessageSid,
+      idempotencyKey: key,
+      payloadHash,
+      status: "in_flight",
+      attemptCount: 1,
+      updatedAt: new Date(),
+    })
+    .onConflictDoNothing()
+    .returning({ id: finJoeOutboundIdempotency.id });
+  if (inserted?.id) return { state: "new", rowId: inserted.id };
+
+  const [existing] = await db
+    .select({
+      id: finJoeOutboundIdempotency.id,
+      status: finJoeOutboundIdempotency.status,
+      providerMessageSid: finJoeOutboundIdempotency.providerMessageSid,
+      attemptCount: finJoeOutboundIdempotency.attemptCount,
+    })
+    .from(finJoeOutboundIdempotency)
+    .where(and(eq(finJoeOutboundIdempotency.tenantId, tenantId), eq(finJoeOutboundIdempotency.idempotencyKey, key)))
+    .limit(1);
+
+  if (!existing) {
+    return { state: "in_flight" };
+  }
+  if (existing.status === "sent") {
+    return { state: "already_sent", providerMessageSid: existing.providerMessageSid };
+  }
+  if (existing.status === "in_flight") {
+    return { state: "in_flight" };
+  }
+  await db
+    .update(finJoeOutboundIdempotency)
+    .set({
+      status: "in_flight",
+      attemptCount: sql`${finJoeOutboundIdempotency.attemptCount} + 1`,
+      lastError: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(finJoeOutboundIdempotency.id, existing.id));
+  return { state: "retry", rowId: existing.id };
+}
+
+async function markOutboundSendSent(rowId: string, providerMessageSid?: string | null): Promise<void> {
+  await db
+    .update(finJoeOutboundIdempotency)
+    .set({
+      status: "sent",
+      providerMessageSid: providerMessageSid ?? null,
+      updatedAt: new Date(),
+    })
+    .where(eq(finJoeOutboundIdempotency.id, rowId));
+}
+
+async function markOutboundSendFailed(rowId: string, err: unknown): Promise<void> {
+  await db
+    .update(finJoeOutboundIdempotency)
+    .set({
+      status: "failed",
+      lastError: String(err),
+      updatedAt: new Date(),
+    })
+    .where(eq(finJoeOutboundIdempotency.id, rowId));
+}
 
 async function withConversationLock(conversationId: string, fn: () => Promise<void>): Promise<void> {
   const prev = conversationLocks.get(conversationId) ?? Promise.resolve();
@@ -206,9 +304,69 @@ export async function handleWebhook(req: Request, res: Response) {
       } else {
         reply = "Got it, processing... FinJoe will get back to you shortly.";
       }
-      const sendResult = await sendFinJoeWhatsApp(contact.phone, reply, traceId, tenantId);
+      let sendResult: { sid?: string } | null = null;
+      let outboundBody = reply;
+      const primaryHash = makePayloadHash(reply);
+      const primaryKey = buildOutboundIdempotencyKey(conversation.id, messageSid, "primary", primaryHash);
+      const primaryReservation = await reserveOutboundSend(
+        tenantId,
+        conversation.id,
+        messageSid,
+        primaryKey,
+        primaryHash
+      );
+
+      if (primaryReservation.state === "already_sent") {
+        sendResult = primaryReservation.providerMessageSid
+          ? { sid: primaryReservation.providerMessageSid }
+          : null;
+        logger.info("Primary outbound reply deduped from idempotency", { traceId, conversationId: conversation.id, key: primaryKey });
+      } else if (primaryReservation.state === "in_flight") {
+        logger.warn("Primary outbound reply currently in-flight; skipping duplicate send", { traceId, conversationId: conversation.id, key: primaryKey });
+      } else {
+        try {
+          sendResult = await sendFinJoeWhatsApp(contact.phone, reply, traceId, tenantId, { maxAttempts: 3 });
+          await markOutboundSendSent(primaryReservation.rowId, sendResult?.sid ?? null);
+        } catch (sendErr) {
+          await markOutboundSendFailed(primaryReservation.rowId, sendErr);
+          logger.error("Primary WhatsApp reply failed", { traceId, conversationId: conversation.id, contactPhone: contact.phone, ...serializeError(sendErr) });
+
+          outboundBody = FALLBACK_REPLY;
+          const fallbackHash = makePayloadHash(FALLBACK_REPLY);
+          const fallbackKey = buildOutboundIdempotencyKey(conversation.id, messageSid, "fallback", fallbackHash);
+          const fallbackReservation = await reserveOutboundSend(
+            tenantId,
+            conversation.id,
+            messageSid,
+            fallbackKey,
+            fallbackHash
+          );
+          if (fallbackReservation.state === "already_sent") {
+            sendResult = fallbackReservation.providerMessageSid
+              ? { sid: fallbackReservation.providerMessageSid }
+              : null;
+            logger.warn("Fallback reply deduped from idempotency", { traceId, conversationId: conversation.id, key: fallbackKey });
+          } else if (fallbackReservation.state === "in_flight") {
+            logger.warn("Fallback outbound currently in-flight; skipping duplicate send", { traceId, conversationId: conversation.id, key: fallbackKey });
+          } else {
+            try {
+              sendResult = await sendFinJoeWhatsApp(contact.phone, FALLBACK_REPLY, traceId, tenantId, { maxAttempts: 2 });
+              await markOutboundSendSent(fallbackReservation.rowId, sendResult?.sid ?? null);
+              logger.warn("Fallback reply delivered after primary failure", { traceId, conversationId: conversation.id, contactPhone: contact.phone });
+            } catch (fallbackErr) {
+              await markOutboundSendFailed(fallbackReservation.rowId, fallbackErr);
+              logger.error("Fallback WhatsApp reply also failed", {
+                traceId,
+                conversationId: conversation.id,
+                contactPhone: contact.phone,
+                ...serializeError(fallbackErr),
+              });
+            }
+          }
+        }
+      }
       if (!sendResult) {
-        logger.error("WhatsApp send returned null - Twilio may not be configured", { traceId });
+        logger.error("No outbound message SID after all attempts", { traceId, conversationId: conversation.id, contactPhone: contact.phone });
       }
 
       logger.info("Webhook completed", { traceId, conversationId: conversation.id });
@@ -217,7 +375,7 @@ export async function handleWebhook(req: Request, res: Response) {
       await db.insert(finJoeMessages).values({
         conversationId: conversation.id,
         direction: "out",
-        body: reply,
+        body: outboundBody,
         messageSid: (sendResult as { sid?: string } | null)?.sid ?? undefined,
       });
 

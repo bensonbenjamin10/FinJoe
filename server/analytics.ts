@@ -13,6 +13,7 @@ import {
   pettyCashFunds,
   finJoeRoleChangeRequests,
 } from "../shared/schema.js";
+import { generateGeminiPredictions } from "../lib/analytics-insights.js";
 
 function toDateKey(d: Date, tz: "utc" | "local" = "local"): string {
   if (tz === "utc") return d.toISOString().slice(0, 10);
@@ -258,37 +259,222 @@ function getWeekKey(d: Date): string {
 export type PredictionsFilters = {
   tenantId: string;
   horizonDays?: number;
+  costCenterId?: string | null;
 };
+
+function computeMape(actual: number[], predicted: number[]): number | null {
+  if (!actual.length || actual.length !== predicted.length) return null;
+  let sumPct = 0;
+  let used = 0;
+  for (let i = 0; i < actual.length; i++) {
+    const a = actual[i] ?? 0;
+    const p = predicted[i] ?? 0;
+    if (a <= 0) continue;
+    sumPct += Math.abs((a - p) / a) * 100;
+    used += 1;
+  }
+  if (used === 0) return null;
+  return Number((sumPct / used).toFixed(1));
+}
+
+function normalizeCostCenterId(costCenterId?: string | null): string | null | undefined {
+  if (costCenterId == null || costCenterId === "" || costCenterId === "all") return undefined;
+  if (costCenterId === "__corporate__") return "null";
+  return costCenterId;
+}
+
+function addCostCenterCondition(conditions: any[], ccId: string | null | undefined, column: any) {
+  if (!ccId) return;
+  if (ccId === "null") {
+    conditions.push(sql`${column} IS NULL`);
+    return;
+  }
+  conditions.push(eq(column, ccId));
+}
+
+function toMonthKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`;
+}
+
+function normalizeGeminiPrediction(
+  rawPrediction: Record<string, unknown>,
+  horizonDays: number,
+  startingBalance: number,
+  fallback: {
+    expenseForecast: Array<{ date: string; amount: number }>;
+    incomeForecast: Array<{ date: string; amount: number }>;
+    cashflowForecast: Array<{ date: string; netPosition: number }>;
+    cashRequiredNextWeek: number;
+    cashRequiredHorizon: number;
+    forecastRange: { min: number; max: number };
+    confidence: "low" | "medium" | "high";
+    driverFactors: string[];
+    alerts: Array<{ type: string; message: string }>;
+    model: string;
+  }
+) {
+  const expenseRows = Array.isArray(rawPrediction.expenseForecast) ? (rawPrediction.expenseForecast as Array<Record<string, unknown>>) : [];
+  const incomeRows = Array.isArray(rawPrediction.incomeForecast) ? (rawPrediction.incomeForecast as Array<Record<string, unknown>>) : [];
+  const normalizedExpenseForecast: Array<{ date: string; amount: number }> = [];
+  const normalizedIncomeForecast: Array<{ date: string; amount: number }> = [];
+  for (let i = 0; i < horizonDays; i++) {
+    const fallbackExpense = fallback.expenseForecast[i];
+    const fallbackIncome = fallback.incomeForecast[i];
+    const e = expenseRows[i];
+    const inc = incomeRows[i];
+    normalizedExpenseForecast.push({
+      date: typeof e?.date === "string" ? e.date : fallbackExpense.date,
+      amount: Number.isFinite(e?.amount as number)
+        ? Math.max(0, Math.round(Number(e?.amount)))
+        : fallbackExpense.amount,
+    });
+    normalizedIncomeForecast.push({
+      date: typeof inc?.date === "string" ? inc.date : fallbackIncome.date,
+      amount: Number.isFinite(inc?.amount as number)
+        ? Math.max(0, Math.round(Number(inc?.amount)))
+        : fallbackIncome.amount,
+    });
+  }
+
+  const normalizedCashflowForecast: Array<{ date: string; netPosition: number }> = [];
+  let runningNet = startingBalance;
+  for (let i = 0; i < horizonDays; i++) {
+    runningNet += normalizedIncomeForecast[i].amount - normalizedExpenseForecast[i].amount;
+    normalizedCashflowForecast.push({
+      date: normalizedExpenseForecast[i].date,
+      netPosition: Math.round(runningNet),
+    });
+  }
+
+  const minNet = Math.min(...normalizedCashflowForecast.map((r) => r.netPosition));
+  const maxNet = Math.max(...normalizedCashflowForecast.map((r) => r.netPosition));
+  const computedCashRequiredNextWeek = Math.max(0, ...normalizedCashflowForecast.slice(0, 7).map((r) => -r.netPosition));
+  const computedCashRequiredHorizon = Math.max(0, ...normalizedCashflowForecast.map((r) => -r.netPosition));
+
+  const rawRange = rawPrediction.forecastRange as { min?: unknown; max?: unknown } | undefined;
+  const rawMin = Number(rawRange?.min);
+  const rawMax = Number(rawRange?.max);
+  const range = Number.isFinite(rawMin) && Number.isFinite(rawMax)
+    ? { min: Math.min(rawMin, rawMax), max: Math.max(rawMin, rawMax) }
+    : { min: minNet, max: maxNet };
+
+  const confidenceRaw = rawPrediction.confidence;
+  const confidence = confidenceRaw === "low" || confidenceRaw === "medium" || confidenceRaw === "high"
+    ? confidenceRaw
+    : fallback.confidence;
+
+  const driverFactors = Array.isArray(rawPrediction.driverFactors)
+    ? (rawPrediction.driverFactors as unknown[]).map((x) => String(x)).filter(Boolean).slice(0, 6)
+    : fallback.driverFactors;
+
+  const alerts = Array.isArray(rawPrediction.alerts)
+    ? (rawPrediction.alerts as Array<Record<string, unknown>>)
+        .map((a) => ({
+          type: String(a.type ?? "").trim(),
+          message: String(a.message ?? "").trim(),
+        }))
+        .filter((a) => !!a.type && !!a.message)
+        .slice(0, 8)
+    : fallback.alerts;
+
+  return {
+    expenseForecast: normalizedExpenseForecast,
+    incomeForecast: normalizedIncomeForecast,
+    cashflowForecast: normalizedCashflowForecast,
+    cashRequiredNextWeek: Math.round(
+      Number.isFinite(rawPrediction.cashRequiredNextWeek as number)
+        ? Math.max(0, Number(rawPrediction.cashRequiredNextWeek))
+        : computedCashRequiredNextWeek
+    ),
+    cashRequiredHorizon: Math.round(
+      Number.isFinite(rawPrediction.cashRequiredHorizon as number)
+        ? Math.max(0, Number(rawPrediction.cashRequiredHorizon))
+        : computedCashRequiredHorizon
+    ),
+    forecastRange: range,
+    confidence,
+    driverFactors: driverFactors.length ? driverFactors : fallback.driverFactors,
+    alerts: alerts.length ? alerts : fallback.alerts,
+    model: typeof rawPrediction.model === "string" && rawPrediction.model.trim() ? rawPrediction.model : fallback.model,
+  };
+}
 
 export async function getPredictions(filters: PredictionsFilters) {
   const tid = filters.tenantId;
-  const horizonDays = filters.horizonDays ?? 30;
+  const horizonDays = Math.min(90, Math.max(1, filters.horizonDays ?? 30));
+  const normalizedCostCenterId = normalizeCostCenterId(filters.costCenterId);
 
   const lookbackEnd = new Date();
   const lookbackStart = new Date();
   lookbackStart.setDate(lookbackStart.getDate() - 90);
+  const geminiContextStart = new Date();
+  geminiContextStart.setDate(geminiContextStart.getDate() - 365);
+
+  const expenseConditions = [
+    eq(expenses.tenantId, tid),
+    sql`${expenses.expenseDate} >= ${lookbackStart.toISOString().slice(0, 10)}::date`,
+    sql`${expenses.expenseDate} <= ${lookbackEnd.toISOString().slice(0, 10)}::date`,
+  ];
+  addCostCenterCondition(expenseConditions, normalizedCostCenterId, expenses.costCenterId);
 
   const expenseRows = await db
     .select({ amount: expenses.amount, expenseDate: expenses.expenseDate })
     .from(expenses)
-    .where(
-      and(
-        eq(expenses.tenantId, tid),
-        sql`${expenses.expenseDate} >= ${lookbackStart.toISOString().slice(0, 10)}::date`,
-        sql`${expenses.expenseDate} <= ${lookbackEnd.toISOString().slice(0, 10)}::date`
-      )
-    );
+    .where(and(...expenseConditions));
+
+  const incomeConditions = [
+    eq(incomeRecords.tenantId, tid),
+    sql`${incomeRecords.incomeDate} >= ${lookbackStart.toISOString().slice(0, 10)}::date`,
+    sql`${incomeRecords.incomeDate} <= ${lookbackEnd.toISOString().slice(0, 10)}::date`,
+  ];
+  addCostCenterCondition(incomeConditions, normalizedCostCenterId, incomeRecords.costCenterId);
 
   const incomeRows = await db
     .select({ amount: incomeRecords.amount, incomeDate: incomeRecords.incomeDate })
     .from(incomeRecords)
-    .where(
-      and(
-        eq(incomeRecords.tenantId, tid),
-        sql`${incomeRecords.incomeDate} >= ${lookbackStart.toISOString().slice(0, 10)}::date`,
-        sql`${incomeRecords.incomeDate} <= ${lookbackEnd.toISOString().slice(0, 10)}::date`
-      )
-    );
+    .where(and(...incomeConditions));
+
+  const geminiExpenseConditions = [
+    eq(expenses.tenantId, tid),
+    sql`${expenses.expenseDate} >= ${geminiContextStart.toISOString().slice(0, 10)}::date`,
+    sql`${expenses.expenseDate} <= ${lookbackEnd.toISOString().slice(0, 10)}::date`,
+  ];
+  addCostCenterCondition(geminiExpenseConditions, normalizedCostCenterId, expenses.costCenterId);
+
+  const geminiExpenseRows = await db
+    .select({
+      amount: expenses.amount,
+      expenseDate: expenses.expenseDate,
+      categoryName: expenseCategories.name,
+      costCenterName: costCenters.name,
+      description: expenses.description,
+    })
+    .from(expenses)
+    .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
+    .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
+    .where(and(...geminiExpenseConditions));
+
+  const geminiIncomeConditions = [
+    eq(incomeRecords.tenantId, tid),
+    sql`${incomeRecords.incomeDate} >= ${geminiContextStart.toISOString().slice(0, 10)}::date`,
+    sql`${incomeRecords.incomeDate} <= ${lookbackEnd.toISOString().slice(0, 10)}::date`,
+  ];
+  addCostCenterCondition(geminiIncomeConditions, normalizedCostCenterId, incomeRecords.costCenterId);
+
+  const geminiIncomeRows = await db
+    .select({
+      amount: incomeRecords.amount,
+      incomeDate: incomeRecords.incomeDate,
+      categoryName: incomeCategories.name,
+      costCenterName: costCenters.name,
+      particulars: incomeRecords.particulars,
+    })
+    .from(incomeRecords)
+    .leftJoin(incomeCategories, eq(incomeRecords.categoryId, incomeCategories.id))
+    .leftJoin(costCenters, eq(incomeRecords.costCenterId, costCenters.id))
+    .where(and(...geminiIncomeConditions));
 
   const dailyExpenses: Record<string, number> = {};
   for (const r of expenseRows) {
@@ -309,6 +495,36 @@ export async function getPredictions(filters: PredictionsFilters) {
   const avgDailyIncome =
     dailyIncomeValues.length > 0 ? dailyIncomeValues.reduce((a, b) => a + b, 0) / dailyIncomeValues.length : 0;
 
+  // Backtest telemetry: predict last 7 days using prior 28-day average.
+  const backtestDays = 7;
+  const trainDays = 28;
+  const expenseSeries: Array<{ date: Date; amount: number }> = Object.entries(dailyExpenses)
+    .map(([k, v]) => ({ date: new Date(k), amount: v }))
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+  const incomeSeries: Array<{ date: Date; amount: number }> = Object.entries(dailyIncome)
+    .map(([k, v]) => ({ date: new Date(k), amount: v }))
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+  const expenseBacktestWindow = expenseSeries.slice(-(trainDays + backtestDays));
+  const incomeBacktestWindow = incomeSeries.slice(-(trainDays + backtestDays));
+  const trainExpense = expenseBacktestWindow.slice(0, Math.max(0, expenseBacktestWindow.length - backtestDays));
+  const testExpense = expenseBacktestWindow.slice(-backtestDays);
+  const trainIncome = incomeBacktestWindow.slice(0, Math.max(0, incomeBacktestWindow.length - backtestDays));
+  const testIncome = incomeBacktestWindow.slice(-backtestDays);
+  const trainExpenseAvg = trainExpense.length ? trainExpense.reduce((s, r) => s + r.amount, 0) / trainExpense.length : 0;
+  const trainIncomeAvg = trainIncome.length ? trainIncome.reduce((s, r) => s + r.amount, 0) / trainIncome.length : 0;
+  const expenseMape7d = computeMape(
+    testExpense.map((r) => r.amount),
+    testExpense.map(() => trainExpenseAvg)
+  );
+  const incomeMape7d = computeMape(
+    testIncome.map((r) => r.amount),
+    testIncome.map(() => trainIncomeAvg)
+  );
+  const overallMape7d =
+    expenseMape7d != null && incomeMape7d != null
+      ? Number(((expenseMape7d + incomeMape7d) / 2).toFixed(1))
+      : expenseMape7d ?? incomeMape7d;
+
   const yesterday = new Date();
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterdayStr = toDateKey(yesterday, "local");
@@ -317,7 +533,15 @@ export async function getPredictions(filters: PredictionsFilters) {
     .select({ total: sql<number>`coalesce(sum(${incomeRecords.amount}), 0)::int` })
     .from(incomeRecords)
     .where(
-      and(eq(incomeRecords.tenantId, tid), sql`${incomeRecords.incomeDate} <= ${yesterdayStr}::date`)
+      and(
+        eq(incomeRecords.tenantId, tid),
+        sql`${incomeRecords.incomeDate} <= ${yesterdayStr}::date`,
+        ...(normalizedCostCenterId === "null"
+          ? [sql`${incomeRecords.costCenterId} IS NULL`]
+          : normalizedCostCenterId
+            ? [eq(incomeRecords.costCenterId, normalizedCostCenterId)]
+            : [])
+      )
     );
   const [paidExpenseSum] = await db
     .select({ total: sql<number>`coalesce(sum(${expenses.amount}), 0)::int` })
@@ -326,7 +550,12 @@ export async function getPredictions(filters: PredictionsFilters) {
       and(
         eq(expenses.tenantId, tid),
         eq(expenses.status, "paid"),
-        sql`${expenses.expenseDate} <= ${yesterdayStr}::date`
+        sql`${expenses.expenseDate} <= ${yesterdayStr}::date`,
+        ...(normalizedCostCenterId === "null"
+          ? [sql`${expenses.costCenterId} IS NULL`]
+          : normalizedCostCenterId
+            ? [eq(expenses.costCenterId, normalizedCostCenterId)]
+            : [])
       )
     );
   const startingBalance = (incomeSum?.total ?? 0) - (paidExpenseSum?.total ?? 0);
@@ -357,7 +586,16 @@ export async function getPredictions(filters: PredictionsFilters) {
     })
     .from(pettyCashFunds)
     .leftJoin(costCenters, eq(pettyCashFunds.costCenterId, costCenters.id))
-    .where(eq(pettyCashFunds.tenantId, tid));
+    .where(
+      and(
+        eq(pettyCashFunds.tenantId, tid),
+        ...(normalizedCostCenterId === "null"
+          ? [sql`${pettyCashFunds.costCenterId} IS NULL`]
+          : normalizedCostCenterId
+            ? [eq(pettyCashFunds.costCenterId, normalizedCostCenterId)]
+            : [])
+      )
+    );
 
   const alerts: Array<{ type: string; message: string }> = [];
   for (const r of pettyCashRows) {
@@ -372,7 +610,17 @@ export async function getPredictions(filters: PredictionsFilters) {
   const pendingExpenses = await db
     .select({ submittedAt: expenses.submittedAt })
     .from(expenses)
-    .where(and(eq(expenses.status, "pending_approval"), eq(expenses.tenantId, tid)));
+    .where(
+      and(
+        eq(expenses.status, "pending_approval"),
+        eq(expenses.tenantId, tid),
+        ...(normalizedCostCenterId === "null"
+          ? [sql`${expenses.costCenterId} IS NULL`]
+          : normalizedCostCenterId
+            ? [eq(expenses.costCenterId, normalizedCostCenterId)]
+            : [])
+      )
+    );
   const now = Date.now();
   const staleThreshold = 7 * 24 * 60 * 60 * 1000;
   for (const r of pendingExpenses) {
@@ -436,13 +684,159 @@ export async function getPredictions(filters: PredictionsFilters) {
     });
   }
 
-  return {
+  const deterministicCashRequiredNextWeek = Math.max(
+    0,
+    ...cashflowForecast.slice(0, 7).map((c) => -c.netPosition)
+  );
+  const deterministicCashRequiredHorizon = Math.max(
+    0,
+    ...cashflowForecast.map((c) => -c.netPosition)
+  );
+  const deterministicRange = {
+    min: Math.min(...cashflowForecast.map((c) => c.netPosition)),
+    max: Math.max(...cashflowForecast.map((c) => c.netPosition)),
+  };
+
+  const fallbackPrediction = {
     expenseForecast,
     incomeForecast,
     cashflowForecast,
+    cashRequiredNextWeek: Math.round(deterministicCashRequiredNextWeek),
+    cashRequiredHorizon: Math.round(deterministicCashRequiredHorizon),
+    forecastRange: deterministicRange,
+    confidence: "medium" as const,
+    driverFactors: [
+      "Average daily expense trend",
+      "Average daily income trend",
+      "Starting balance and paid-expense history",
+    ],
     alerts,
+    model: "deterministic-fallback",
+  };
+
+  // Build bounded context for Gemini: capped daily points + compressed monthly summaries.
+  const expenseDailyMap: Record<string, number> = {};
+  for (const r of geminiExpenseRows) {
+    const key = toDateKey(new Date(r.expenseDate), "local");
+    expenseDailyMap[key] = (expenseDailyMap[key] ?? 0) + (r.amount ?? 0);
+  }
+  const incomeDailyMap: Record<string, number> = {};
+  for (const r of geminiIncomeRows) {
+    const key = toDateKey(new Date(r.incomeDate), "local");
+    incomeDailyMap[key] = (incomeDailyMap[key] ?? 0) + (r.amount ?? 0);
+  }
+  const expenseTransactions = Object.entries(expenseDailyMap)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-180)
+    .map(([date, amount]) => ({ date, amount }));
+  const incomeTransactions = Object.entries(incomeDailyMap)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-180)
+    .map(([date, amount]) => ({ date, amount }));
+
+  const monthlyExpenseTotals = Object.entries(
+    geminiExpenseRows.reduce<Record<string, number>>((acc, r) => {
+      const month = toMonthKey(new Date(r.expenseDate));
+      acc[month] = (acc[month] ?? 0) + (r.amount ?? 0);
+      return acc;
+    }, {})
+  )
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-18)
+    .map(([month, amount]) => ({ month, amount: Math.round(amount) }));
+
+  const monthlyIncomeTotals = Object.entries(
+    geminiIncomeRows.reduce<Record<string, number>>((acc, r) => {
+      const month = toMonthKey(new Date(r.incomeDate));
+      acc[month] = (acc[month] ?? 0) + (r.amount ?? 0);
+      return acc;
+    }, {})
+  )
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-18)
+    .map(([month, amount]) => ({ month, amount: Math.round(amount) }));
+
+  const topExpenseCategories = Object.entries(
+    geminiExpenseRows.reduce<Record<string, number>>((acc, r) => {
+      const key = r.categoryName ?? "Uncategorized";
+      acc[key] = (acc[key] ?? 0) + (r.amount ?? 0);
+      return acc;
+    }, {})
+  )
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([name, amount]) => ({ name, amount: Math.round(amount) }));
+
+  const topIncomeCategories = Object.entries(
+    geminiIncomeRows.reduce<Record<string, number>>((acc, r) => {
+      const key = r.categoryName ?? "Uncategorized";
+      acc[key] = (acc[key] ?? 0) + (r.amount ?? 0);
+      return acc;
+    }, {})
+  )
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([name, amount]) => ({ name, amount: Math.round(amount) }));
+
+  const geminiPrediction = await generateGeminiPredictions({
+    horizonDays,
+    startingBalance,
+    expenseTransactions,
+    incomeTransactions,
+    contextSummary: {
+      monthlyExpenseTotals,
+      monthlyIncomeTotals,
+      topExpenseCategories,
+      topIncomeCategories,
+    },
+  });
+
+  if (geminiPrediction) {
+    const gp = geminiPrediction as Record<string, unknown>;
+    const hasCoreArrays =
+      Array.isArray(gp.expenseForecast) &&
+      Array.isArray(gp.incomeForecast) &&
+      Array.isArray(gp.cashflowForecast);
+    if (!hasCoreArrays) {
+      console.warn("[analytics] Invalid Gemini prediction shape; falling back to deterministic forecast");
+    } else {
+    const normalized = normalizeGeminiPrediction(
+      geminiPrediction as unknown as Record<string, unknown>,
+      horizonDays,
+      startingBalance,
+      fallbackPrediction
+    );
+    return {
+      ...normalized,
+      avgDailyExpense: Math.round(avgDailyExpense),
+      avgDailyIncome: Math.round(avgDailyIncome),
+      startingBalance,
+      accuracyTelemetry: {
+        method: "rolling-average-backtest",
+        backtestDays,
+        trainingDays: trainDays,
+        expenseMape7d,
+        incomeMape7d,
+        overallMape7d,
+      },
+      engine: "gemini",
+    };
+    }
+  }
+
+  return {
+    ...fallbackPrediction,
     avgDailyExpense: Math.round(avgDailyExpense),
     avgDailyIncome: Math.round(avgDailyIncome),
     startingBalance,
+    accuracyTelemetry: {
+      method: "rolling-average-backtest",
+      backtestDays,
+      trainingDays: trainDays,
+      expenseMape7d,
+      incomeMape7d,
+      overallMape7d,
+    },
+    engine: "fallback",
   };
 }

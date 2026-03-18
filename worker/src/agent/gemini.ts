@@ -50,6 +50,8 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 - campus_coordinator, head_office: above + list expenses, search, list pending approvals, list role requests.
 - admin, finance: above + expense_summary, pending_workload, petty_cash_summary, approve/reject expenses and role requests.
 - Use the tools available to your role. When user asks for status, reports, or to take action, use the appropriate tool.
+- For prediction-style questions like "cash required next week", "forecast", or "will we go negative", use predict_cash_requirement.
+- Campus coordinator access is restricted to their assigned cost center only. If they ask for another cost center/campus, clearly deny access and state they can only access their assigned cost center data.
 
 === CATEGORY & COST CENTER MAPPING ===
 - Map user words to the provided expense category list by name or slug. Use the category list from SYSTEM DATA; do not assume fixed mappings.
@@ -396,6 +398,17 @@ const FINJOE_FUNCTION_DECLARATIONS = [
       required: [],
     },
   },
+  {
+    name: "predict_cash_requirement",
+    description: "Predict required cash buffer and cashflow trend for upcoming days. Use for questions like 'cash required next week', 'forecast for 30 days', or 'will cash go negative'.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        horizonDays: { type: Type.NUMBER, description: "Forecast horizon in days (default 7, max 90)" },
+      },
+      required: [],
+    },
+  },
   // Approve/reject (finance, admin)
   {
     name: "approve_expense",
@@ -530,7 +543,7 @@ const FINJOE_FUNCTION_DECLARATIONS = [
 
 const BASE_TOOLS = ["create_expense", "create_income", "create_role_change_request", "store_pending_expense", "store_pending_role_change", "confirm_expense", "confirm_income"];
 const READ_TOOLS = ["list_expenses", "get_expense", "submit_expense", "update_expense", "delete_expense", "list_pending_approvals", "list_role_change_requests", "search_expenses", "semantic_search_expenses", "bulk_create_expenses"];
-const ANALYTICS_TOOLS = ["expense_summary", "pending_workload", "petty_cash_summary", "dashboard_summary"];
+const ANALYTICS_TOOLS = ["expense_summary", "pending_workload", "petty_cash_summary", "dashboard_summary", "predict_cash_requirement"];
 const APPROVE_TOOLS = ["approve_expense", "reject_expense", "approve_role_request", "reject_role_request", "record_payout"];
 const RECURRING_TOOLS = ["create_recurring_template", "list_recurring_templates", "update_recurring_template", "delete_recurring_template"];
 

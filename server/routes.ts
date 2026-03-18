@@ -1573,7 +1573,18 @@ export async function registerRoutes(app: Express) {
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
       const parsed = req.query?.horizonDays ? parseInt(String(req.query.horizonDays), 10) : 30;
       const horizonDays = Math.min(90, Math.max(1, isNaN(parsed) ? 30 : parsed));
-      const data = await getPredictions({ tenantId: tid, horizonDays });
+      const costCenterId = req.query?.costCenterId ? String(req.query.costCenterId) : undefined;
+      const data = await getPredictions({ tenantId: tid, horizonDays, costCenterId });
+      const predictionData = data as Record<string, unknown>;
+      logger.info("Predictions generated", {
+        requestId: req.requestId,
+        tenantId: tid,
+        horizonDays,
+        costCenterId: costCenterId ?? "all",
+        engine: predictionData.engine ?? "unknown",
+        model: predictionData.model ?? "unknown",
+        accuracyTelemetry: predictionData.accuracyTelemetry ?? null,
+      });
       res.json(data);
     } catch (e) {
       logger.error("Predictions error", { requestId: req.requestId, err: String(e) });

@@ -70,15 +70,20 @@ export async function runBackfillEmbeddings(
 
   let processed = 0;
   let errors = 0;
+  const failedIds = new Set<string>();
 
   while (processed + errors < limit) {
+    const remainingBudget = Math.min(BATCH_SIZE, limit === Infinity ? BATCH_SIZE : limit - processed - errors);
+    const failedIdArray = Array.from(failedIds);
     const batchResult = await pool.query(
       `SELECT e.id, e.tenant_id, e.vendor_name, e.description, e.particulars, e.amount, e.invoice_number, ec.name as category_name
        FROM expenses e
        LEFT JOIN expense_categories ec ON e.category_id = ec.id
        WHERE e.embedding IS NULL
+       ${failedIdArray.length ? "AND NOT (e.id = ANY($2::uuid[]))" : ""}
+       ORDER BY e.updated_at ASC, e.id ASC
        LIMIT $1`,
-      [Math.min(BATCH_SIZE, limit === Infinity ? BATCH_SIZE : limit - processed - errors)]
+      failedIdArray.length ? [remainingBudget, failedIdArray] : [remainingBudget]
     );
 
     const batchRows = getRows(batchResult);
@@ -105,14 +110,21 @@ export async function runBackfillEmbeddings(
           processed++;
         } else {
           errors++; // API failed or returned empty; expense stays NULL for retry
+          failedIds.add(String(row.id));
         }
       } catch (err) {
         errors++;
+        failedIds.add(String(row.id));
         // Log but continue - don't throw
         console.error(`  Error expense ${row.id}:`, (err as Error).message);
       }
 
       await new Promise((r) => setTimeout(r, DELAY_MS));
+    }
+
+    if (batchRows.every((row) => failedIds.has(String(row.id)))) {
+      // Avoid spinning forever if all currently selected rows are hard failures.
+      break;
     }
   }
 

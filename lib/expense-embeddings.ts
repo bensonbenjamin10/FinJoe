@@ -71,7 +71,8 @@ export async function embedExpenseText(params: {
     const embedding = response.embeddings?.[0]?.values;
     if (!embedding || !Array.isArray(embedding)) return null;
     return embedding as number[];
-  } catch {
+  } catch (err) {
+    console.error("[expense-embeddings] embedExpenseText failed", err);
     return null;
   }
 }
@@ -100,7 +101,8 @@ export async function embedQuery(question: string): Promise<number[] | null> {
     const embedding = response.embeddings?.[0]?.values;
     if (!embedding || !Array.isArray(embedding)) return null;
     return embedding as number[];
-  } catch {
+  } catch (err) {
+    console.error("[expense-embeddings] embedQuery failed", err);
     return null;
   }
 }

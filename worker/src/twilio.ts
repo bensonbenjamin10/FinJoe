@@ -7,6 +7,10 @@ import {
   sendTypingIndicator as providerSendTypingIndicator,
 } from "./providers/twilio-provider.js";
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** Normalize phone to 12 digits (91 + 10 digits) for storage */
 export function normalizePhone(from: string): string {
   let digits = from.replace(/\D/g, "");
@@ -31,7 +35,8 @@ export async function sendFinJoeWhatsApp(
   to: string,
   message: string,
   traceId?: string,
-  tenantId?: string
+  tenantId?: string,
+  options?: { maxAttempts?: number }
 ) {
   const tid = tenantId ?? (await import("./tenant.js").then((m) => m.getDefaultTenantId()));
   const credentials = await getCredentialsForTenant(tid);
@@ -39,7 +44,23 @@ export async function sendFinJoeWhatsApp(
     logger.warn("No WhatsApp credentials for tenant - skipping send", { traceId, tenantId: tid });
     return null;
   }
-  return sendWhatsApp(credentials, to, message, traceId);
+  const maxAttempts = Math.min(4, Math.max(1, options?.maxAttempts ?? 3));
+  let attempt = 0;
+  let lastErr: unknown;
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    try {
+      return await sendWhatsApp(credentials, to, message, traceId);
+    } catch (err) {
+      lastErr = err;
+      logger.warn("WhatsApp send attempt failed", { traceId, tenantId: tid, to, attempt, maxAttempts, err: String(err) });
+      if (attempt < maxAttempts) {
+        await sleep(250 * attempt);
+      }
+    }
+  }
+  logger.error("WhatsApp send exhausted retries", { traceId, tenantId: tid, to, maxAttempts, err: String(lastErr) });
+  throw lastErr;
 }
 
 /** Send WhatsApp typing indicator. Pass credentials when available (e.g. from webhook), else tenantId. */

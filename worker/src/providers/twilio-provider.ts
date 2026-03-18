@@ -44,7 +44,15 @@ export async function sendWhatsApp(
     logger.info("WhatsApp message sent", { traceId, to: toNumber, sid: result.sid });
     return result;
   } catch (error) {
-    logger.error("WhatsApp send error", { traceId, to: toNumber, err: String(error) });
+    const e = error as { code?: string | number; status?: number; message?: string };
+    logger.error("WhatsApp send error", {
+      traceId,
+      to: toNumber,
+      err: String(error),
+      code: e?.code,
+      status: e?.status,
+      message: e?.message,
+    });
     throw error;
   }
 }
