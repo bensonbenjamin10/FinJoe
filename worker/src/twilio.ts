@@ -11,6 +11,60 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const WHATSAPP_CHAR_LIMIT = 1500; // Twilio rejects at 1600; leave buffer
+
+/**
+ * Split a long message into chunks that fit within WhatsApp's character limit.
+ * Tries to break at paragraph boundaries, then line boundaries, then sentence
+ * boundaries, then word boundaries—never mid-word.
+ */
+export function splitMessage(text: string, limit = WHATSAPP_CHAR_LIMIT): string[] {
+  if (text.length <= limit) return [text];
+
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > limit) {
+    let breakIdx = -1;
+
+    // 1) Try paragraph break (double newline)
+    const paraSearch = remaining.lastIndexOf("\n\n", limit);
+    if (paraSearch > 0) {
+      breakIdx = paraSearch;
+    }
+
+    // 2) Try single newline
+    if (breakIdx <= 0) {
+      const lineSearch = remaining.lastIndexOf("\n", limit);
+      if (lineSearch > 0) breakIdx = lineSearch;
+    }
+
+    // 3) Try sentence boundary (. ! ? followed by space or end)
+    if (breakIdx <= 0) {
+      for (let i = limit; i > 0; i--) {
+        if (".!?".includes(remaining[i - 1]) && (i >= remaining.length || /\s/.test(remaining[i]))) {
+          breakIdx = i;
+          break;
+        }
+      }
+    }
+
+    // 4) Try word boundary (space)
+    if (breakIdx <= 0) {
+      const spaceSearch = remaining.lastIndexOf(" ", limit);
+      if (spaceSearch > 0) breakIdx = spaceSearch;
+    }
+
+    // 5) Hard cut (shouldn't happen with real text)
+    if (breakIdx <= 0) breakIdx = limit;
+
+    chunks.push(remaining.slice(0, breakIdx).trimEnd());
+    remaining = remaining.slice(breakIdx).trimStart();
+  }
+  if (remaining.length > 0) chunks.push(remaining);
+  return chunks;
+}
+
 /** Normalize phone to 12 digits (91 + 10 digits) for storage */
 export function normalizePhone(from: string): string {
   let digits = from.replace(/\D/g, "");
@@ -30,7 +84,14 @@ export function formatForWhatsApp(phone: string): string {
   return `whatsapp:+91${digits}`;
 }
 
-/** Send free-form WhatsApp message. Uses tenant credentials from DB or env. */
+/** Twilio error codes that are permanent and should not be retried */
+function isPermanentTwilioError(err: unknown): boolean {
+  const code = (err as { code?: number })?.code;
+  return code === 21617; // message body exceeds 1600 character limit
+}
+
+/** Send free-form WhatsApp message. Uses tenant credentials from DB or env.
+ *  Automatically splits messages that exceed WhatsApp's 1600-char limit. */
 export async function sendFinJoeWhatsApp(
   to: string,
   message: string,
@@ -44,23 +105,46 @@ export async function sendFinJoeWhatsApp(
     logger.warn("No WhatsApp credentials for tenant - skipping send", { traceId, tenantId: tid });
     return null;
   }
+
+  const chunks = splitMessage(message);
+  if (chunks.length > 1) {
+    logger.info("Splitting long WhatsApp message", { traceId, tenantId: tid, to, totalLength: message.length, chunks: chunks.length });
+  }
+
   const maxAttempts = Math.min(4, Math.max(1, options?.maxAttempts ?? 3));
-  let attempt = 0;
-  let lastErr: unknown;
-  while (attempt < maxAttempts) {
-    attempt += 1;
-    try {
-      return await sendWhatsApp(credentials, to, message, traceId);
-    } catch (err) {
-      lastErr = err;
-      logger.warn("WhatsApp send attempt failed", { traceId, tenantId: tid, to, attempt, maxAttempts, err: String(err) });
-      if (attempt < maxAttempts) {
-        await sleep(250 * attempt);
+  let lastResult: Awaited<ReturnType<typeof sendWhatsApp>> | null = null;
+
+  for (const chunk of chunks) {
+    let attempt = 0;
+    let lastErr: unknown;
+    let sent = false;
+    while (attempt < maxAttempts) {
+      attempt += 1;
+      try {
+        lastResult = await sendWhatsApp(credentials, to, chunk, traceId);
+        sent = true;
+        break;
+      } catch (err) {
+        lastErr = err;
+        logger.warn("WhatsApp send attempt failed", { traceId, tenantId: tid, to, attempt, maxAttempts, err: String(err) });
+        if (isPermanentTwilioError(err)) {
+          logger.error("Permanent Twilio error - not retrying", { traceId, tenantId: tid, to, err: String(err) });
+          break;
+        }
+        if (attempt < maxAttempts) {
+          await sleep(250 * attempt);
+        }
       }
     }
+    if (!sent) {
+      logger.error("WhatsApp send exhausted retries", { traceId, tenantId: tid, to, maxAttempts, err: String(lastErr) });
+      throw lastErr;
+    }
+    if (chunks.length > 1) {
+      await sleep(300);
+    }
   }
-  logger.error("WhatsApp send exhausted retries", { traceId, tenantId: tid, to, maxAttempts, err: String(lastErr) });
-  throw lastErr;
+  return lastResult;
 }
 
 /** Send WhatsApp typing indicator. Pass credentials when available (e.g. from webhook), else tenantId. */
