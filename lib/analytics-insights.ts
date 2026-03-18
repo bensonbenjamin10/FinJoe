@@ -205,14 +205,14 @@ export async function generateGeminiPredictions(input: GeminiPredictionInput): P
 
 Today's date: ${today}
 Horizon days: ${horizonDays}
-Starting cash position: ${Math.round(input.startingBalance)}
+Starting net position: 0 (forecast is relative — shows cumulative income minus expenses from today)
 
 Rules:
 - Build a day-level forecast for exactly ${horizonDays} days from today.
 - expenseForecast and incomeForecast must each have ${horizonDays} rows.
-- cashflowForecast must have ${horizonDays} rows and be cumulative net position, starting from startingBalance.
-- cashRequiredNextWeek = additional cash required to avoid going below zero in next 7 days (>= 0).
-- cashRequiredHorizon = additional cash required to avoid going below zero in next ${horizonDays} days (>= 0).
+- cashflowForecast must have ${horizonDays} rows and be cumulative net (income minus expenses), starting from 0.
+- cashRequiredNextWeek = projected shortfall (how far cumulative net goes below 0) in next 7 days (>= 0, 0 if no shortfall).
+- cashRequiredHorizon = projected shortfall (how far cumulative net goes below 0) over next ${horizonDays} days (>= 0, 0 if no shortfall).
 - forecastRange min/max should represent plausible lower/upper cumulative net position over the horizon.
 - confidence must be one of: low, medium, high.
 - driverFactors: 3-6 short strings with key drivers.

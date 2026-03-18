@@ -1,4 +1,4 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { useSearchParams, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -592,46 +592,53 @@ export default function AdminDashboard() {
             <Card>
               <CardHeader>
                 <CardTitle>Cash Flow Forecast</CardTitle>
-                <CardDescription>30-day projected net position with required-cash estimate</CardDescription>
+                <CardDescription>30-day projected net cash flow from today (income minus expenses)</CardDescription>
               </CardHeader>
               <CardContent>
                 {predictionsLoading ? (
                   <div className="grid grid-cols-2 gap-3 mb-4">
                     <div className="rounded-lg border p-3">
-                      <div className="text-xs text-muted-foreground">Cash Required (Next 7d)</div>
+                      <div className="text-xs text-muted-foreground">Projected Shortfall (7d)</div>
                       <div className="text-sm font-semibold text-muted-foreground">—</div>
                     </div>
                     <div className="rounded-lg border p-3">
-                      <div className="text-xs text-muted-foreground">Cash Required (30d)</div>
+                      <div className="text-xs text-muted-foreground">Projected Shortfall (30d)</div>
                       <div className="text-sm font-semibold text-muted-foreground">—</div>
                     </div>
                   </div>
                 ) : predictionsError ? (
                   <div className="grid grid-cols-2 gap-3 mb-4">
                     <div className="rounded-lg border p-3">
-                      <div className="text-xs text-muted-foreground">Cash Required (Next 7d)</div>
+                      <div className="text-xs text-muted-foreground">Projected Shortfall (7d)</div>
                       <div className="text-sm font-semibold text-muted-foreground">—</div>
                     </div>
                     <div className="rounded-lg border p-3">
-                      <div className="text-xs text-muted-foreground">Cash Required (30d)</div>
+                      <div className="text-xs text-muted-foreground">Projected Shortfall (30d)</div>
                       <div className="text-sm font-semibold text-muted-foreground">—</div>
                     </div>
                   </div>
                 ) : predictions ? (
-                  <div className="grid grid-cols-2 gap-3 mb-4">
-                    <div className="rounded-lg border p-3">
-                      <div className="text-xs text-muted-foreground">Cash Required (Next 7d)</div>
-                      <div className="text-sm font-semibold">
-                        {predictions.cashRequiredNextWeek != null ? formatCurrency(predictions.cashRequiredNextWeek) : "—"}
+                  <>
+                    <div className="grid grid-cols-2 gap-3 mb-4">
+                      <div className="rounded-lg border p-3">
+                        <div className="text-xs text-muted-foreground">Projected Shortfall (7d)</div>
+                        <div className="text-sm font-semibold">
+                          {predictions.cashRequiredNextWeek != null ? formatCurrency(predictions.cashRequiredNextWeek) : "—"}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border p-3">
+                        <div className="text-xs text-muted-foreground">Projected Shortfall (30d)</div>
+                        <div className="text-sm font-semibold">
+                          {predictions.cashRequiredHorizon != null ? formatCurrency(predictions.cashRequiredHorizon) : "—"}
+                        </div>
                       </div>
                     </div>
-                    <div className="rounded-lg border p-3">
-                      <div className="text-xs text-muted-foreground">Cash Required (30d)</div>
-                      <div className="text-sm font-semibold">
-                        {predictions.cashRequiredHorizon != null ? formatCurrency(predictions.cashRequiredHorizon) : "—"}
-                      </div>
-                    </div>
-                  </div>
+                    {predictions.cashRequiredNextWeek === 0 && predictions.cashRequiredHorizon === 0 ? (
+                      <p className="text-xs text-emerald-600 dark:text-emerald-400 mb-4">
+                        No shortfall projected — forecast income exceeds expenses over this period.
+                      </p>
+                    ) : null}
+                  </>
                 ) : null}
                 {predictionsLoading ? (
                   <div className="h-[280px] flex items-center justify-center">

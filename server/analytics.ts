@@ -495,23 +495,26 @@ export async function getPredictions(filters: PredictionsFilters) {
   const avgDailyIncome =
     dailyIncomeValues.length > 0 ? dailyIncomeValues.reduce((a, b) => a + b, 0) / dailyIncomeValues.length : 0;
 
-  // Backtest telemetry: predict last 7 days using prior 28-day average.
+  // Backtest telemetry: predict last 7 calendar days using prior 28-day rolling average.
+  // Use a full calendar-day window (including days with zero activity) so sparse income
+  // does not inflate the training average and blow up MAPE.
   const backtestDays = 7;
   const trainDays = 28;
-  const expenseSeries: Array<{ date: Date; amount: number }> = Object.entries(dailyExpenses)
-    .map(([k, v]) => ({ date: new Date(k), amount: v }))
-    .sort((a, b) => a.date.getTime() - b.date.getTime());
-  const incomeSeries: Array<{ date: Date; amount: number }> = Object.entries(dailyIncome)
-    .map(([k, v]) => ({ date: new Date(k), amount: v }))
-    .sort((a, b) => a.date.getTime() - b.date.getTime());
-  const expenseBacktestWindow = expenseSeries.slice(-(trainDays + backtestDays));
-  const incomeBacktestWindow = incomeSeries.slice(-(trainDays + backtestDays));
-  const trainExpense = expenseBacktestWindow.slice(0, Math.max(0, expenseBacktestWindow.length - backtestDays));
-  const testExpense = expenseBacktestWindow.slice(-backtestDays);
-  const trainIncome = incomeBacktestWindow.slice(0, Math.max(0, incomeBacktestWindow.length - backtestDays));
-  const testIncome = incomeBacktestWindow.slice(-backtestDays);
-  const trainExpenseAvg = trainExpense.length ? trainExpense.reduce((s, r) => s + r.amount, 0) / trainExpense.length : 0;
-  const trainIncomeAvg = trainIncome.length ? trainIncome.reduce((s, r) => s + r.amount, 0) / trainIncome.length : 0;
+  const calendarWindow: string[] = [];
+  for (let i = trainDays + backtestDays - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - i);
+    calendarWindow.push(toDateKey(d, "local"));
+  }
+  const expenseCalendar = calendarWindow.map((k) => ({ date: new Date(k), amount: dailyExpenses[k] ?? 0 }));
+  const incomeCalendar = calendarWindow.map((k) => ({ date: new Date(k), amount: dailyIncome[k] ?? 0 }));
+  const trainExpense = expenseCalendar.slice(0, trainDays);
+  const testExpense = expenseCalendar.slice(trainDays);
+  const trainIncome = incomeCalendar.slice(0, trainDays);
+  const testIncome = incomeCalendar.slice(trainDays);
+  const trainExpenseAvg = trainExpense.reduce((s, r) => s + r.amount, 0) / trainDays;
+  const trainIncomeAvg = trainIncome.reduce((s, r) => s + r.amount, 0) / trainDays;
   const expenseMape7d = computeMape(
     testExpense.map((r) => r.amount),
     testExpense.map(() => trainExpenseAvg)
@@ -566,7 +569,9 @@ export async function getPredictions(filters: PredictionsFilters) {
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  let runningNet = startingBalance;
+  // Seed at 0 so the chart shows relative net cash flow (income minus expenses from today),
+  // not an inflated all-time ledger balance. startingBalance is still returned as metadata.
+  let runningNet = 0;
 
   for (let i = 0; i < horizonDays; i++) {
     const d = new Date(today);
@@ -780,7 +785,7 @@ export async function getPredictions(filters: PredictionsFilters) {
 
   const geminiPrediction = await generateGeminiPredictions({
     horizonDays,
-    startingBalance,
+    startingBalance: 0,
     expenseTransactions,
     incomeTransactions,
     contextSummary: {
@@ -803,7 +808,7 @@ export async function getPredictions(filters: PredictionsFilters) {
     const normalized = normalizeGeminiPrediction(
       geminiPrediction as unknown as Record<string, unknown>,
       horizonDays,
-      startingBalance,
+      0,
       fallbackPrediction
     );
     return {
