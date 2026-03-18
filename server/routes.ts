@@ -39,6 +39,7 @@ import { getCredentialsForTenant } from "../worker/src/providers/resolver.js";
 import { getAnalytics, getPredictions } from "./analytics.js";
 import { generateAnalyticsInsights } from "../lib/analytics-insights.js";
 import { getMISReport, getMISCellTransactions } from "./mis-report.js";
+import { seedMISCategoriesForTenant } from "./seed-mis-categories.js";
 import { getMedia } from "../lib/media-storage.js";
 import {
   notifyFinanceForApproval,
@@ -3518,11 +3519,46 @@ export async function registerRoutes(app: Express) {
       if (!slugNorm) return res.status(400).json({ error: "Invalid slug" });
       const [created] = await db.insert(tenants).values({ name, slug: slugNorm, isActive: true }).returning();
       if (!created) return res.status(500).json({ error: "Failed to create tenant" });
+
+      // Auto-seed MIS categories for the new tenant
+      try {
+        const seedResult = await seedMISCategoriesForTenant(created.id);
+        logger.info("Auto-seeded MIS categories for new tenant", {
+          requestId: req.requestId,
+          tenantId: created.id,
+          ...seedResult,
+        });
+      } catch (seedErr) {
+        logger.error("Failed to auto-seed MIS categories (tenant still created)", {
+          requestId: req.requestId,
+          tenantId: created.id,
+          err: String(seedErr),
+        });
+      }
+
       res.status(201).json(created);
     } catch (e: any) {
       if (e?.code === "23505") return res.status(400).json({ error: "Tenant slug already exists" });
       logger.error("Tenant create error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to create tenant" });
+    }
+  });
+
+  app.post("/api/admin/tenants/:id/seed-mis", requireSuperAdmin, async (req, res) => {
+    try {
+      const tenantId = req.params.id;
+      const [tenant] = await db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
+      if (!tenant) return res.status(404).json({ error: "Tenant not found" });
+      const result = await seedMISCategoriesForTenant(tenantId);
+      logger.info("Manually seeded MIS categories for tenant", {
+        requestId: req.requestId,
+        tenantId,
+        ...result,
+      });
+      res.json({ success: true, tenantId, tenantName: tenant.name, ...result });
+    } catch (e) {
+      logger.error("Seed MIS error", { requestId: req.requestId, tenantId: req.params.id, err: String(e) });
+      res.status(500).json({ error: "Failed to seed MIS categories" });
     }
   });
 
