@@ -1,23 +1,45 @@
 /**
  * AI-powered reconciliation suggestions using Gemini.
- * Suggests plausible matches between income and expense records.
+ * Suggests matches between bank transactions and expenses/income records.
  */
 
 import { GoogleGenAI } from "@google/genai";
 
-export type IncomeRecord = { id: string; amount: number; incomeDate: string; particulars?: string | null; categoryName?: string };
-export type ExpenseRecord = { id: string; amount: number; expenseDate: string; vendorName?: string | null; description?: string | null; particulars?: string | null };
+export type BankTxnRecord = {
+  id: string;
+  amount: number;
+  type: string;
+  transactionDate: string;
+  particulars?: string | null;
+};
 
-export type ReconciliationSuggestion = {
-  incomeId: string;
-  expenseId: string;
-  incomeAmount: number;
-  expenseAmount: number;
+export type ExpenseRecord = {
+  id: string;
+  amount: number;
+  expenseDate: string;
+  vendorName?: string | null;
+  description?: string | null;
+  particulars?: string | null;
+};
+
+export type IncomeRecord = {
+  id: string;
+  amount: number;
+  incomeDate: string;
+  particulars?: string | null;
+};
+
+export type BankReconciliationSuggestion = {
+  bankTransactionId: string;
+  expenseId?: string;
+  incomeId?: string;
+  bankAmount: number;
+  matchedAmount: number;
   reason: string;
   confidence: "high" | "medium" | "low";
 };
 
-const RESPONSE_SCHEMA = {
+const BANK_RECON_SCHEMA = {
   type: "object",
   properties: {
     suggestions: {
@@ -25,12 +47,13 @@ const RESPONSE_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          incomeId: { type: "string" },
+          bankTransactionId: { type: "string" },
           expenseId: { type: "string" },
+          incomeId: { type: "string" },
           reason: { type: "string" },
           confidence: { type: "string", enum: ["high", "medium", "low"] },
         },
-        required: ["incomeId", "expenseId", "reason", "confidence"],
+        required: ["bankTransactionId", "reason", "confidence"],
       },
     },
   },
@@ -49,24 +72,23 @@ function getGemini(): GoogleGenAI | null {
 }
 
 /**
- * Suggest matches between income and expense records using Gemini.
- * Returns empty array if GEMINI_API_KEY is missing or API fails.
+ * Suggest matches between unmatched bank transactions and unmatched expenses/income using Gemini.
  */
-export async function suggestReconciliationMatches(
-  incomeRecords: IncomeRecord[],
-  expenseRecords: ExpenseRecord[]
-): Promise<ReconciliationSuggestion[]> {
+export async function suggestBankReconciliationMatches(
+  bankTxns: BankTxnRecord[],
+  expenseRecords: ExpenseRecord[],
+  incomeRecords: IncomeRecord[]
+): Promise<BankReconciliationSuggestion[]> {
   const gemini = getGemini();
   if (!gemini) return [];
+  if (bankTxns.length === 0 || (expenseRecords.length === 0 && incomeRecords.length === 0)) return [];
 
-  if (incomeRecords.length === 0 || expenseRecords.length === 0) return [];
-
-  const incomeSample = incomeRecords.slice(0, 50).map((r) => ({
+  const bankSample = bankTxns.slice(0, 50).map((r) => ({
     id: r.id,
     amount: r.amount,
-    date: r.incomeDate,
+    type: r.type,
+    date: r.transactionDate,
     particulars: r.particulars ?? "",
-    category: r.categoryName ?? "",
   }));
 
   const expenseSample = expenseRecords.slice(0, 50).map((r) => ({
@@ -77,22 +99,35 @@ export async function suggestReconciliationMatches(
     description: r.description ?? r.particulars ?? "",
   }));
 
-  const prompt = `You are a finance reconciliation assistant. Suggest plausible matches between INCOME and EXPENSE records. A match means: income received might correspond to an expense paid (e.g. fee received matches salary paid, or refund matches prior expense).
+  const incomeSample = incomeRecords.slice(0, 50).map((r) => ({
+    id: r.id,
+    amount: r.amount,
+    date: r.incomeDate,
+    particulars: r.particulars ?? "",
+  }));
 
-INCOME RECORDS:
-${JSON.stringify(incomeSample, null, 2)}
+  const prompt = `You are a bank reconciliation assistant. Match UNMATCHED BANK TRANSACTIONS to UNMATCHED EXPENSES or UNMATCHED INCOME records.
 
-EXPENSE RECORDS (all are paid):
+A debit bank transaction should match an expense. A credit bank transaction should match an income record.
+
+UNMATCHED BANK TRANSACTIONS:
+${JSON.stringify(bankSample, null, 2)}
+
+UNMATCHED EXPENSES:
 ${JSON.stringify(expenseSample, null, 2)}
 
-RULES:
-1. Match by: same or very close amount (within 1%), similar dates (within 30 days), or matching particulars/vendor/description.
-2. Return only high-confidence or medium-confidence matches. Skip low-value guesses.
-3. Each income or expense can appear in at most one suggestion.
-4. Use the exact "id" values from the data.
-5. Keep suggestions minimal - only when there's a clear link (e.g. "Fee received ₹50,000" and "Salary expense ₹50,000" on similar dates).
+UNMATCHED INCOME:
+${JSON.stringify(incomeSample, null, 2)}
 
-Return JSON with "suggestions" array. Each item: incomeId, expenseId, reason (brief explanation), confidence (high/medium/low).`;
+RULES:
+1. Match by: same or very close amount (within 1%), similar dates (within 7 days), or matching particulars/vendor/description.
+2. Debit bank transactions match expenses. Credit bank transactions match income.
+3. Return only high-confidence or medium-confidence matches.
+4. Each bank transaction, expense, or income can appear in at most one suggestion.
+5. Use the exact "id" values from the data.
+6. For each suggestion, provide bankTransactionId plus either expenseId or incomeId (not both).
+
+Return JSON with "suggestions" array. Each item: bankTransactionId, expenseId (optional), incomeId (optional), reason (brief), confidence (high/medium/low).`;
 
   try {
     const response = await gemini.models.generateContent({
@@ -100,27 +135,46 @@ Return JSON with "suggestions" array. Each item: incomeId, expenseId, reason (br
       contents: prompt,
       config: {
         responseMimeType: "application/json",
-        responseJsonSchema: RESPONSE_SCHEMA as any,
+        responseJsonSchema: BANK_RECON_SCHEMA as any,
       },
     });
 
     const text = (response as { text?: string }).text ?? "";
     if (!text.trim()) return [];
 
-    const parsed = JSON.parse(text) as { suggestions: Array<{ incomeId: string; expenseId: string; reason: string; confidence: string }> };
-    const incomeById = new Map(incomeRecords.map((r) => [r.id, r]));
-    const expenseById = new Map(expenseRecords.map((r) => [r.id, r]));
+    const parsed = JSON.parse(text) as {
+      suggestions: Array<{
+        bankTransactionId: string;
+        expenseId?: string;
+        incomeId?: string;
+        reason: string;
+        confidence: string;
+      }>;
+    };
+
+    const bankById = new Map(bankTxns.map((r) => [r.id, r]));
+    const expById = new Map(expenseRecords.map((r) => [r.id, r]));
+    const incById = new Map(incomeRecords.map((r) => [r.id, r]));
 
     return (parsed.suggestions ?? [])
-      .filter((s) => incomeById.has(s.incomeId) && expenseById.has(s.expenseId))
+      .filter((s) => {
+        if (!bankById.has(s.bankTransactionId)) return false;
+        if (s.expenseId && !expById.has(s.expenseId)) return false;
+        if (s.incomeId && !incById.has(s.incomeId)) return false;
+        if (!s.expenseId && !s.incomeId) return false;
+        return true;
+      })
       .map((s) => {
-        const inc = incomeById.get(s.incomeId)!;
-        const exp = expenseById.get(s.expenseId)!;
+        const bt = bankById.get(s.bankTransactionId)!;
+        const matchedAmount = s.expenseId
+          ? expById.get(s.expenseId)!.amount
+          : incById.get(s.incomeId!)!.amount;
         return {
-          incomeId: s.incomeId,
+          bankTransactionId: s.bankTransactionId,
           expenseId: s.expenseId,
-          incomeAmount: inc.amount,
-          expenseAmount: exp.amount,
+          incomeId: s.incomeId,
+          bankAmount: bt.amount,
+          matchedAmount,
           reason: s.reason,
           confidence: s.confidence as "high" | "medium" | "low",
         };

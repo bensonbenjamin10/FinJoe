@@ -38,7 +38,6 @@ import {
   Trash2,
   Tag,
   ArrowLeft,
-  Sparkles,
 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -90,8 +89,6 @@ export default function AdminIncome() {
   const [incomeTypeDialog, setIncomeTypeDialog] = useState<{ mode: "add" | "edit"; type?: IncomeType } | null>(null);
   const [deleteIncomeTypeDialog, setDeleteIncomeTypeDialog] = useState<IncomeType | null>(null);
   const [incomeTypeForm, setIncomeTypeForm] = useState({ slug: "", label: "", displayOrder: 0 });
-  const [reconStartDate, setReconStartDate] = useState(format(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), "yyyy-MM-dd"));
-  const [reconEndDate, setReconEndDate] = useState(format(new Date(), "yyyy-MM-dd"));
 
   useEffect(() => {
     if (editIncomeDialog) {
@@ -390,49 +387,6 @@ export default function AdminIncome() {
 
   const totalIncome = incomeList.reduce((sum, i) => sum + (i.amount || 0), 0);
 
-  const [suggestionsRequested, setSuggestionsRequested] = useState(false);
-  const { data: reconciliation, isLoading: reconLoading } = useQuery<{
-    totalIncome: number;
-    totalExpenses: number;
-    bankNet: number;
-    unmappedIncomeCount: number;
-    unmappedIncomeAmount: number;
-    incomeCount: number;
-    expenseCount: number;
-  }>({
-    queryKey: ["/api/admin/reconciliation", reconStartDate, reconEndDate, tenantId],
-    queryFn: async () => {
-      const params = new URLSearchParams({ startDate: reconStartDate, endDate: reconEndDate });
-      if (tenantId) params.append("tenantId", tenantId);
-      const res = await fetch(`/api/admin/reconciliation?${params}`, { credentials: "include" });
-      if (!res.ok) return { totalIncome: 0, totalExpenses: 0, bankNet: 0, unmappedIncomeCount: 0, unmappedIncomeAmount: 0, incomeCount: 0, expenseCount: 0 };
-      return res.json();
-    },
-    enabled: activeTab === "reconciliation" && !!tenantId,
-    retry: false,
-  });
-
-  const { data: suggestionsData, isLoading: suggestionsLoading } = useQuery<{
-    suggestions: Array<{
-      incomeId: string;
-      expenseId: string;
-      incomeAmount: number;
-      expenseAmount: number;
-      reason: string;
-      confidence: string;
-    }>;
-  }>({
-    queryKey: ["/api/admin/reconciliation/suggestions", reconStartDate, reconEndDate, tenantId],
-    queryFn: async () => {
-      const params = new URLSearchParams({ startDate: reconStartDate, endDate: reconEndDate });
-      if (tenantId) params.append("tenantId", tenantId);
-      const res = await fetch(`/api/admin/reconciliation/suggestions?${params}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch");
-      return res.json();
-    },
-    enabled: activeTab === "reconciliation" && !!tenantId && suggestionsRequested,
-    retry: false,
-  });
 
   if (!tenantId) {
     return (
@@ -475,7 +429,6 @@ export default function AdminIncome() {
               <TabsTrigger value="create">Create</TabsTrigger>
               <TabsTrigger value="categories">Categories</TabsTrigger>
               <TabsTrigger value="income-types">Income Types</TabsTrigger>
-              <TabsTrigger value="reconciliation">Reconciliation</TabsTrigger>
             </TabsList>
 
             <TabsContent value="list">
@@ -848,142 +801,6 @@ export default function AdminIncome() {
               </div>
             </TabsContent>
 
-            <TabsContent value="reconciliation">
-              <div className="space-y-4">
-                <div className="flex flex-wrap gap-4 items-end">
-                  <div>
-                    <Label>Start Date</Label>
-                    <Input
-                      type="date"
-                      value={reconStartDate}
-                      onChange={(e) => setReconStartDate(e.target.value)}
-                      className="w-[150px]"
-                    />
-                  </div>
-                  <div>
-                    <Label>End Date</Label>
-                    <Input
-                      type="date"
-                      value={reconEndDate}
-                      onChange={(e) => setReconEndDate(e.target.value)}
-                      className="w-[150px]"
-                    />
-                  </div>
-                </div>
-                {reconLoading ? (
-                  <div className="flex justify-center py-12">
-                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                  </div>
-                ) : reconciliation ? (
-                  <>
-                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                    <Card>
-                      <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium text-muted-foreground">Total Income</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="text-2xl font-bold text-green-600 dark:text-green-400">
-                          ₹ {reconciliation.totalIncome.toLocaleString("en-IN")}
-                        </div>
-                        <p className="text-xs text-muted-foreground">{reconciliation.incomeCount} records</p>
-                      </CardContent>
-                    </Card>
-                    <Card>
-                      <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium text-muted-foreground">Total Expenses (Paid)</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="text-2xl font-bold text-red-600 dark:text-red-400">
-                          ₹ {reconciliation.totalExpenses.toLocaleString("en-IN")}
-                        </div>
-                        <p className="text-xs text-muted-foreground">{reconciliation.expenseCount} records</p>
-                      </CardContent>
-                    </Card>
-                    <Card>
-                      <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium text-muted-foreground">Bank Net</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <div className={cn(
-                          "text-2xl font-bold",
-                          reconciliation.bankNet >= 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"
-                        )}>
-                          ₹ {reconciliation.bankNet.toLocaleString("en-IN")}
-                        </div>
-                        <p className="text-xs text-muted-foreground">Income − Expenses</p>
-                      </CardContent>
-                    </Card>
-                    <Card>
-                      <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium text-muted-foreground">Income in Period</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="text-2xl font-bold">
-                          ₹ {reconciliation.unmappedIncomeAmount.toLocaleString("en-IN")}
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          {reconciliation.unmappedIncomeCount} records —{" "}
-                          <button
-                            type="button"
-                            className="text-primary hover:underline"
-                            onClick={() => {
-                              setFilters((f) => ({ ...f, startDate: reconStartDate, endDate: reconEndDate }));
-                              setActiveTab("list");
-                            }}
-                          >
-                            View list
-                          </button>
-                        </p>
-                      </CardContent>
-                    </Card>
-                  </div>
-
-                  <div className="mt-6 space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setSuggestionsRequested(true)}
-                        disabled={suggestionsLoading}
-                      >
-                        {suggestionsLoading ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Sparkles className="h-4 w-4" />
-                        )}
-                        Get AI match suggestions
-                      </Button>
-                    </div>
-                    {suggestionsData?.suggestions && suggestionsData.suggestions.length > 0 && (
-                      <Card>
-                        <CardHeader className="pb-2">
-                          <CardTitle className="text-sm font-medium">AI-suggested matches</CardTitle>
-                          <CardDescription>Plausible income-expense pairs (review before applying)</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                          <ul className="space-y-2 text-sm">
-                            {suggestionsData.suggestions.map((s, i) => (
-                              <li key={i} className="flex items-start gap-2 p-2 rounded border">
-                                <Badge variant={s.confidence === "high" ? "default" : "secondary"}>{s.confidence}</Badge>
-                                <span>
-                                  Income ₹{s.incomeAmount.toLocaleString("en-IN")} ↔ Expense ₹{s.expenseAmount.toLocaleString("en-IN")}
-                                  {" — "}
-                                  <span className="text-muted-foreground">{s.reason}</span>
-                                </span>
-                              </li>
-                            ))}
-                          </ul>
-                        </CardContent>
-                      </Card>
-                    )}
-                    {suggestionsRequested && suggestionsData?.suggestions?.length === 0 && !suggestionsLoading && (
-                      <p className="text-sm text-muted-foreground">No AI suggestions found. GEMINI_API_KEY may be unset, or no clear matches in the data.</p>
-                    )}
-                  </div>
-                  </>
-                ) : null}
-              </div>
-            </TabsContent>
           </Tabs>
         </CardContent>
       </Card>

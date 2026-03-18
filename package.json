@@ -11,6 +11,7 @@
     "build": "vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "start": "node start.mjs",
     "db:migrate": "node scripts/run-migrations.mjs",
+    "db:query": "node scripts/db-query.mjs",
     "cron:weekly-insights": "node scripts/run-weekly-insights.mjs",
     "cron:recurring-expenses": "node scripts/run-recurring-expenses.mjs",
     "create-templates": "node scripts/create-finjoe-templates.mjs",

@@ -16,6 +16,7 @@ import AdminCron from "@/pages/admin-cron";
 import AdminTenants from "@/pages/admin-tenants";
 import AdminTenantUsers from "@/pages/admin-tenant-users";
 import AdminAccountSettings from "@/pages/admin-account-settings";
+import AdminReconciliation from "@/pages/admin-reconciliation";
 import { AdminShell } from "@/components/layout/AdminShell";
 import { ProtectedRoute } from "@/components/protected-route";
 
@@ -93,6 +94,13 @@ function Router() {
           <ProtectedRoute>
             <AdminShell>
               <AdminRecurringIncomeTemplates />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/reconciliation">
+          <ProtectedRoute>
+            <AdminShell>
+              <AdminReconciliation />
             </AdminShell>
           </ProtectedRoute>
         </Route>

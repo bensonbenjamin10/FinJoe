@@ -129,6 +129,7 @@ export const expenses = pgTable("expenses", {
   gstin: text("gstin"),
   taxType: text("tax_type"),
   voucherNumber: text("voucher_number"),
+  bankTransactionId: varchar("bank_transaction_id"),
   recurringTemplateId: varchar("recurring_template_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -359,6 +360,27 @@ export const recurringIncomeTemplates = pgTable("recurring_income_templates", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// Bank transactions (raw bank statement lines)
+export const bankTransactions = pgTable("bank_transactions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
+  transactionDate: timestamp("transaction_date").notNull(),
+  particulars: text("particulars"),
+  amount: integer("amount").notNull(),
+  type: text("type").notNull(),
+  runningBalance: integer("running_balance"),
+  rawCsvRow: jsonb("raw_csv_row").$type<Record<string, string>>(),
+  importBatchId: varchar("import_batch_id"),
+  reconciliationStatus: text("reconciliation_status").notNull().default("unmatched"),
+  matchedExpenseId: varchar("matched_expense_id").references(() => expenses.id),
+  matchedIncomeId: varchar("matched_income_id"),
+  matchConfidence: text("match_confidence"),
+  matchedAt: timestamp("matched_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Income records
 export const incomeRecords = pgTable("income_records", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -372,6 +394,7 @@ export const incomeRecords = pgTable("income_records", {
   particulars: text("particulars"),
   incomeType: text("income_type").notNull().default("other"),
   source: text("source").notNull().default("manual"),
+  bankTransactionId: varchar("bank_transaction_id").references(() => bankTransactions.id),
   recurringTemplateId: varchar("recurring_template_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -492,6 +515,11 @@ export const finJoeTasksRelations = relations(finJoeTasks, ({ one }) => ({
   expense: one(expenses, { fields: [finJoeTasks.expenseId], references: [expenses.id] }),
 }));
 
+export const bankTransactionsRelations = relations(bankTransactions, ({ one }) => ({
+  tenant: one(tenants, { fields: [bankTransactions.tenantId], references: [tenants.id] }),
+  matchedExpense: one(expenses, { fields: [bankTransactions.matchedExpenseId], references: [expenses.id] }),
+}));
+
 // Types
 export type Tenant = typeof tenants.$inferSelect;
 export type InsertTenant = typeof tenants.$inferInsert;
@@ -541,6 +569,9 @@ export type IncomeCategory = typeof incomeCategories.$inferSelect;
 export type InsertIncomeCategory = typeof incomeCategories.$inferInsert;
 export type IncomeRecord = typeof incomeRecords.$inferSelect;
 export type InsertIncomeRecord = typeof incomeRecords.$inferInsert;
+
+export type BankTransaction = typeof bankTransactions.$inferSelect;
+export type InsertBankTransaction = typeof bankTransactions.$inferInsert;
 
 export type IncomeWithDetails = IncomeRecord & {
   costCenterName?: string | null;

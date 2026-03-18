@@ -1,0 +1,100 @@
+# FinJoe – Agent Reference
+
+Context for AI agents working on this codebase. Read this when you need to query the database, understand schema, or run scripts.
+
+---
+
+## Database Access
+
+### Connection
+
+- **Source**: `DATABASE_URL` in `.env` (root)
+- **Provider**: Railway PostgreSQL (public proxy: `*.proxy.rlwy.net`)
+- **Schema**: Drizzle ORM in `shared/schema.ts`
+
+### Railway Connection Quirks
+
+Railway URLs (internal `*.railway.internal` or public `*.proxy.rlwy.net`) must use `sslmode=disable` because TLS is handled at the edge. The script and server handle this automatically.
+
+**Do not add `sslmode=require`** to Railway URLs. Use the raw URL; the code adds `?sslmode=disable` when needed.
+
+### Querying the Database
+
+Use the `db:query` script. It loads `.env`, normalizes the connection string, and runs SQL:
+
+```bash
+npm run db:query -- "SELECT * FROM expense_categories"
+npm run db:query -- "SELECT * FROM income_categories"
+npm run db:query -- "SELECT id, name FROM tenants"
+```
+
+**Requires**: `DATABASE_URL` in `.env`. If missing, the script exits with a clear error.
+
+---
+
+## Key Tables
+
+### `expense_categories`
+
+| Column | Type | Notes |
+|-------|------|-------|
+| id | varchar | UUID |
+| tenant_id | varchar | null = global template |
+| name | text | Display name |
+| slug | text | URL-safe identifier |
+| parent_id | varchar | Optional parent |
+| display_order | integer | Sort order |
+| cashflow_label | text | MIS/Cashflow label |
+| is_active | boolean | Default true |
+
+### `income_categories`
+
+| Column | Type | Notes |
+|-------|------|-------|
+| id | varchar | UUID |
+| tenant_id | varchar | Required |
+| name | text | Display name |
+| slug | text | URL-safe identifier |
+| income_type | text | Default "other" |
+| display_order | integer | Sort order |
+| is_active | boolean | Default true |
+
+### Other Core Tables
+
+- `tenants` – Organizations
+- `cost_centers` (alias `campuses`) – Branches, departments
+- `expenses` – Expense records
+- `income_records` – Income records
+- `users` – Auth users
+
+---
+
+## Scripts
+
+| Command | Purpose |
+|---------|---------|
+| `npm run db:query -- "SQL"` | Run arbitrary SQL (see above) |
+| `npm run db:migrate` | Run migrations (requires DATABASE_URL) |
+| `npm run dev` | Start API server |
+| `npm run worker:dev` | Start worker |
+| `npm run backfill:embeddings` | Backfill expense embeddings (needs GEMINI_API_KEY) |
+
+---
+
+## Paths
+
+- **Schema**: `shared/schema.ts`
+- **API**: `server/index.ts`, `server/db.ts`
+- **Worker**: `worker/src/index.ts`
+- **Migrations**: `migrations/*.sql`
+- **DB query script**: `scripts/db-query.mjs`
+
+---
+
+## MCP / External Tools
+
+- **Railway MCP**: No database query tools. Use for deployment, logs, variables.
+- **Neon MCP**: For Neon databases only; FinJoe uses Railway Postgres.
+- **Supabase MCP**: Not used for FinJoe DB.
+
+To query the FinJoe database, use `npm run db:query` with `DATABASE_URL` in `.env`.

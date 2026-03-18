@@ -25,6 +25,7 @@ import {
   incomeRecords,
   incomeTypes,
   cronRuns,
+  bankTransactions,
 } from "../shared/schema.js";
 import { createFinJoeData, generateExpensesFromTemplates, generateIncomeFromTemplates, listDistinctVendorNames } from "../lib/finjoe-data.js";
 import { runBackfillEmbeddings } from "../lib/backfill-embeddings.js";
@@ -37,7 +38,6 @@ import { sendFinJoeSms, sendFinJoeWhatsAppTemplate } from "../worker/src/twilio.
 import { getCredentialsForTenant } from "../worker/src/providers/resolver.js";
 import { getAnalytics, getPredictions } from "./analytics.js";
 import { generateAnalyticsInsights } from "../lib/analytics-insights.js";
-import { suggestReconciliationMatches } from "../lib/reconciliation-suggestions.js";
 import { getMedia } from "../lib/media-storage.js";
 import {
   notifyFinanceForApproval,
@@ -1354,133 +1354,543 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/reconciliation", requireAdmin, async (req, res) => {
+  // --- Reconciliation endpoints ---
+
+  function reconTenantId(req: express.Request, res: express.Response): string | null {
+    const tenantId = getTenantId(req);
+    const user = req.user as Express.User;
+    if (user.role !== "super_admin" && !tenantId) { res.status(403).json({ error: "Tenant context required" }); return null; }
+    const tid = (tenantId ?? req.query?.tenantId) as string | undefined;
+    if (!tid) { res.status(400).json({ error: "tenantId required" }); return null; }
+    return tid;
+  }
+
+  function reconDateRange(req: express.Request, res: express.Response): { startDate: string; endDate: string } | null {
+    const { startDate, endDate } = req.query;
+    if (!startDate || !endDate || typeof startDate !== "string" || typeof endDate !== "string") {
+      res.status(400).json({ error: "startDate and endDate required" }); return null;
+    }
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(startDate) || !dateRegex.test(endDate) || startDate > endDate) {
+      res.status(400).json({ error: "Invalid date range" }); return null;
+    }
+    return { startDate, endDate };
+  }
+
+  app.get("/api/admin/reconciliation/summary", requireAdmin, async (req, res) => {
     try {
-      const tenantId = getTenantId(req);
-      const user = req.user as Express.User;
-      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
-      const tid = tenantId ?? req.query?.tenantId;
-      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { startDate, endDate } = req.query;
-      if (!startDate || !endDate || typeof startDate !== "string" || typeof endDate !== "string") {
-        return res.status(400).json({ error: "startDate and endDate required" });
+      const tid = reconTenantId(req, res); if (!tid) return;
+      const dates = reconDateRange(req, res); if (!dates) return;
+      const { startDate, endDate } = dates;
+
+      const bankTxnRows = await db.select({
+        type: bankTransactions.type,
+        amount: bankTransactions.amount,
+        status: bankTransactions.reconciliationStatus,
+      }).from(bankTransactions).where(and(
+        eq(bankTransactions.tenantId, tid),
+        sql`${bankTransactions.transactionDate} >= ${startDate}::date`,
+        sql`${bankTransactions.transactionDate} <= ${endDate}::date`,
+      ));
+
+      const unmatchedExpCount = await db.select({ count: sql<number>`count(*)::int` }).from(expenses).where(and(
+        eq(expenses.tenantId, tid),
+        sql`${expenses.expenseDate} >= ${startDate}::date`,
+        sql`${expenses.expenseDate} <= ${endDate}::date`,
+        isNull(expenses.bankTransactionId),
+      ));
+
+      const unmatchedIncCount = await db.select({ count: sql<number>`count(*)::int` }).from(incomeRecords).where(and(
+        eq(incomeRecords.tenantId, tid),
+        sql`${incomeRecords.incomeDate} >= ${startDate}::date`,
+        sql`${incomeRecords.incomeDate} <= ${endDate}::date`,
+        isNull(incomeRecords.bankTransactionId),
+      ));
+
+      let totalBankDebits = 0, totalBankCredits = 0, matchedCount = 0, unmatchedBankCount = 0;
+      for (const row of bankTxnRows) {
+        if (row.type === "debit") totalBankDebits += row.amount;
+        else totalBankCredits += row.amount;
+        if (row.status === "unmatched") unmatchedBankCount++;
+        else matchedCount++;
       }
-      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-      if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
-        return res.status(400).json({ error: "startDate and endDate must be valid ISO dates (YYYY-MM-DD)" });
-      }
-      if (startDate > endDate) {
-        return res.status(400).json({ error: "startDate must be before or equal to endDate" });
-      }
-      const incomeRows = await db
-        .select({ amount: incomeRecords.amount })
-        .from(incomeRecords)
-        .where(
-          and(
-            eq(incomeRecords.tenantId, tid),
-            sql`${incomeRecords.incomeDate} >= ${startDate}::date`,
-            sql`${incomeRecords.incomeDate} <= ${endDate}::date`
-          )
-        );
-      const expenseRows = await db
-        .select({ amount: expenses.amount })
-        .from(expenses)
-        .where(
-          and(
-            eq(expenses.tenantId, tid),
-            eq(expenses.status, "paid"),
-            sql`${expenses.expenseDate} >= ${startDate}::date`,
-            sql`${expenses.expenseDate} <= ${endDate}::date`
-          )
-        );
-      const totalIncome = incomeRows.reduce((s, r) => s + (r.amount || 0), 0);
-      const totalExpenses = expenseRows.reduce((s, r) => s + (r.amount || 0), 0);
+
       res.json({
-        totalIncome,
-        totalExpenses,
-        bankNet: totalIncome - totalExpenses,
-        incomeCount: incomeRows.length,
-        expenseCount: expenseRows.length,
-        unmappedIncomeCount: incomeRows.length,
-        unmappedIncomeAmount: totalIncome,
+        totalBankTransactions: bankTxnRows.length,
+        totalBankDebits,
+        totalBankCredits,
+        matchedCount,
+        unmatchedBankCount,
+        unmatchedExpenseCount: unmatchedExpCount[0]?.count ?? 0,
+        unmatchedIncomeCount: unmatchedIncCount[0]?.count ?? 0,
+        netPosition: totalBankCredits - totalBankDebits,
       });
     } catch (e) {
-      logger.error("Reconciliation error", { requestId: req.requestId, err: String(e) });
-      res.status(500).json({ error: "Failed to fetch reconciliation" });
+      logger.error("Reconciliation summary error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch reconciliation summary" });
     }
   });
 
-  app.get("/api/admin/reconciliation/suggestions", requireAdmin, async (req, res) => {
+  app.get("/api/admin/reconciliation/bank-transactions", requireAdmin, async (req, res) => {
     try {
-      const tenantId = getTenantId(req);
-      const user = req.user as Express.User;
-      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
-      const tid = tenantId ?? req.query?.tenantId;
-      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { startDate, endDate } = req.query;
-      if (!startDate || !endDate || typeof startDate !== "string" || typeof endDate !== "string") {
-        return res.status(400).json({ error: "startDate and endDate required" });
+      const tid = reconTenantId(req, res); if (!tid) return;
+      const dates = reconDateRange(req, res); if (!dates) return;
+      const { startDate, endDate } = dates;
+      const statusFilter = req.query.status as string | undefined;
+      const limit = Math.min(Math.max(1, parseInt(String(req.query.limit ?? 100), 10) || 100), 500);
+      const offset = Math.max(0, parseInt(String(req.query.offset ?? 0), 10) || 0);
+
+      const conditions = [
+        eq(bankTransactions.tenantId, tid),
+        sql`${bankTransactions.transactionDate} >= ${startDate}::date`,
+        sql`${bankTransactions.transactionDate} <= ${endDate}::date`,
+      ];
+      if (statusFilter && statusFilter !== "all") {
+        conditions.push(eq(bankTransactions.reconciliationStatus, statusFilter));
       }
-      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-      if (!dateRegex.test(startDate) || !dateRegex.test(endDate) || startDate > endDate) {
-        return res.status(400).json({ error: "Invalid date range" });
-      }
-      const incomeRows = await db
-        .select({
-          id: incomeRecords.id,
-          amount: incomeRecords.amount,
-          incomeDate: incomeRecords.incomeDate,
-          particulars: incomeRecords.particulars,
-          categoryName: incomeCategories.name,
-        })
-        .from(incomeRecords)
+
+      const whereClause = and(...conditions);
+
+      const [countRow] = await db.select({ count: sql<number>`count(*)::int` }).from(bankTransactions).where(whereClause);
+
+      const rows = await db.select({
+        id: bankTransactions.id,
+        transactionDate: bankTransactions.transactionDate,
+        particulars: bankTransactions.particulars,
+        amount: bankTransactions.amount,
+        type: bankTransactions.type,
+        reconciliationStatus: bankTransactions.reconciliationStatus,
+        matchedExpenseId: bankTransactions.matchedExpenseId,
+        matchedIncomeId: bankTransactions.matchedIncomeId,
+        matchConfidence: bankTransactions.matchConfidence,
+        matchedAt: bankTransactions.matchedAt,
+        importBatchId: bankTransactions.importBatchId,
+        createdAt: bankTransactions.createdAt,
+      }).from(bankTransactions)
+        .where(whereClause)
+        .orderBy(desc(bankTransactions.transactionDate))
+        .limit(limit)
+        .offset(offset);
+
+      res.json({ rows, total: countRow?.count ?? 0, limit, offset });
+    } catch (e) {
+      logger.error("Reconciliation bank-transactions error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch bank transactions" });
+    }
+  });
+
+  app.get("/api/admin/reconciliation/unmatched-expenses", requireAdmin, async (req, res) => {
+    try {
+      const tid = reconTenantId(req, res); if (!tid) return;
+      const dates = reconDateRange(req, res); if (!dates) return;
+      const { startDate, endDate } = dates;
+      const limit = Math.min(Math.max(1, parseInt(String(req.query.limit ?? 100), 10) || 100), 500);
+      const offset = Math.max(0, parseInt(String(req.query.offset ?? 0), 10) || 0);
+
+      const conditions = [
+        eq(expenses.tenantId, tid),
+        sql`${expenses.expenseDate} >= ${startDate}::date`,
+        sql`${expenses.expenseDate} <= ${endDate}::date`,
+        isNull(expenses.bankTransactionId),
+      ];
+
+      const [countRow] = await db.select({ count: sql<number>`count(*)::int` }).from(expenses).where(and(...conditions));
+
+      const rows = await db.select({
+        id: expenses.id,
+        amount: expenses.amount,
+        expenseDate: expenses.expenseDate,
+        description: expenses.description,
+        vendorName: expenses.vendorName,
+        status: expenses.status,
+        source: expenses.source,
+        categoryName: expenseCategories.name,
+        costCenterName: costCenters.name,
+      }).from(expenses)
+        .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
+        .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
+        .where(and(...conditions))
+        .orderBy(desc(expenses.expenseDate))
+        .limit(limit)
+        .offset(offset);
+
+      res.json({ rows, total: countRow?.count ?? 0, limit, offset });
+    } catch (e) {
+      logger.error("Reconciliation unmatched-expenses error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch unmatched expenses" });
+    }
+  });
+
+  app.get("/api/admin/reconciliation/unmatched-income", requireAdmin, async (req, res) => {
+    try {
+      const tid = reconTenantId(req, res); if (!tid) return;
+      const dates = reconDateRange(req, res); if (!dates) return;
+      const { startDate, endDate } = dates;
+      const limit = Math.min(Math.max(1, parseInt(String(req.query.limit ?? 100), 10) || 100), 500);
+      const offset = Math.max(0, parseInt(String(req.query.offset ?? 0), 10) || 0);
+
+      const conditions = [
+        eq(incomeRecords.tenantId, tid),
+        sql`${incomeRecords.incomeDate} >= ${startDate}::date`,
+        sql`${incomeRecords.incomeDate} <= ${endDate}::date`,
+        isNull(incomeRecords.bankTransactionId),
+      ];
+
+      const [countRow] = await db.select({ count: sql<number>`count(*)::int` }).from(incomeRecords).where(and(...conditions));
+
+      const rows = await db.select({
+        id: incomeRecords.id,
+        amount: incomeRecords.amount,
+        incomeDate: incomeRecords.incomeDate,
+        particulars: incomeRecords.particulars,
+        source: incomeRecords.source,
+        categoryName: incomeCategories.name,
+      }).from(incomeRecords)
         .leftJoin(incomeCategories, eq(incomeRecords.categoryId, incomeCategories.id))
-        .where(
-          and(
-            eq(incomeRecords.tenantId, tid),
-            sql`${incomeRecords.incomeDate} >= ${startDate}::date`,
-            sql`${incomeRecords.incomeDate} <= ${endDate}::date`
-          )
-        );
-      const expenseRows = await db
-        .select({
-          id: expenses.id,
-          amount: expenses.amount,
-          expenseDate: expenses.expenseDate,
-          vendorName: expenses.vendorName,
-          description: expenses.description,
-          particulars: expenses.particulars,
-        })
-        .from(expenses)
-        .where(
-          and(
-            eq(expenses.tenantId, tid),
-            eq(expenses.status, "paid"),
-            sql`${expenses.expenseDate} >= ${startDate}::date`,
-            sql`${expenses.expenseDate} <= ${endDate}::date`
-          )
-        );
-      const suggestions = await suggestReconciliationMatches(
-        incomeRows.map((r) => ({
-          id: r.id,
-          amount: r.amount,
-          incomeDate: String(r.incomeDate).slice(0, 10),
-          particulars: r.particulars,
-          categoryName: r.categoryName ?? undefined,
+        .where(and(...conditions))
+        .orderBy(desc(incomeRecords.incomeDate))
+        .limit(limit)
+        .offset(offset);
+
+      res.json({ rows, total: countRow?.count ?? 0, limit, offset });
+    } catch (e) {
+      logger.error("Reconciliation unmatched-income error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch unmatched income" });
+    }
+  });
+
+  app.post("/api/admin/reconciliation/auto-match", requireAdmin, async (req, res) => {
+    try {
+      const tid = reconTenantId(req, res); if (!tid) return;
+      const dates = reconDateRange(req, res); if (!dates) return;
+      const { startDate, endDate } = dates;
+
+      const unmatchedBankTxns = await db.select({
+        id: bankTransactions.id,
+        transactionDate: bankTransactions.transactionDate,
+        particulars: bankTransactions.particulars,
+        amount: bankTransactions.amount,
+        type: bankTransactions.type,
+      }).from(bankTransactions).where(and(
+        eq(bankTransactions.tenantId, tid),
+        eq(bankTransactions.reconciliationStatus, "unmatched"),
+        sql`${bankTransactions.transactionDate} >= ${startDate}::date`,
+        sql`${bankTransactions.transactionDate} <= ${endDate}::date`,
+      ));
+
+      if (unmatchedBankTxns.length === 0) {
+        return res.json({ matched: 0 });
+      }
+
+      const unmatchedExp = await db.select({
+        id: expenses.id, amount: expenses.amount, expenseDate: expenses.expenseDate,
+        description: expenses.description, vendorName: expenses.vendorName,
+      }).from(expenses).where(and(
+        eq(expenses.tenantId, tid), isNull(expenses.bankTransactionId),
+        sql`${expenses.expenseDate} >= ${shiftDate(startDate, -5)}::date`,
+        sql`${expenses.expenseDate} <= ${shiftDate(endDate, 5)}::date`,
+      ));
+
+      const unmatchedInc = await db.select({
+        id: incomeRecords.id, amount: incomeRecords.amount, incomeDate: incomeRecords.incomeDate,
+        particulars: incomeRecords.particulars,
+      }).from(incomeRecords).where(and(
+        eq(incomeRecords.tenantId, tid), isNull(incomeRecords.bankTransactionId),
+        sql`${incomeRecords.incomeDate} >= ${shiftDate(startDate, -5)}::date`,
+        sql`${incomeRecords.incomeDate} <= ${shiftDate(endDate, 5)}::date`,
+      ));
+
+      const expByAmountDate = new Map<string, typeof unmatchedExp>();
+      for (const e of unmatchedExp) {
+        const dateStr = e.expenseDate.toISOString().slice(0, 10);
+        for (let d = -5; d <= 5; d++) {
+          const key = `${shiftDate(dateStr, d)}|${e.amount}`;
+          const arr = expByAmountDate.get(key) ?? [];
+          arr.push(e);
+          expByAmountDate.set(key, arr);
+        }
+      }
+
+      const incByAmountDate = new Map<string, typeof unmatchedInc>();
+      for (const i of unmatchedInc) {
+        const dateStr = i.incomeDate.toISOString().slice(0, 10);
+        for (let d = -5; d <= 5; d++) {
+          const key = `${shiftDate(dateStr, d)}|${i.amount}`;
+          const arr = incByAmountDate.get(key) ?? [];
+          arr.push(i);
+          incByAmountDate.set(key, arr);
+        }
+      }
+
+      const matchedExpIds = new Set<string>();
+      const matchedIncIds = new Set<string>();
+      const matchOps: Array<{ bankTxnId: string; expenseId?: string; incomeId?: string; confidence: string }> = [];
+
+      for (const bt of unmatchedBankTxns) {
+        const btDate = bt.transactionDate.toISOString().slice(0, 10);
+        const lookupKey = `${btDate}|${bt.amount}`;
+
+        if (bt.type === "debit") {
+          const candidates = expByAmountDate.get(lookupKey)?.filter((e) => !matchedExpIds.has(e.id)) ?? [];
+          if (candidates.length > 0) {
+            const exact = candidates.find((e) => {
+              const eDateStr = e.expenseDate.toISOString().slice(0, 10);
+              return eDateStr === btDate && textsOverlap(bt.particulars ?? undefined, e.description, e.vendorName);
+            });
+            const close = !exact ? candidates.find((e) => {
+              const eDateStr = e.expenseDate.toISOString().slice(0, 10);
+              const dayDiff = Math.abs(new Date(btDate).getTime() - new Date(eDateStr).getTime()) / 86400000;
+              return dayDiff <= 2 && textsOverlap(bt.particulars ?? undefined, e.description, e.vendorName);
+            }) : undefined;
+            const amountOnly = !exact && !close ? candidates.find((e) => {
+              const eDateStr = e.expenseDate.toISOString().slice(0, 10);
+              const dayDiff = Math.abs(new Date(btDate).getTime() - new Date(eDateStr).getTime()) / 86400000;
+              return dayDiff <= 5;
+            }) : undefined;
+
+            const match = exact ?? close ?? amountOnly;
+            if (match) {
+              const confidence = exact ? "exact" : close ? "close" : "amount_only";
+              matchOps.push({ bankTxnId: bt.id, expenseId: match.id, confidence });
+              matchedExpIds.add(match.id);
+            }
+          }
+        } else {
+          const candidates = incByAmountDate.get(lookupKey)?.filter((i) => !matchedIncIds.has(i.id)) ?? [];
+          if (candidates.length > 0) {
+            const exact = candidates.find((i) => {
+              const iDateStr = i.incomeDate.toISOString().slice(0, 10);
+              return iDateStr === btDate && textsOverlap(bt.particulars ?? undefined, i.particulars, null);
+            });
+            const close = !exact ? candidates.find((i) => {
+              const iDateStr = i.incomeDate.toISOString().slice(0, 10);
+              const dayDiff = Math.abs(new Date(btDate).getTime() - new Date(iDateStr).getTime()) / 86400000;
+              return dayDiff <= 2;
+            }) : undefined;
+            const amountOnly = !exact && !close ? candidates[0] : undefined;
+
+            const match = exact ?? close ?? amountOnly;
+            if (match) {
+              const confidence = exact ? "exact" : close ? "close" : "amount_only";
+              matchOps.push({ bankTxnId: bt.id, incomeId: match.id, confidence });
+              matchedIncIds.add(match.id);
+            }
+          }
+        }
+      }
+
+      if (matchOps.length > 0) {
+        await db.transaction(async (tx) => {
+          for (const op of matchOps) {
+            await tx.update(bankTransactions).set({
+              reconciliationStatus: "matched",
+              matchedExpenseId: op.expenseId ?? null,
+              matchedIncomeId: op.incomeId ?? null,
+              matchConfidence: op.confidence,
+              matchedAt: new Date(),
+            }).where(eq(bankTransactions.id, op.bankTxnId));
+
+            if (op.expenseId) {
+              await tx.update(expenses).set({ bankTransactionId: op.bankTxnId }).where(eq(expenses.id, op.expenseId));
+            }
+            if (op.incomeId) {
+              await tx.update(incomeRecords).set({ bankTransactionId: op.bankTxnId }).where(eq(incomeRecords.id, op.incomeId));
+            }
+          }
+        });
+      }
+
+      res.json({ matched: matchOps.length });
+    } catch (e) {
+      logger.error("Reconciliation auto-match error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to auto-match" });
+    }
+  });
+
+  app.post("/api/admin/reconciliation/ai-suggest", requireAdmin, async (req, res) => {
+    try {
+      const tid = reconTenantId(req, res); if (!tid) return;
+      const dates = reconDateRange(req, res); if (!dates) return;
+      const { startDate, endDate } = dates;
+
+      const unmatchedBankTxns = await db.select({
+        id: bankTransactions.id, transactionDate: bankTransactions.transactionDate,
+        particulars: bankTransactions.particulars, amount: bankTransactions.amount, type: bankTransactions.type,
+      }).from(bankTransactions).where(and(
+        eq(bankTransactions.tenantId, tid), eq(bankTransactions.reconciliationStatus, "unmatched"),
+        sql`${bankTransactions.transactionDate} >= ${startDate}::date`,
+        sql`${bankTransactions.transactionDate} <= ${endDate}::date`,
+      )).limit(50);
+
+      const unmatchedExp = await db.select({
+        id: expenses.id, amount: expenses.amount, expenseDate: expenses.expenseDate,
+        description: expenses.description, vendorName: expenses.vendorName, particulars: expenses.particulars,
+      }).from(expenses).where(and(
+        eq(expenses.tenantId, tid), isNull(expenses.bankTransactionId),
+        sql`${expenses.expenseDate} >= ${shiftDate(startDate, -10)}::date`,
+        sql`${expenses.expenseDate} <= ${shiftDate(endDate, 10)}::date`,
+      )).limit(50);
+
+      const unmatchedInc = await db.select({
+        id: incomeRecords.id, amount: incomeRecords.amount, incomeDate: incomeRecords.incomeDate,
+        particulars: incomeRecords.particulars,
+      }).from(incomeRecords).where(and(
+        eq(incomeRecords.tenantId, tid), isNull(incomeRecords.bankTransactionId),
+        sql`${incomeRecords.incomeDate} >= ${shiftDate(startDate, -10)}::date`,
+        sql`${incomeRecords.incomeDate} <= ${shiftDate(endDate, 10)}::date`,
+      )).limit(50);
+
+      const { suggestBankReconciliationMatches } = await import("../lib/reconciliation-suggestions.js");
+      const suggestions = await suggestBankReconciliationMatches(
+        unmatchedBankTxns.map((bt) => ({
+          id: bt.id, amount: bt.amount, type: bt.type,
+          transactionDate: bt.transactionDate.toISOString().slice(0, 10),
+          particulars: bt.particulars,
         })),
-        expenseRows.map((r) => ({
-          id: r.id,
-          amount: r.amount,
-          expenseDate: String(r.expenseDate).slice(0, 10),
-          vendorName: r.vendorName,
-          description: r.description,
-          particulars: r.particulars,
-        }))
+        unmatchedExp.map((e) => ({
+          id: e.id, amount: e.amount,
+          expenseDate: e.expenseDate.toISOString().slice(0, 10),
+          vendorName: e.vendorName, description: e.description, particulars: e.particulars,
+        })),
+        unmatchedInc.map((i) => ({
+          id: i.id, amount: i.amount,
+          incomeDate: i.incomeDate.toISOString().slice(0, 10),
+          particulars: i.particulars,
+        })),
       );
+
       res.json({ suggestions });
     } catch (e) {
-      logger.error("Reconciliation suggestions error", { requestId: req.requestId, err: String(e) });
+      logger.error("Reconciliation AI suggest error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to generate suggestions" });
+    }
+  });
+
+  app.post("/api/admin/reconciliation/match", requireAdmin, async (req, res) => {
+    try {
+      const tid = reconTenantId(req, res); if (!tid) return;
+      const { bankTransactionId: btId, expenseId: eId, incomeId: iId } = req.body;
+      if (!btId || typeof btId !== "string") return res.status(400).json({ error: "bankTransactionId required" });
+      if (!eId && !iId) return res.status(400).json({ error: "expenseId or incomeId required" });
+
+      const [bt] = await db.select().from(bankTransactions).where(and(eq(bankTransactions.id, btId), eq(bankTransactions.tenantId, tid)));
+      if (!bt) return res.status(404).json({ error: "Bank transaction not found" });
+
+      await db.transaction(async (tx) => {
+        await tx.update(bankTransactions).set({
+          reconciliationStatus: "matched",
+          matchedExpenseId: eId ?? null,
+          matchedIncomeId: iId ?? null,
+          matchConfidence: "manual",
+          matchedAt: new Date(),
+        }).where(eq(bankTransactions.id, btId));
+
+        if (eId) {
+          await tx.update(expenses).set({ bankTransactionId: btId }).where(eq(expenses.id, eId));
+        }
+        if (iId) {
+          await tx.update(incomeRecords).set({ bankTransactionId: btId }).where(eq(incomeRecords.id, iId));
+        }
+      });
+
+      res.json({ success: true });
+    } catch (e) {
+      logger.error("Reconciliation match error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to match" });
+    }
+  });
+
+  app.post("/api/admin/reconciliation/unmatch", requireAdmin, async (req, res) => {
+    try {
+      const tid = reconTenantId(req, res); if (!tid) return;
+      const { bankTransactionId: btId } = req.body;
+      if (!btId || typeof btId !== "string") return res.status(400).json({ error: "bankTransactionId required" });
+
+      const [bt] = await db.select().from(bankTransactions).where(and(eq(bankTransactions.id, btId), eq(bankTransactions.tenantId, tid)));
+      if (!bt) return res.status(404).json({ error: "Bank transaction not found" });
+
+      await db.transaction(async (tx) => {
+        if (bt.matchedExpenseId) {
+          await tx.update(expenses).set({ bankTransactionId: null }).where(eq(expenses.id, bt.matchedExpenseId));
+        }
+        if (bt.matchedIncomeId) {
+          await tx.update(incomeRecords).set({ bankTransactionId: null }).where(eq(incomeRecords.id, bt.matchedIncomeId));
+        }
+        await tx.update(bankTransactions).set({
+          reconciliationStatus: "unmatched",
+          matchedExpenseId: null,
+          matchedIncomeId: null,
+          matchConfidence: null,
+          matchedAt: null,
+        }).where(eq(bankTransactions.id, btId));
+      });
+
+      res.json({ success: true });
+    } catch (e) {
+      logger.error("Reconciliation unmatch error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to unmatch" });
+    }
+  });
+
+  app.post("/api/admin/reconciliation/import", requireAdmin, upload.single("file"), async (req, res) => {
+    try {
+      const tid = reconTenantId(req, res); if (!tid) return;
+      const file = (req as any).file;
+      if (!file?.buffer) return res.status(400).json({ error: "No file uploaded" });
+
+      const expCats = await db.select({ slug: expenseCategories.slug }).from(expenseCategories).where(and(eq(expenseCategories.isActive, true), or(eq(expenseCategories.tenantId, tid), isNull(expenseCategories.tenantId))));
+      const incCats = await db.select({ slug: incomeCategories.slug }).from(incomeCategories).where(and(eq(incomeCategories.tenantId, tid), eq(incomeCategories.isActive, true)));
+
+      const { expenses: expRows, income: incRows } = parseBankStatementCsv(
+        file.buffer,
+        expCats.map((c) => c.slug),
+        incCats.length > 0 ? incCats.map((c) => c.slug) : ["other"]
+      );
+
+      const importBatchId = crypto.randomUUID();
+      const toDate = (dateStr: string): Date => {
+        const d = new Date(dateStr + "T12:00:00Z");
+        if (isNaN(d.getTime())) throw new RangeError(`Invalid date: ${dateStr}`);
+        return d;
+      };
+
+      const bankTxnInserts: Array<{
+        tenantId: string; transactionDate: Date; particulars: string;
+        amount: number; type: string; importBatchId: string;
+      }> = [];
+
+      for (const r of expRows) {
+        if (!isValidDateString(r.date)) continue;
+        bankTxnInserts.push({
+          tenantId: tid, transactionDate: toDate(r.date),
+          particulars: r.particulars || "Bank import", amount: r.amount,
+          type: "debit", importBatchId,
+        });
+      }
+      for (const r of incRows) {
+        if (!isValidDateString(r.date)) continue;
+        bankTxnInserts.push({
+          tenantId: tid, transactionDate: toDate(r.date),
+          particulars: r.particulars || "Bank import", amount: r.amount,
+          type: "credit", importBatchId,
+        });
+      }
+
+      let importedCount = 0;
+      if (bankTxnInserts.length > 0) {
+        await db.transaction(async (tx) => {
+          for (let i = 0; i < bankTxnInserts.length; i += 250) {
+            const chunk = bankTxnInserts.slice(i, i + 250);
+            await tx.insert(bankTransactions).values(chunk);
+            importedCount += chunk.length;
+          }
+        });
+      }
+
+      res.json({ imported: importedCount, importBatchId });
+    } catch (e) {
+      logger.error("Reconciliation import error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to import bank statement" });
     }
   });
 
@@ -2318,16 +2728,55 @@ export async function registerRoutes(app: Express) {
 
       let imported = 0;
       let incomeImported = 0;
+      const importBatchId = crypto.randomUUID();
 
       await db.transaction(async (tx) => {
         for (let i = 0; i < expToInsert.length; i += BATCH_SIZE) {
           const chunk = expToInsert.slice(i, i + BATCH_SIZE);
-          await tx.insert(expenses).values(chunk);
+          const insertedExpenses = await tx.insert(expenses).values(chunk).returning({ id: expenses.id });
+          const bankTxnChunk = insertedExpenses.map((exp, j) => {
+            const row = chunk[j];
+            return {
+              tenantId: tid,
+              transactionDate: row.expenseDate,
+              particulars: row.description,
+              amount: row.amount,
+              type: "debit" as const,
+              importBatchId,
+              reconciliationStatus: "auto_from_import" as const,
+              matchedExpenseId: exp.id,
+              matchConfidence: "exact" as const,
+              matchedAt: new Date(),
+            };
+          });
+          const insertedBankTxns = await tx.insert(bankTransactions).values(bankTxnChunk).returning({ id: bankTransactions.id });
+          for (let j = 0; j < insertedBankTxns.length; j++) {
+            await tx.update(expenses).set({ bankTransactionId: insertedBankTxns[j].id }).where(eq(expenses.id, insertedExpenses[j].id));
+          }
           imported += chunk.length;
         }
         for (let i = 0; i < incToInsert.length; i += BATCH_SIZE) {
           const chunk = incToInsert.slice(i, i + BATCH_SIZE);
-          await tx.insert(incomeRecords).values(chunk);
+          const insertedIncome = await tx.insert(incomeRecords).values(chunk).returning({ id: incomeRecords.id });
+          const bankTxnChunk = insertedIncome.map((inc, j) => {
+            const row = chunk[j];
+            return {
+              tenantId: tid,
+              transactionDate: row.incomeDate,
+              particulars: row.particulars,
+              amount: row.amount,
+              type: "credit" as const,
+              importBatchId,
+              reconciliationStatus: "auto_from_import" as const,
+              matchedIncomeId: inc.id,
+              matchConfidence: "exact" as const,
+              matchedAt: new Date(),
+            };
+          });
+          const insertedBankTxns = await tx.insert(bankTransactions).values(bankTxnChunk).returning({ id: bankTransactions.id });
+          for (let j = 0; j < insertedBankTxns.length; j++) {
+            await tx.update(incomeRecords).set({ bankTransactionId: insertedBankTxns[j].id }).where(eq(incomeRecords.id, insertedIncome[j].id));
+          }
           incomeImported += chunk.length;
         }
       });
