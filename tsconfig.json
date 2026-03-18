@@ -18,6 +18,6 @@
       "@lib/*": ["lib/*"]
     }
   },
-  "include": ["shared/**/*", "lib/**/*", "server/**/*", "worker/src/**/*"],
+  "include": ["shared/**/*", "lib/**/*", "server/**/*", "worker/src/**/*", "types/**/*"],
   "exclude": ["node_modules", "dist", "client"]
 }

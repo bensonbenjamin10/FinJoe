@@ -17,7 +17,7 @@ app.set("trust proxy", 1);
 
 app.use(requestId);
 app.use(
-  morgan((tokens, req: Request, res) => {
+  morgan((tokens: any, req: Request, res: Response) => {
     const requestId = (req as Request & { requestId?: string }).requestId;
     const entry = {
       timestamp: new Date().toISOString(),

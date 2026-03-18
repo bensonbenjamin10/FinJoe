@@ -131,7 +131,7 @@ export function parseBankStatementCsv(
   incomeCategorySlugs: string[]
 ): ParseResult {
   const text = buffer.toString("utf-8");
-  const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
+  const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
   const rows = parsed.data ?? [];
   const expenses: ParsedExpenseRow[] = [];
   const income: ParsedIncomeRow[] = [];

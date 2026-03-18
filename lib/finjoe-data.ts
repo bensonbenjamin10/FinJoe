@@ -93,6 +93,7 @@ export type CreateExpenseInput = {
   vendorName?: string | null;
   gstin?: string | null;
   taxType?: string | null;
+  voucherNumber?: string | null;
   submittedByContactPhone?: string | null;
   source?: string;
   recurringTemplateId?: string | null;
@@ -445,7 +446,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         .where(and(...conditions))
         .orderBy(desc(expenses.createdAt))
         .limit(50);
-      return rows.map((r) => ({ ...r, shortId: toShortExpenseId(r.id as string) }));
+      return rows.map((r: Record<string, unknown>) => ({ ...r, shortId: toShortExpenseId(r.id as string) }));
     },
 
     async listRoleChangeRequests(status?: string): Promise<Array<Record<string, unknown>>> {
@@ -662,8 +663,8 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         db.select({ count: sql<number>`count(*)::int` }).from(finJoeRoleChangeRequests).where(and(eq(finJoeRoleChangeRequests.status, "pending"), eq(finJoeRoleChangeRequests.tenantId, tenantId))),
       ]);
 
-      const totalExpenses = expenseRows.reduce((s, r) => s + (r.amount ?? 0), 0);
-      const totalIncome = incomeRows.reduce((s, r) => s + (r.amount ?? 0), 0);
+      const totalExpenses = expenseRows.reduce((s: number, r: { amount: number | null }) => s + (r.amount ?? 0), 0);
+      const totalIncome = incomeRows.reduce((s: number, r: { amount: number | null }) => s + (r.amount ?? 0), 0);
       return {
         totalExpenses,
         totalIncome,
@@ -1067,7 +1068,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           )
         );
       const todayDate = new Date(today);
-      const endDateFiltered = rows.filter((r) => {
+      const endDateFiltered = rows.filter((r: Record<string, unknown>) => {
         if (!r.endDate) return true;
         const end = r.endDate instanceof Date ? r.endDate : new Date(r.endDate as string);
         return end >= todayDate;
@@ -1226,7 +1227,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           )
         );
       const todayDate = new Date(today);
-      const endDateFiltered = rows.filter((r) => {
+      const endDateFiltered = rows.filter((r: Record<string, unknown>) => {
         if (!r.endDate) return true;
         const end = r.endDate instanceof Date ? r.endDate : new Date(r.endDate as string);
         return end >= todayDate;

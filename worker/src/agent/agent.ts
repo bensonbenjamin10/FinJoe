@@ -1001,7 +1001,7 @@ async function executeFunctionCall(
       }
       const categoryId =
         parsed?.categoryHint
-          ? resolveCategoryFromMessage(parsed.categoryHint, execCtx.categories)
+          ? (resolveCategoryFromMessage(parsed.categoryHint, execCtx.categories) ?? undefined)
           : undefined;
       let searchResults: Array<Record<string, unknown>> = [];
       const queryEmbedding = await embedQuery(question);
@@ -1032,7 +1032,7 @@ async function executeFunctionCall(
       }
       let summary = null;
       if (startDate && endDate) {
-        summary = await finJoeData.getExpenseSummary({ startDate, endDate, campusId, categoryId });
+        summary = await finJoeData.getExpenseSummary({ startDate, endDate, campusId: campusId ?? undefined, categoryId });
       }
       return {
         success: true,

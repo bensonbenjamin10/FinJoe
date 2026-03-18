@@ -279,7 +279,7 @@ export async function handleWebhook(req: Request, res: Response) {
     }
 
     // Phase 2: Use AI when configured (serialized per conversation to preserve message order)
-    sendTypingIndicator(messageSid, traceId, { credentials });
+    sendTypingIndicator(messageSid, traceId, { credentials: credentials ?? undefined });
 
     await withConversationLock(conversation.id, async () => {
       let reply: string;

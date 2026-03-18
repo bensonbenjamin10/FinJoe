@@ -38,7 +38,7 @@ export async function sendFinJoeWhatsApp(
   tenantId?: string,
   options?: { maxAttempts?: number }
 ) {
-  const tid = tenantId ?? (await import("./tenant.js").then((m) => m.getDefaultTenantId()));
+  const tid: string = tenantId ?? (await import("./tenant.js").then((m) => m.getDefaultTenantId()));
   const credentials = await getCredentialsForTenant(tid);
   if (!credentials) {
     logger.warn("No WhatsApp credentials for tenant - skipping send", { traceId, tenantId: tid });
@@ -91,7 +91,7 @@ export async function sendFinJoeWhatsAppTemplate(
   traceId?: string,
   tenantId?: string
 ) {
-  const tid = tenantId ?? (await import("./tenant.js").then((m) => m.getDefaultTenantId()));
+  const tid: string = tenantId ?? (await import("./tenant.js").then((m) => m.getDefaultTenantId()));
   const credentials = await getCredentialsForTenant(tid);
   if (!credentials) {
     logger.warn("No WhatsApp credentials for tenant - skipping template send", { traceId, tenantId: tid });
@@ -107,7 +107,7 @@ export async function sendFinJoeSms(
   traceId?: string,
   tenantId?: string
 ) {
-  const tid = tenantId ?? (await import("./tenant.js").then((m) => m.getDefaultTenantId()));
+  const tid: string = tenantId ?? (await import("./tenant.js").then((m) => m.getDefaultTenantId()));
   const credentials = await getCredentialsForTenant(tid);
   if (!credentials) {
     logger.warn("No Twilio credentials for tenant - skipping SMS send", { traceId, tenantId: tid });

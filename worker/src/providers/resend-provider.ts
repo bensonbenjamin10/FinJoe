@@ -33,13 +33,16 @@ export async function sendEmail(
   const recipients = Array.isArray(to) ? to : [to];
   const from = options?.from || defaultFrom;
 
-  const { data, error } = await resend.emails.send({
+  const sendOptions: Record<string, unknown> = {
     from,
     to: recipients,
     subject,
     html,
-    idempotencyKey: options?.idempotencyKey,
-  });
+  };
+  if (options?.idempotencyKey) {
+    sendOptions.headers = { "Idempotency-Key": options.idempotencyKey };
+  }
+  const { data, error } = await resend.emails.send(sendOptions as any);
 
   if (error) {
     logger.error("Resend email send error", { traceId, to: recipients, err: error.message });

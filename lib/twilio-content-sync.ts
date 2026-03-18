@@ -101,7 +101,7 @@ export async function fetchApprovedTemplatesFromTwilio(
     const field = FRIENDLY_NAME_TO_FIELD[friendlyName];
     if (!field || !record.sid) continue;
 
-    let status = getStatusFromRecord(record as Record<string, unknown>);
+    let status = getStatusFromRecord(record as unknown as Record<string, unknown>);
     if (status === "unsubmitted") {
       status = await fetchApprovalStatusForContent(accountSid, authToken, record.sid);
     }
@@ -165,7 +165,7 @@ export async function fetchTemplateStatusesFromTwilio(
     const field = FRIENDLY_NAME_TO_FIELD[friendlyName];
     if (!field || !record.sid) continue;
 
-    let status = getStatusFromRecord(record as Record<string, unknown>);
+    let status = getStatusFromRecord(record as unknown as Record<string, unknown>);
     if (status === "unsubmitted") {
       status = await fetchApprovalStatusForContent(accountSid, authToken, record.sid);
     }

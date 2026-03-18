@@ -940,7 +940,7 @@ export async function registerRoutes(app: Express) {
       let templateSid: string | null = sidsOverride?.[field] ?? null;
       if (!templateSid) {
         const [row] = await db.select().from(finjoeSettings).where(eq(finjoeSettings.tenantId, tid)).limit(1);
-        templateSid = row ? (row as Record<string, string | null>)[field] : null;
+        templateSid = row ? (row as unknown as Record<string, string | null>)[field] : null;
       }
       if (!templateSid?.trim()) return res.status(400).json({ error: `No template SID configured for ${templateKey}. Create, submit, and sync templates first.` });
       const sid = String(templateSid).trim();

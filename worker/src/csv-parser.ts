@@ -24,7 +24,7 @@ function findColumn(row: Record<string, string>, headers: string[]): string | un
 /** Parse CSV buffer to ExtractedExpenseRow[]. Skips rows without valid amount. */
 export function parseExpensesFromCsv(buffer: Buffer): ExtractedExpenseRow[] {
   const text = buffer.toString("utf-8");
-  const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
+  const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
   const rows = parsed.data ?? [];
   const result: ExtractedExpenseRow[] = [];
 
