@@ -11,11 +11,30 @@ import type { WabaProviderCredentials } from "./types.js";
 
 /** Validate Twilio webhook signature using tenant credentials */
 export function validateTwilioWebhook(
-  req: { body?: Record<string, string>; originalUrl?: string },
+  req: { body?: Record<string, string>; originalUrl?: string; headers?: Record<string, unknown>; header?: (name: string) => string | undefined },
   authToken: string,
   webhookUrl: string
 ): boolean {
-  return !!authToken && validateIncomingRequest(req as any, authToken, { url: webhookUrl });
+  if (!authToken) {
+    logger.warn("Twilio webhook validation skipped: no authToken");
+    return false;
+  }
+  const signature = req.header?.("X-Twilio-Signature") ?? (req.headers?.["x-twilio-signature"] as string | undefined);
+  if (!signature) {
+    logger.warn("Twilio webhook validation failed: missing X-Twilio-Signature header");
+    return false;
+  }
+  const result = validateIncomingRequest(req as any, authToken, { url: webhookUrl });
+  if (!result) {
+    logger.warn("Twilio webhook signature mismatch", {
+      webhookUrl,
+      hasSignature: !!signature,
+      signaturePreview: signature ? `${signature.slice(0, 8)}...` : null,
+      authTokenLen: authToken.length,
+      bodyKeys: req.body ? Object.keys(req.body).sort().join(",") : "none",
+    });
+  }
+  return result;
 }
 
 /** Create Twilio client from credentials */
