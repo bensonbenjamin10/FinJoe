@@ -7,6 +7,9 @@ import {
   finJoeConversations,
   finJoeRoleChangeRequests,
   users,
+  expenses,
+  costCenters,
+  expenseCategories,
 } from "../../../shared/schema.js";
 import { eq, and, desc, or } from "drizzle-orm";
 import { sendWith24hRouting, getExpenseApprovalTemplateConfig, notifySubmitterForApprovalRejection } from "../send.js";
@@ -89,7 +92,7 @@ async function getConversationHistory(
 
 const CONTEXT_EXPIRY_HOURS = 24;
 
-async function getConversationContext(conversationId: string): Promise<ConversationContext> {
+async function getConversationContext(conversationId: string): Promise<ConversationContext & { contextExpired?: boolean }> {
   const [conv] = await db
     .select({ context: finJoeConversations.context, lastMessageAt: finJoeConversations.lastMessageAt })
     .from(finJoeConversations)
@@ -99,8 +102,9 @@ async function getConversationContext(conversationId: string): Promise<Conversat
   if (!conv?.lastMessageAt) return raw;
   const ageMs = Date.now() - new Date(conv.lastMessageAt).getTime();
   if (ageMs > CONTEXT_EXPIRY_HOURS * 60 * 60 * 1000) {
+    const hadPending = !!(raw.pendingExpense || raw.pendingRoleChange || raw.pendingConfirmation);
     const { pendingExpense, pendingRoleChange, pendingConfirmation, ...rest } = raw;
-    return rest;
+    return { ...rest, contextExpired: hadPending };
   }
   return raw;
 }
@@ -202,7 +206,10 @@ export async function processWithAgent(
   }
 
   const history = await getConversationHistory(conversationId, messageId);
-  const effectiveUserMessage = (body || (hasMedia ? "[Image or file attached - please process the expense data]" : "")).trim();
+  let effectiveUserMessage = (body || (hasMedia ? "[Image or file attached - please process the expense data]" : "")).trim();
+  if ((convContext as { contextExpired?: boolean }).contextExpired) {
+    effectiveUserMessage = `[SYSTEM NOTE: The user's previous in-progress expense/request has expired due to inactivity (over 24 hours). Let them know their previous data was cleared and they'll need to start fresh if they were mid-flow.]\n${effectiveUserMessage}`;
+  }
 
   const turnResult = await agentTurn({
     userMessage: effectiveUserMessage,
@@ -247,6 +254,7 @@ export async function processWithAgent(
           contactStudentId,
           contactRole: effectiveRole,
           contactCampusId: contactCampusId ?? null,
+          contactName,
           convContext: updatedConvContext,
           validCategoryIds,
           validIncomeCategoryIds,
@@ -332,6 +340,7 @@ type ExecuteContext = {
   contactStudentId: string | null;
   contactRole: string;
   contactCampusId: string | null;
+  contactName?: string | null;
   convContext: ConversationContext;
   validCategoryIds: string[];
   validIncomeCategoryIds: string[];
@@ -396,8 +405,9 @@ async function executeFunctionCall(
       if (!expense?.id) return { success: false, error: USER_FACING_ERROR };
       await finJoeData.submitExpense(expense.id, contactStudentId);
       const categoryName = execCtx.categories.find((c) => c.id === d.categoryId)?.name ?? null;
-      await notifyFinanceForApproval(expense.id, { amount: d.amount, vendorName: d.vendorName ?? undefined, invoiceNumber: d.invoiceNumber ?? undefined, invoiceDate: d.invoiceDate ?? undefined, description: d.description ?? undefined, gstin: d.gstin ?? undefined, taxType: d.taxType ?? undefined }, tenantId, traceId, categoryName);
-      return { success: true, data: { expenseId: expense.id } };
+      const costCenterName = d.campusId ? (execCtx.campuses.find((c) => c.id === d.campusId)?.name ?? null) : "Corporate Office";
+      await notifyFinanceForApproval(expense.id, { amount: d.amount, vendorName: d.vendorName ?? undefined, invoiceNumber: d.invoiceNumber ?? undefined, invoiceDate: d.invoiceDate ?? undefined, description: d.description ?? undefined, gstin: d.gstin ?? undefined, taxType: d.taxType ?? undefined }, tenantId, traceId, categoryName, execCtx.contactName, costCenterName);
+      return { success: true, data: { expenseId: expense.id, amount: d.amount, vendorName: d.vendorName, categoryName, costCenterName } };
     }
 
     case "confirm_income": {
@@ -406,8 +416,9 @@ async function executeFunctionCall(
         return { success: false, error: "Nothing to confirm. Please provide the income details again." };
       }
       const d = pending.data as { amount: number; categoryId: string; campusId: string | null; particulars?: string | null; incomeDate: string };
+      let income: { id: string } | null = null;
       try {
-        await finJoeData.createIncome({
+        income = await finJoeData.createIncome({
           tenantId,
           costCenterId: d.campusId,
           categoryId: d.categoryId,
@@ -420,7 +431,8 @@ async function executeFunctionCall(
         logger.error("Confirm income create error", { traceId, err: String(err) });
         return { success: false, error: USER_FACING_ERROR };
       }
-      return { success: true, data: {} };
+      const incomeCategoryName = execCtx.incomeCategories.find((c) => c.id === d.categoryId)?.name ?? null;
+      return { success: true, data: { incomeId: income?.id, amount: d.amount, categoryName: incomeCategoryName, incomeDate: d.incomeDate } };
     }
 
     case "create_expense": {
@@ -470,7 +482,15 @@ async function executeFunctionCall(
       // Require confirmation before posting: store/update pending and ask user to confirm (handles user corrections too)
       if (requireConfirmation) {
         const campusName = campusId ? execCtx.campuses.find((c) => c.id === campusId)?.name ?? campusId : "Corporate Office";
-        const summary = `₹${expenseData.amount.toLocaleString("en-IN")} for ${campusName}${expenseData.vendorName ? ` (${expenseData.vendorName})` : ""}`;
+        const confirmCategoryName = expenseData.categoryId ? (execCtx.categories.find((c) => c.id === expenseData.categoryId)?.name ?? null) : null;
+        const summaryParts = [`₹${expenseData.amount.toLocaleString("en-IN")}`];
+        if (confirmCategoryName) summaryParts.push(`Category: ${confirmCategoryName}`);
+        if (expenseData.vendorName) summaryParts.push(`Vendor: ${expenseData.vendorName}`);
+        summaryParts.push(`Cost Center: ${campusName}`);
+        if (expenseData.description && expenseData.description !== confirmCategoryName) summaryParts.push(`Note: ${expenseData.description}`);
+        if (expenseData.expenseDate) summaryParts.push(`Date: ${expenseData.expenseDate}`);
+        if (expenseData.invoiceNumber) summaryParts.push(`Invoice: ${expenseData.invoiceNumber}`);
+        const summary = summaryParts.join(", ");
         await setConversationContext(execCtx.conversationId, {
           ...convContext,
           pendingConfirmation: { type: "expense", data: { ...expenseData, vendorName: expenseData.vendorName } },
@@ -531,7 +551,8 @@ async function executeFunctionCall(
       }
       await finJoeData.submitExpense(expense.id, contactStudentId);
       const categoryName = execCtx.categories.find((c) => c.id === expenseData.categoryId)?.name ?? null;
-      await notifyFinanceForApproval(expense.id, extracted, tenantId, traceId, categoryName);
+      const costCenterName2 = expenseData.campusId ? (execCtx.campuses.find((c) => c.id === expenseData.campusId)?.name ?? null) : "Corporate Office";
+      await notifyFinanceForApproval(expense.id, extracted, tenantId, traceId, categoryName, execCtx.contactName, costCenterName2);
 
       return { success: true, data: { expenseId: expense.id, extracted } };
     }
@@ -730,7 +751,8 @@ async function executeFunctionCall(
             });
             await finJoeData.submitExpense(expense.id, contactStudentId);
             const categoryName = execCtx.categories.find((c) => c.id === item.categoryId)?.name ?? null;
-            await notifyFinanceForApproval(expense.id, item.extracted, tenantId, traceId, categoryName);
+            const bulkCostCenterName = item.campusId ? (execCtx.campuses.find((c) => c.id === item.campusId)?.name ?? null) : "Corporate Office";
+            await notifyFinanceForApproval(expense.id, item.extracted, tenantId, traceId, categoryName, execCtx.contactName, bulkCostCenterName);
             expenseIds.push(expense.id);
           }
         } catch (err) {
@@ -875,6 +897,29 @@ async function executeFunctionCall(
       if (!expenseId) return { success: false, error: `Expense #${expenseIdInput} not found.` };
       const result = await finJoeData.submitExpense(expenseId, contactStudentId);
       if (!result) return { success: false, error: `Could not submit expense #${expenseIdInput}. It may not be in draft status or already submitted.` };
+      const [expDetail] = await db
+        .select({
+          amount: expenses.amount,
+          vendorName: expenses.vendorName,
+          description: expenses.description,
+          costCenterName: costCenters.name,
+          categoryName: expenseCategories.name,
+          costCenterId: expenses.costCenterId,
+          categoryId: expenses.categoryId,
+        })
+        .from(expenses)
+        .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
+        .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
+        .where(eq(expenses.id, expenseId))
+        .limit(1);
+      if (expDetail) {
+        const submitCostCenterName = expDetail.costCenterName ?? "Corporate Office";
+        notifyFinanceForApproval(
+          expenseId,
+          { amount: expDetail.amount ?? undefined, vendorName: expDetail.vendorName ?? undefined, description: expDetail.description ?? undefined },
+          tenantId, traceId, expDetail.categoryName, execCtx.contactName, submitCostCenterName
+        ).catch((err) => logger.error("Failed to notify finance after submit_expense", { traceId, expenseId, err: String(err) }));
+      }
       return { success: true, data: { expenseId, submitted: true } };
     }
 
@@ -1157,6 +1202,7 @@ async function executeFunctionCall(
       if (!expenseId) return { success: false, error: `Expense #${expenseIdInput} not found.` };
       const result = await finJoeData.approveExpense(expenseId, contactStudentId);
       if (!result) return { success: false, error: `Could not approve expense #${expenseIdInput}. It may not be pending.` };
+      const expenseCtx = { amount: result.amount, vendorName: result.vendorName, categoryName: result.categoryName, costCenterName: result.costCenterName };
       if (result.submittedByContactPhone) {
         const submitterEmail = await getSubmitterEmail(result.submittedByContactPhone, tenantId);
         notifySubmitterForApprovalRejection(
@@ -1166,10 +1212,11 @@ async function executeFunctionCall(
           tenantId,
           undefined,
           traceId,
-          submitterEmail
+          submitterEmail,
+          expenseCtx
         ).catch((err) => logger.error("Failed to notify submitter of approval", { traceId, expenseId, err: String(err) }));
       }
-      return { success: true, data: { expenseId, approved: true } };
+      return { success: true, data: { expenseId, approved: true, amount: result.amount, vendorName: result.vendorName, categoryName: result.categoryName, costCenterName: result.costCenterName } };
     }
 
     case "reject_expense": {
@@ -1183,6 +1230,7 @@ async function executeFunctionCall(
       const reason = String(args.reason ?? "Rejected via FinJoe");
       const result = await finJoeData.rejectExpense(expenseId, contactStudentId, reason);
       if (!result) return { success: false, error: `Could not reject expense #${expenseIdInput}. It may not be pending.` };
+      const rejectExpenseCtx = { amount: result.amount, vendorName: result.vendorName, categoryName: result.categoryName, costCenterName: result.costCenterName };
       if (result.submittedByContactPhone) {
         const submitterEmail = await getSubmitterEmail(result.submittedByContactPhone, tenantId);
         notifySubmitterForApprovalRejection(
@@ -1192,10 +1240,11 @@ async function executeFunctionCall(
           tenantId,
           reason,
           traceId,
-          submitterEmail
+          submitterEmail,
+          rejectExpenseCtx
         ).catch((err) => logger.error("Failed to notify submitter of rejection", { traceId, expenseId, err: String(err) }));
       }
-      return { success: true, data: { expenseId, rejected: true, reason } };
+      return { success: true, data: { expenseId, rejected: true, reason, amount: result.amount, vendorName: result.vendorName, categoryName: result.categoryName, costCenterName: result.costCenterName } };
     }
 
     case "approve_role_request": {
@@ -1205,15 +1254,21 @@ async function executeFunctionCall(
       if (!contactStudentId) return { success: false, error: "To approve role requests via WhatsApp, your contact must be linked to a user. Ask an admin to add you in FinJoe Contacts—they can link to your existing account or create one for you." };
       const requestId = String(args.requestId ?? "");
       const [reqRow] = await db
-        .select({ contactPhone: finJoeRoleChangeRequests.contactPhone, tenantId: finJoeRoleChangeRequests.tenantId })
+        .select({
+          contactPhone: finJoeRoleChangeRequests.contactPhone,
+          tenantId: finJoeRoleChangeRequests.tenantId,
+          requestedRole: finJoeRoleChangeRequests.requestedRole,
+          costCenterId: finJoeRoleChangeRequests.costCenterId,
+        })
         .from(finJoeRoleChangeRequests)
         .where(eq(finJoeRoleChangeRequests.id, requestId))
         .limit(1);
       const result = await finJoeData.approveRoleRequest(requestId, contactStudentId);
       if (!result) return { success: false, error: `Could not approve role request #${requestId}. It may not be pending.` };
       if (reqRow?.contactPhone && reqRow?.tenantId) {
+        const roleCampusName = reqRow.costCenterId ? (execCtx.campuses.find((c) => c.id === reqRow.costCenterId)?.name ?? null) : null;
         try {
-          await notifyRoleRequestRequester(reqRow.contactPhone, "approved", requestId, reqRow.tenantId, undefined, traceId);
+          await notifyRoleRequestRequester(reqRow.contactPhone, "approved", requestId, reqRow.tenantId, undefined, traceId, reqRow.requestedRole, roleCampusName);
         } catch (notifyErr) {
           logger.error("Failed to notify role request requester of approval", { traceId, requestId, err: String(notifyErr) });
         }
@@ -1229,15 +1284,21 @@ async function executeFunctionCall(
       const requestId = String(args.requestId ?? "");
       const reason = String(args.reason ?? "Rejected via FinJoe");
       const [reqRow] = await db
-        .select({ contactPhone: finJoeRoleChangeRequests.contactPhone, tenantId: finJoeRoleChangeRequests.tenantId })
+        .select({
+          contactPhone: finJoeRoleChangeRequests.contactPhone,
+          tenantId: finJoeRoleChangeRequests.tenantId,
+          requestedRole: finJoeRoleChangeRequests.requestedRole,
+          costCenterId: finJoeRoleChangeRequests.costCenterId,
+        })
         .from(finJoeRoleChangeRequests)
         .where(eq(finJoeRoleChangeRequests.id, requestId))
         .limit(1);
       const result = await finJoeData.rejectRoleRequest(requestId, contactStudentId, reason);
       if (!result) return { success: false, error: `Could not reject role request #${requestId}. It may not be pending.` };
       if (reqRow?.contactPhone && reqRow?.tenantId) {
+        const roleCampusName = reqRow.costCenterId ? (execCtx.campuses.find((c) => c.id === reqRow.costCenterId)?.name ?? null) : null;
         try {
-          await notifyRoleRequestRequester(reqRow.contactPhone, "rejected", requestId, reqRow.tenantId, reason, traceId);
+          await notifyRoleRequestRequester(reqRow.contactPhone, "rejected", requestId, reqRow.tenantId, reason, traceId, reqRow.requestedRole, roleCampusName);
         } catch (notifyErr) {
           logger.error("Failed to notify role request requester of rejection", { traceId, requestId, err: String(notifyErr) });
         }
@@ -1254,15 +1315,20 @@ async function executeFunctionCall(
       const expenseId = await finJoeData.resolveExpenseId(expenseIdInput);
       if (!expenseId) return { success: false, error: `Expense #${expenseIdInput} not found.` };
       const payoutMethod = String(args.payoutMethod ?? "bank_transfer").trim() || "bank_transfer";
+      const validPayoutMethods = ["bank_transfer", "upi", "cash", "cheque", "demand_draft"];
+      if (!validPayoutMethods.includes(payoutMethod)) {
+        return { success: false, error: `Invalid payout method "${payoutMethod}". Valid options: ${validPayoutMethods.join(", ")}` };
+      }
       const payoutRef = String(args.payoutRef ?? "marked via FinJoe WhatsApp").trim() || "marked via FinJoe WhatsApp";
       const result = await finJoeData.recordExpensePayout(expenseId, payoutMethod, payoutRef);
       if (!result) return { success: false, error: `Could not record payout for expense #${expenseIdInput}. It may not be approved.` };
+      const payoutCtx = { amount: result.amount, vendorName: result.vendorName, costCenterName: result.costCenterName, payoutMethod: result.actualPayoutMethod, payoutRef };
       try {
-        await notifySubmitterForPayoutFromExpense(expenseId, tenantId, traceId);
+        await notifySubmitterForPayoutFromExpense(expenseId, tenantId, traceId, payoutCtx);
       } catch (notifyErr) {
         logger.error("Failed to notify submitter of payout", { traceId, expenseId, err: String(notifyErr) });
       }
-      return { success: true, data: { expenseId, paid: true, payoutMethod, payoutRef } };
+      return { success: true, data: { expenseId, paid: true, payoutMethod, payoutRef, amount: result.amount, vendorName: result.vendorName, categoryName: result.categoryName, costCenterName: result.costCenterName } };
     }
 
     case "create_recurring_template": {
@@ -1414,7 +1480,9 @@ async function notifyFinanceForApproval(
   extracted: ExtractedExpense,
   tenantId: string,
   traceId?: string,
-  categoryName?: string | null
+  categoryName?: string | null,
+  submitterName?: string | null,
+  costCenterName?: string | null
 ) {
   const financeAndAdmin = await db
     .select()
@@ -1426,9 +1494,16 @@ async function notifyFinanceForApproval(
         or(eq(finJoeContacts.role, "finance"), eq(finJoeContacts.role, "admin"))
       )
     );
-  const lineItem = extracted.description || categoryName || extracted.vendorName;
   const shortId = toShortExpenseId(expenseId);
-  const msg = `New expense #${shortId} needs approval: ₹${extracted.amount?.toLocaleString("en-IN")}${lineItem ? ` - ${lineItem}` : ""}. Reply APPROVE ${shortId} or REJECT ${shortId} to act.`;
+  const amount = `₹${extracted.amount?.toLocaleString("en-IN")}`;
+  const parts: string[] = [`New expense #${shortId} needs approval: *${amount}*`];
+  if (categoryName) parts.push(`Category: ${categoryName}`);
+  if (extracted.vendorName) parts.push(`Vendor: ${extracted.vendorName}`);
+  if (extracted.description && extracted.description !== categoryName) parts.push(`Note: ${extracted.description}`);
+  if (costCenterName) parts.push(`Cost Center: ${costCenterName}`);
+  if (submitterName) parts.push(`Submitted by: ${submitterName}`);
+  parts.push(`Reply APPROVE ${shortId} or REJECT ${shortId} to act.`);
+  const msg = parts.join("\n");
   const templateConfig = await getExpenseApprovalTemplateConfig(
     expenseId,
     extracted.amount ?? 0,

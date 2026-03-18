@@ -28,6 +28,8 @@ export type ExtractedExpenseForNotification = {
   amount?: number;
   vendorName?: string | null;
   description?: string | null;
+  costCenterName?: string | null;
+  submitterName?: string | null;
 };
 
 /** Resolve submitter contact (phone and/or email) from expense for notifications. */
@@ -112,9 +114,16 @@ export async function notifyFinanceForApproval(
     logger.warn("No finance/admin contacts for tenant - skipping approval notification", { traceId, tenantId, expenseId });
     return;
   }
-  const lineItem = extracted.description || categoryName || extracted.vendorName;
   const shortId = toShortExpenseId(expenseId);
-  const msg = `New expense #${shortId} needs approval: ₹${(extracted.amount ?? 0).toLocaleString("en-IN")}${lineItem ? ` - ${lineItem}` : ""}. Reply APPROVE ${shortId} or REJECT ${shortId} to act.`;
+  const amount = `₹${(extracted.amount ?? 0).toLocaleString("en-IN")}`;
+  const parts: string[] = [`New expense #${shortId} needs approval: *${amount}*`];
+  if (categoryName) parts.push(`Category: ${categoryName}`);
+  if (extracted.vendorName) parts.push(`Vendor: ${extracted.vendorName}`);
+  if (extracted.description && extracted.description !== categoryName) parts.push(`Note: ${extracted.description}`);
+  if (extracted.costCenterName) parts.push(`Cost Center: ${extracted.costCenterName}`);
+  if (extracted.submitterName) parts.push(`Submitted by: ${extracted.submitterName}`);
+  parts.push(`Reply APPROVE ${shortId} or REJECT ${shortId} to act.`);
+  const msg = parts.join("\n");
   const templateConfig = await getExpenseApprovalTemplateConfig(
     expenseId,
     extracted.amount ?? 0,
@@ -139,7 +148,8 @@ export async function notifySubmitterForApprovalRejectionFromExpense(
   type: "approved" | "rejected",
   tenantId: string,
   reason?: string,
-  traceId?: string
+  traceId?: string,
+  expenseContext?: { amount?: number | null; vendorName?: string | null; categoryName?: string | null; costCenterName?: string | null }
 ): Promise<boolean> {
   const contact = await resolveSubmitterContact(expenseId, tenantId);
   const shortId = toShortExpenseId(expenseId);
@@ -153,7 +163,8 @@ export async function notifySubmitterForApprovalRejectionFromExpense(
       tenantId,
       truncatedReason,
       traceId,
-      contact.email ?? null
+      contact.email ?? null,
+      expenseContext ?? undefined
     );
   }
 
@@ -161,9 +172,18 @@ export async function notifySubmitterForApprovalRejectionFromExpense(
     const subject = type === "approved"
       ? `FinJoe: Expense #${shortId} approved`
       : `FinJoe: Expense #${shortId} rejected`;
-    const body = type === "approved"
-      ? `Good news! Your expense #${shortId} has been approved.`
-      : `Your expense #${shortId} has been rejected.${truncatedReason ? ` Reason: ${truncatedReason}` : ""}`;
+    const parts: string[] = [];
+    if (type === "approved") {
+      parts.push(`Good news! Your expense #${shortId} has been approved.`);
+    } else {
+      parts.push(`Your expense #${shortId} has been rejected.`);
+    }
+    if (expenseContext?.amount) parts.push(`Amount: ₹${expenseContext.amount.toLocaleString("en-IN")}`);
+    if (expenseContext?.categoryName) parts.push(`Category: ${expenseContext.categoryName}`);
+    if (expenseContext?.vendorName) parts.push(`Vendor: ${expenseContext.vendorName}`);
+    if (expenseContext?.costCenterName) parts.push(`Cost Center: ${expenseContext.costCenterName}`);
+    if (type === "rejected" && truncatedReason) parts.push(`Reason: ${truncatedReason}`);
+    const body = parts.join("\n");
     const html = `<p>${body.replace(/\n/g, "<br>")}</p>`;
     try {
       const sent = await sendFinJoeEmail(
@@ -195,18 +215,35 @@ export async function notifyRoleRequestRequester(
   requestId: string,
   tenantId: string,
   reason?: string,
-  traceId?: string
+  traceId?: string,
+  requestedRole?: string | null,
+  campusName?: string | null
 ): Promise<boolean> {
   const shortId = toShortUuid(requestId);
   const truncatedReason = reason && reason.length > REASON_MAX_LENGTH ? reason.slice(0, REASON_MAX_LENGTH) + "…" : reason;
+  const roleLabel = requestedRole ? requestedRole.replace(/_/g, " ") : null;
   if (type === "approved") {
-    const msg = `Good news! Your role change request #${shortId} has been approved. You can now use FinJoe with your new role.`;
-    return sendWith24hRouting(contactPhone, msg, null, traceId, tenantId, { critical: true });
+    const parts: string[] = [`Good news! Your role change request #${shortId} has been approved.`];
+    if (roleLabel) parts.push(`Role: ${roleLabel}`);
+    if (campusName) parts.push(`Campus: ${campusName}`);
+    parts.push("You can now use FinJoe with your new role.");
+    return sendWith24hRouting(contactPhone, parts.join("\n"), null, traceId, tenantId, { critical: true });
   } else {
-    const msg = `Your role change request #${shortId} has been rejected.${truncatedReason ? ` Reason: ${truncatedReason}` : ""}`;
-    return sendWith24hRouting(contactPhone, msg, null, traceId, tenantId, { critical: true });
+    const parts: string[] = [`Your role change request #${shortId} has been rejected.`];
+    if (roleLabel) parts.push(`Requested role: ${roleLabel}`);
+    if (campusName) parts.push(`Campus: ${campusName}`);
+    if (truncatedReason) parts.push(`Reason: ${truncatedReason}`);
+    return sendWith24hRouting(contactPhone, parts.join("\n"), null, traceId, tenantId, { critical: true });
   }
 }
+
+export type PayoutNotificationContext = {
+  amount?: number | null;
+  vendorName?: string | null;
+  costCenterName?: string | null;
+  payoutMethod?: string | null;
+  payoutRef?: string | null;
+};
 
 /** Notify submitter when expense is marked as paid (payout). */
 export async function notifySubmitterForPayout(
@@ -214,10 +251,17 @@ export async function notifySubmitterForPayout(
   expenseId: string,
   tenantId: string,
   traceId?: string,
-  submitterEmail?: string | null
+  submitterEmail?: string | null,
+  payoutContext?: PayoutNotificationContext
 ): Promise<boolean> {
   const shortId = toShortExpenseId(expenseId);
-  const msg = `Your expense #${shortId} has been marked as paid.`;
+  const parts: string[] = [`Your expense #${shortId} has been marked as paid.`];
+  if (payoutContext?.amount) parts.push(`Amount: ₹${payoutContext.amount.toLocaleString("en-IN")}`);
+  if (payoutContext?.vendorName) parts.push(`Vendor: ${payoutContext.vendorName}`);
+  if (payoutContext?.costCenterName) parts.push(`Cost Center: ${payoutContext.costCenterName}`);
+  if (payoutContext?.payoutMethod) parts.push(`Method: ${payoutContext.payoutMethod.replace(/_/g, " ")}`);
+  if (payoutContext?.payoutRef && payoutContext.payoutRef !== "marked via FinJoe WhatsApp") parts.push(`Reference: ${payoutContext.payoutRef}`);
+  const msg = parts.join("\n");
   return sendWith24hRouting(to, msg, null, traceId, tenantId, {
     critical: true,
     submitterEmail,
@@ -228,19 +272,24 @@ export async function notifySubmitterForPayout(
 export async function notifySubmitterForPayoutFromExpense(
   expenseId: string,
   tenantId: string,
-  traceId?: string
+  traceId?: string,
+  payoutContext?: PayoutNotificationContext
 ): Promise<boolean> {
   const contact = await resolveSubmitterContact(expenseId, tenantId);
   const shortId = toShortExpenseId(expenseId);
 
   if (contact.phone) {
-    return notifySubmitterForPayout(contact.phone, expenseId, tenantId, traceId, contact.email ?? null);
+    return notifySubmitterForPayout(contact.phone, expenseId, tenantId, traceId, contact.email ?? null, payoutContext);
   }
 
   if (contact.email) {
     const subject = `FinJoe: Expense #${shortId} marked as paid`;
-    const body = `Your expense #${shortId} has been marked as paid.`;
-    const html = `<p>${body}</p>`;
+    const parts: string[] = [`Your expense #${shortId} has been marked as paid.`];
+    if (payoutContext?.amount) parts.push(`Amount: ₹${payoutContext.amount.toLocaleString("en-IN")}`);
+    if (payoutContext?.vendorName) parts.push(`Vendor: ${payoutContext.vendorName}`);
+    if (payoutContext?.payoutMethod) parts.push(`Method: ${payoutContext.payoutMethod.replace(/_/g, " ")}`);
+    const body = parts.join("\n");
+    const html = `<p>${body.replace(/\n/g, "<br>")}</p>`;
     try {
       const sent = await sendFinJoeEmail(
         [contact.email],

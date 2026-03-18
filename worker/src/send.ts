@@ -231,6 +231,13 @@ export async function sendReEngagementIfNeeded(to: string, tenantId: string, tra
   }
 }
 
+export type ExpenseNotificationContext = {
+  amount?: number | null;
+  vendorName?: string | null;
+  categoryName?: string | null;
+  costCenterName?: string | null;
+};
+
 /** Notify submitter when expense is approved or rejected (24h routing: free-form vs template, SMS fallback, email if available) */
 export async function notifySubmitterForApprovalRejection(
   to: string,
@@ -239,17 +246,31 @@ export async function notifySubmitterForApprovalRejection(
   tenantId: string,
   reason?: string,
   traceId?: string,
-  submitterEmail?: string | null
+  submitterEmail?: string | null,
+  expenseContext?: ExpenseNotificationContext
 ): Promise<boolean> {
+  const shortId = toShortExpenseId(expenseId);
+
   if (type === "approved") {
-    const freeForm = `Good news! Your expense #${toShortExpenseId(expenseId)} has been approved.`;
+    const parts: string[] = [`Good news! Your expense #${shortId} has been approved.`];
+    if (expenseContext?.amount) parts.push(`Amount: ₹${expenseContext.amount.toLocaleString("en-IN")}`);
+    if (expenseContext?.categoryName) parts.push(`Category: ${expenseContext.categoryName}`);
+    if (expenseContext?.vendorName) parts.push(`Vendor: ${expenseContext.vendorName}`);
+    if (expenseContext?.costCenterName) parts.push(`Cost Center: ${expenseContext.costCenterName}`);
+    const freeForm = parts.join("\n");
     const templateConfig = await getExpenseApprovedTemplateConfig(expenseId, tenantId);
     return sendWith24hRouting(to, freeForm, templateConfig, traceId, tenantId, {
       critical: true,
       submitterEmail,
     });
   } else {
-    const freeForm = `Your expense #${toShortExpenseId(expenseId)} has been rejected. Reason: ${reason || "Not provided"}`;
+    const parts: string[] = [`Your expense #${shortId} has been rejected.`];
+    if (expenseContext?.amount) parts.push(`Amount: ₹${expenseContext.amount.toLocaleString("en-IN")}`);
+    if (expenseContext?.categoryName) parts.push(`Category: ${expenseContext.categoryName}`);
+    if (expenseContext?.vendorName) parts.push(`Vendor: ${expenseContext.vendorName}`);
+    if (expenseContext?.costCenterName) parts.push(`Cost Center: ${expenseContext.costCenterName}`);
+    parts.push(`Reason: ${reason || "Not provided"}`);
+    const freeForm = parts.join("\n");
     const templateConfig = await getExpenseRejectedTemplateConfig(expenseId, reason || "", tenantId);
     return sendWith24hRouting(to, freeForm, templateConfig, traceId, tenantId, {
       critical: true,

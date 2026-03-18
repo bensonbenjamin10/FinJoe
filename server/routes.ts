@@ -3382,13 +3382,14 @@ export async function registerRoutes(app: Express) {
       const tid = tenantId ?? req.body?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
       const whereClause = and(eq(expenses.id, req.params.id), eq(expenses.tenantId, tid));
-      const [existing] = await db.select({ status: expenses.status }).from(expenses).where(whereClause).limit(1);
+      const [existing] = await db.select({ status: expenses.status, amount: expenses.amount, vendorName: expenses.vendorName, categoryName: expenseCategories.name, costCenterName: costCenters.name }).from(expenses).leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id)).leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id)).where(whereClause).limit(1);
       if (!existing) return res.status(404).json({ error: "Not found" });
       if (existing.status !== "pending_approval") return res.status(400).json({ error: "Only pending expenses can be approved" });
       const [updated] = await db.update(expenses).set({ status: "approved", approvedAt: new Date(), approvedById: (req.user as any).id, rejectionReason: null, updatedAt: new Date() }).where(whereClause).returning();
       if (!updated) return res.status(404).json({ error: "Not found" });
+      const expCtx = { amount: existing.amount, vendorName: existing.vendorName, categoryName: existing.categoryName, costCenterName: existing.costCenterName };
       try {
-        await notifySubmitterForApprovalRejectionFromExpense(updated.id, "approved", tid, undefined, req.requestId);
+        await notifySubmitterForApprovalRejectionFromExpense(updated.id, "approved", tid, undefined, req.requestId, expCtx);
       } catch (notifyErr) {
         logger.error("Failed to notify submitter for approval", { requestId: req.requestId, err: String(notifyErr) });
       }
@@ -3408,13 +3409,14 @@ export async function registerRoutes(app: Express) {
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
       const { reason } = req.body;
       const whereClause = and(eq(expenses.id, req.params.id), eq(expenses.tenantId, tid));
-      const [existing] = await db.select({ status: expenses.status }).from(expenses).where(whereClause).limit(1);
+      const [existing] = await db.select({ status: expenses.status, amount: expenses.amount, vendorName: expenses.vendorName, categoryName: expenseCategories.name, costCenterName: costCenters.name }).from(expenses).leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id)).leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id)).where(whereClause).limit(1);
       if (!existing) return res.status(404).json({ error: "Not found" });
       if (existing.status !== "pending_approval") return res.status(400).json({ error: "Only pending expenses can be rejected" });
       const [updated] = await db.update(expenses).set({ status: "rejected", rejectionReason: reason || null, updatedAt: new Date() }).where(whereClause).returning();
       if (!updated) return res.status(404).json({ error: "Not found" });
+      const expCtx = { amount: existing.amount, vendorName: existing.vendorName, categoryName: existing.categoryName, costCenterName: existing.costCenterName };
       try {
-        await notifySubmitterForApprovalRejectionFromExpense(updated.id, "rejected", tid, reason, req.requestId);
+        await notifySubmitterForApprovalRejectionFromExpense(updated.id, "rejected", tid, reason, req.requestId, expCtx);
       } catch (notifyErr) {
         logger.error("Failed to notify submitter for rejection", { requestId: req.requestId, err: String(notifyErr) });
       }
@@ -3434,13 +3436,14 @@ export async function registerRoutes(app: Express) {
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
       const { payoutMethod, payoutRef } = req.body;
       const whereClause = and(eq(expenses.id, req.params.id), eq(expenses.tenantId, tid));
-      const [existing] = await db.select({ status: expenses.status }).from(expenses).where(whereClause).limit(1);
+      const [existing] = await db.select({ status: expenses.status, amount: expenses.amount, vendorName: expenses.vendorName, costCenterName: costCenters.name }).from(expenses).leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id)).where(whereClause).limit(1);
       if (!existing) return res.status(404).json({ error: "Not found" });
       if (existing.status !== "approved") return res.status(400).json({ error: "Only approved expenses can be marked as paid" });
       const [updated] = await db.update(expenses).set({ status: "paid", payoutMethod: payoutMethod || null, payoutRef: payoutRef || null, payoutAt: new Date(), updatedAt: new Date() }).where(whereClause).returning();
       if (!updated) return res.status(404).json({ error: "Not found" });
+      const payCtx = { amount: existing.amount, vendorName: existing.vendorName, costCenterName: existing.costCenterName, payoutMethod, payoutRef };
       try {
-        await notifySubmitterForPayoutFromExpense(updated.id, tid, req.requestId);
+        await notifySubmitterForPayoutFromExpense(updated.id, tid, req.requestId, payCtx);
       } catch (notifyErr) {
         logger.error("Failed to notify submitter for payout", { requestId: req.requestId, err: String(notifyErr) });
       }

@@ -495,6 +495,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           id: expenses.id,
           amount: expenses.amount,
           status: expenses.status,
+          expenseDate: expenses.expenseDate,
           vendorName: expenses.vendorName,
           invoiceNumber: expenses.invoiceNumber,
           description: expenses.description,
@@ -564,7 +565,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       const whereClause = conditions.join(" AND ");
       try {
         const query = `
-          SELECT e.id, e.amount, e.status, e.vendor_name, e.invoice_number, e.description,
+          SELECT e.id, e.amount, e.status, e.expense_date, e.vendor_name, e.invoice_number, e.description,
             c.name as cost_center_name, ec.name as category_name
           FROM expenses e
           LEFT JOIN cost_centers c ON e.cost_center_id = c.id
@@ -577,6 +578,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         const rawRows = result?.rows ?? [];
         return rawRows.map((r: Record<string, unknown>) => ({
           ...r,
+          expenseDate: r.expense_date,
           campusName: r.cost_center_name,
           costCenterName: r.cost_center_name,
           categoryName: r.category_name,
@@ -728,10 +730,28 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       return updated ?? null;
     },
 
-    async approveExpense(id: string, approvedById: string): Promise<{ id: string; submittedByContactPhone?: string | null } | null> {
+    async approveExpense(id: string, approvedById: string): Promise<{
+      id: string;
+      submittedByContactPhone?: string | null;
+      amount?: number | null;
+      vendorName?: string | null;
+      description?: string | null;
+      costCenterName?: string | null;
+      categoryName?: string | null;
+    } | null> {
       const [existing] = await db
-        .select({ status: expenses.status, submittedByContactPhone: expenses.submittedByContactPhone })
+        .select({
+          status: expenses.status,
+          submittedByContactPhone: expenses.submittedByContactPhone,
+          amount: expenses.amount,
+          vendorName: expenses.vendorName,
+          description: expenses.description,
+          costCenterName: costCenters.name,
+          categoryName: expenseCategories.name,
+        })
         .from(expenses)
+        .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
+        .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
         .where(eq(expenses.id, id))
         .limit(1);
       if (!existing) return null;
@@ -747,13 +767,39 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         })
         .where(eq(expenses.id, id))
         .returning({ id: expenses.id });
-      return updated ? { ...updated, submittedByContactPhone: existing.submittedByContactPhone } : null;
+      return updated ? {
+        ...updated,
+        submittedByContactPhone: existing.submittedByContactPhone,
+        amount: existing.amount,
+        vendorName: existing.vendorName,
+        description: existing.description,
+        costCenterName: existing.costCenterName,
+        categoryName: existing.categoryName,
+      } : null;
     },
 
-    async rejectExpense(id: string, approvedById: string, reason: string): Promise<{ id: string; submittedByContactPhone?: string | null } | null> {
+    async rejectExpense(id: string, approvedById: string, reason: string): Promise<{
+      id: string;
+      submittedByContactPhone?: string | null;
+      amount?: number | null;
+      vendorName?: string | null;
+      description?: string | null;
+      costCenterName?: string | null;
+      categoryName?: string | null;
+    } | null> {
       const [existing] = await db
-        .select({ status: expenses.status, submittedByContactPhone: expenses.submittedByContactPhone })
+        .select({
+          status: expenses.status,
+          submittedByContactPhone: expenses.submittedByContactPhone,
+          amount: expenses.amount,
+          vendorName: expenses.vendorName,
+          description: expenses.description,
+          costCenterName: costCenters.name,
+          categoryName: expenseCategories.name,
+        })
         .from(expenses)
+        .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
+        .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
         .where(eq(expenses.id, id))
         .limit(1);
       if (!existing) return null;
@@ -770,19 +816,46 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         })
         .where(eq(expenses.id, id))
         .returning({ id: expenses.id });
-      return updated ? { ...updated, submittedByContactPhone: existing.submittedByContactPhone } : null;
+      return updated ? {
+        ...updated,
+        submittedByContactPhone: existing.submittedByContactPhone,
+        amount: existing.amount,
+        vendorName: existing.vendorName,
+        description: existing.description,
+        costCenterName: existing.costCenterName,
+        categoryName: existing.categoryName,
+      } : null;
     },
 
     async recordExpensePayout(
       id: string,
       payoutMethod: string,
       payoutRef: string
-    ): Promise<{ id: string } | null> {
+    ): Promise<{
+      id: string;
+      amount?: number | null;
+      vendorName?: string | null;
+      costCenterName?: string | null;
+      categoryName?: string | null;
+      submittedByContactPhone?: string | null;
+      actualPayoutMethod?: string;
+    } | null> {
       const validMethods = ["bank_transfer", "upi", "cash", "cheque", "demand_draft"];
-      const method = validMethods.includes(payoutMethod) ? payoutMethod : "bank_transfer";
+      if (!validMethods.includes(payoutMethod)) {
+        return null;
+      }
       const [existing] = await db
-        .select({ status: expenses.status })
+        .select({
+          status: expenses.status,
+          amount: expenses.amount,
+          vendorName: expenses.vendorName,
+          submittedByContactPhone: expenses.submittedByContactPhone,
+          costCenterName: costCenters.name,
+          categoryName: expenseCategories.name,
+        })
         .from(expenses)
+        .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
+        .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
         .where(eq(expenses.id, id))
         .limit(1);
       if (!existing) return null;
@@ -792,14 +865,22 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         .update(expenses)
         .set({
           status: "paid",
-          payoutMethod: method,
+          payoutMethod,
           payoutRef: payoutRef || "marked via FinJoe WhatsApp",
           payoutAt: new Date(),
           updatedAt: new Date(),
         })
         .where(eq(expenses.id, id))
         .returning({ id: expenses.id });
-      return updated ?? null;
+      return updated ? {
+        ...updated,
+        amount: existing.amount,
+        vendorName: existing.vendorName,
+        costCenterName: existing.costCenterName,
+        categoryName: existing.categoryName,
+        submittedByContactPhone: existing.submittedByContactPhone,
+        actualPayoutMethod: payoutMethod,
+      } : null;
     },
 
     async createIncome(data: {

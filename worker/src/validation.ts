@@ -22,6 +22,13 @@ export type ExpenseData = {
 
 const VALID_TAX_TYPES = ["no_gst", "gst_itc", "gst_rcm", "gst_no_itc"];
 
+const TAX_TYPE_LABELS: Record<string, string> = {
+  no_gst: "No GST (unregistered vendor)",
+  gst_itc: "GST with Input Tax Credit",
+  gst_rcm: "GST Reverse Charge",
+  gst_no_itc: "GST without ITC",
+};
+
 /** Validate expense data before creating/updating in DB */
 export function validateExpenseData(
   data: ExpenseData,
@@ -53,19 +60,23 @@ export function validateExpenseData(
     errors.push("GSTIN must be 15 characters if provided");
   }
   if (data.taxType && !VALID_TAX_TYPES.includes(data.taxType)) {
-    errors.push(`Tax type must be one of: ${VALID_TAX_TYPES.join(", ")}`);
+    const labels = VALID_TAX_TYPES.map((t) => `${t} (${TAX_TYPE_LABELS[t]})`).join(", ");
+    errors.push(`Tax type must be one of: ${labels}`);
   }
 
-  // Audit enforcement: for amounts above threshold, require invoiceNumber, invoiceDate, vendorName
   if (
     requireAuditFieldsAboveAmount != null &&
     requireAuditFieldsAboveAmount > 0 &&
     data.amount != null &&
     data.amount >= requireAuditFieldsAboveAmount
   ) {
-    if (!data.invoiceNumber?.trim()) errors.push("Invoice number is required for expenses above ₹" + requireAuditFieldsAboveAmount.toLocaleString("en-IN"));
-    if (!data.invoiceDate?.trim()) errors.push("Invoice date is required for expenses above ₹" + requireAuditFieldsAboveAmount.toLocaleString("en-IN"));
-    if (!data.vendorName?.trim()) errors.push("Vendor name is required for expenses above ₹" + requireAuditFieldsAboveAmount.toLocaleString("en-IN"));
+    const missingAuditFields: string[] = [];
+    if (!data.invoiceNumber?.trim()) missingAuditFields.push("invoice number");
+    if (!data.invoiceDate?.trim()) missingAuditFields.push("invoice date");
+    if (!data.vendorName?.trim()) missingAuditFields.push("vendor name");
+    if (missingAuditFields.length > 0) {
+      errors.push(`For expenses above ₹${requireAuditFieldsAboveAmount.toLocaleString("en-IN")}, ${missingAuditFields.join(", ")} ${missingAuditFields.length === 1 ? "is" : "are"} required`);
+    }
   }
 
   return {
