@@ -24,6 +24,7 @@ export interface MISLineItem {
 
 export interface MISDrilldownItem {
   label: string;
+  slug: string;
   values: number[];
   fyTotal: number;
 }
@@ -103,8 +104,8 @@ function fyMonths(fyStartYear: number): { labels: string[]; starts: Date[]; ends
 }
 
 function monthIndex(date: Date, fyStartYear: number): number {
-  const m = date.getMonth(); // 0-based
-  const y = date.getFullYear();
+  const m = date.getUTCMonth();
+  const y = date.getUTCFullYear();
   if (m >= 3) {
     return y === fyStartYear ? m - 3 : -1;
   } else {
@@ -399,11 +400,11 @@ export async function getMISReport(tenantId: string, fy: string): Promise<MISRep
 
   // ── Build P&L ──
 
-  // Revenue offline = all income except medico
+  // Revenue excludes "Other Income" (it's added separately before EBITDA)
   const revenueMedicoVals = incomeBySlug.get("medico_revenue") ?? emptyValues();
-  const revenueOfflineVals = subtractArrays(totalIncomeVals, revenueMedicoVals);
-
-  const totalRevenueVals = totalIncomeVals;
+  const otherIncomeVals = incomeBySlug.get("other_income") ?? emptyValues();
+  const totalRevenueVals = subtractArrays(totalIncomeVals, otherIncomeVals);
+  const revenueOfflineVals = subtractArrays(totalRevenueVals, revenueMedicoVals);
 
   // Direct Expenses
   const directExpenseItems: MISLineItem[] = [];
@@ -421,8 +422,7 @@ export async function getMISReport(tenantId: string, fy: string): Promise<MISRep
   const grossProfitVals = subtractArrays(totalRevenueVals, totalDirectVals);
   const grossProfitPctVals = pctArray(grossProfitVals, totalRevenueVals);
 
-  // Other Income
-  const otherIncomeSlug = incomeBySlug.get("other_income") ?? emptyValues();
+  // Other Income (already computed above as otherIncomeVals)
 
   // Indirect Expenses
   const indirectExpenseItems: MISLineItem[] = [];
@@ -442,12 +442,16 @@ export async function getMISReport(tenantId: string, fy: string): Promise<MISRep
 
   // EBITDA
   const ebitdaVals = subtractArrays(
-    addArrays(grossProfitVals, otherIncomeSlug),
+    addArrays(grossProfitVals, otherIncomeVals),
     totalIndirectVals
   );
   const ebitdaPctVals = pctArray(ebitdaVals, totalRevenueVals);
 
   // ── Build Drill-downs ──
+
+  function toSlug(label: string): string {
+    return label.toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, "_").slice(0, 60);
+  }
 
   function buildDrilldown(
     source: Map<string, number[]>,
@@ -457,7 +461,7 @@ export async function getMISReport(tenantId: string, fy: string): Promise<MISRep
     const allVals = emptyValues();
     for (const [label, vals] of source) {
       if (sumValues(vals) !== 0) {
-        items.push({ label, values: vals, fyTotal: sumValues(vals) });
+        items.push({ label, slug: toSlug(label), values: vals, fyTotal: sumValues(vals) });
         for (let i = 0; i < 12; i++) allVals[i] += vals[i];
       }
     }
@@ -517,7 +521,7 @@ export async function getMISReport(tenantId: string, fy: string): Promise<MISRep
       totalDirectExpenses: makeLine("Total Direct Expenses", totalDirectVals),
       grossProfit: makeLine("Gross Profit", grossProfitVals),
       grossProfitPct: grossProfitPctVals,
-      otherIncome: makeLine("Other Income", otherIncomeSlug),
+      otherIncome: makeLine("Other Income", otherIncomeVals),
       indirectExpenses: indirectExpenseItems,
       totalIndirectExpenses: makeLine("Total Indirect Expenses", totalIndirectVals),
       ebitda: makeLine("EBITDA", ebitdaVals),

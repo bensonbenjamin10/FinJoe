@@ -2034,7 +2034,9 @@ export async function registerRoutes(app: Express) {
       const categorySlug = (req.query?.categorySlug as string) ?? "";
       const monthIdx = parseInt((req.query?.monthIdx as string) ?? "0", 10);
       if (!/^\d{4}-\d{2}$/.test(fy)) return res.status(400).json({ error: "fy must be YYYY-YY format" });
+      if (type !== "expense" && type !== "income") return res.status(400).json({ error: "type must be expense or income" });
       if (!categorySlug) return res.status(400).json({ error: "categorySlug required" });
+      if (isNaN(monthIdx) || monthIdx < 0 || monthIdx > 11) return res.status(400).json({ error: "monthIdx must be 0-11" });
       const rows = await getMISCellTransactions(tid, fy, type as "expense" | "income", categorySlug, monthIdx);
       res.json(rows);
     } catch (e) {

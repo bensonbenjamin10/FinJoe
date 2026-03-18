@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { TrendingUp, TrendingDown, Minus } from "lucide-react";
@@ -14,6 +15,7 @@ interface StatSparkCardProps {
 }
 
 function MiniSparkline({ data, color }: { data: number[]; color: string }) {
+  const gradId = useId().replace(/:/g, "");
   if (!data.length) return null;
   const max = Math.max(...data);
   const min = Math.min(...data);
@@ -26,18 +28,17 @@ function MiniSparkline({ data, color }: { data: number[]; color: string }) {
     const y = h - ((v - min) / range) * (h - 4) - 2;
     return `${x},${y}`;
   });
-  const pathD = `M ${points.join(" L ")}`;
   const fillPoints = [...points, `${w},${h}`, `0,${h}`].join(" ");
 
   return (
     <svg width={w} height={h} className="shrink-0">
       <defs>
-        <linearGradient id={`spark-grad-${color}`} x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id={`spark-${gradId}`} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={color} stopOpacity={0.3} />
           <stop offset="100%" stopColor={color} stopOpacity={0.02} />
         </linearGradient>
       </defs>
-      <polygon points={fillPoints} fill={`url(#spark-grad-${color})`} />
+      <polygon points={fillPoints} fill={`url(#spark-${gradId})`} />
       <polyline
         points={points.join(" ")}
         fill="none"

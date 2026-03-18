@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AlertCircle } from "lucide-react";
 import { format } from "date-fns";
 
 interface CellDrilldownProps {
@@ -26,6 +27,7 @@ interface CellDrilldownProps {
   monthIdx: number;
   monthLabel: string;
   label: string;
+  tenantId?: string | null;
 }
 
 interface Transaction {
@@ -55,9 +57,10 @@ export function CellDrilldown({
   monthIdx,
   monthLabel,
   label,
+  tenantId,
 }: CellDrilldownProps) {
-  const { data: transactions, isLoading } = useQuery<Transaction[]>({
-    queryKey: ["/api/admin/mis/transactions", fy, type, categorySlug, monthIdx],
+  const { data: transactions, isLoading, error } = useQuery<Transaction[]>({
+    queryKey: ["/api/admin/mis/transactions", fy, type, categorySlug, monthIdx, tenantId],
     queryFn: async () => {
       const params = new URLSearchParams({
         fy,
@@ -65,6 +68,7 @@ export function CellDrilldown({
         categorySlug,
         monthIdx: String(monthIdx),
       });
+      if (tenantId) params.set("tenantId", tenantId);
       const res = await fetch(`/api/admin/mis/transactions?${params}`);
       if (!res.ok) throw new Error("Failed to fetch transactions");
       return res.json();
@@ -91,6 +95,11 @@ export function CellDrilldown({
               {Array.from({ length: 5 }).map((_, i) => (
                 <Skeleton key={i} className="h-10 w-full" />
               ))}
+            </div>
+          ) : error ? (
+            <div className="py-12 text-center">
+              <AlertCircle className="h-8 w-8 text-destructive/60 mx-auto mb-2" />
+              <p className="text-sm text-destructive">Failed to load transactions. Please try again.</p>
             </div>
           ) : !transactions?.length ? (
             <div className="py-12 text-center text-muted-foreground">

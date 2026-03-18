@@ -1,6 +1,7 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useId } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "wouter";
+import { useAuth } from "@/hooks/use-auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -50,6 +51,7 @@ import { cn } from "@/lib/utils";
 
 interface MISLineItem {
   label: string;
+  slug?: string;
   values: number[];
   fyTotal: number;
 }
@@ -132,6 +134,11 @@ function formatCurrency(n: number): string {
 
 export default function AdminReports() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
+  const urlTenantId = searchParams.get("tenantId");
+  const tenantId = isSuperAdmin ? (urlTenantId || user?.tenantId || null) : (user?.tenantId ?? null);
+
   const [fy, setFY] = useState(searchParams.get("fy") || getCurrentFY());
   const [view, setView] = useState<ViewMode>((searchParams.get("view") as ViewMode) || "overview");
   const [drilldownType, setDrilldownType] = useState<DrilldownType>("marketing");
@@ -147,13 +154,16 @@ export default function AdminReports() {
     label: string;
   } | null>(null);
 
+  const tenantParam = tenantId ? `&tenantId=${tenantId}` : "";
+
   const { data: report, isLoading, error } = useQuery<MISReport>({
-    queryKey: ["/api/admin/mis/report", fy],
+    queryKey: ["/api/admin/mis/report", fy, tenantId],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/mis/report?fy=${fy}`);
+      const res = await fetch(`/api/admin/mis/report?fy=${fy}${tenantParam}`);
       if (!res.ok) throw new Error("Failed to fetch MIS report");
       return res.json();
     },
+    enabled: !isSuperAdmin || !!tenantId,
   });
 
   const handleFYChange = useCallback((newFy: string) => {
@@ -167,7 +177,16 @@ export default function AdminReports() {
 
   const handleViewChange = useCallback((newView: ViewMode) => {
     setView(newView);
-  }, []);
+    setSearchParams((p) => {
+      const next = new URLSearchParams(p);
+      if (newView === "overview") {
+        next.delete("view");
+      } else {
+        next.set("view", newView);
+      }
+      return `?${next}`;
+    });
+  }, [setSearchParams]);
 
   const handleCellClick = useCallback(
     (row: MISRow, monthIdx: number) => {
@@ -185,12 +204,22 @@ export default function AdminReports() {
   );
 
   const handleExport = useCallback(async () => {
-    const url = `/api/admin/mis/export?fy=${fy}`;
+    const url = `/api/admin/mis/export?fy=${fy}${tenantParam}`;
     const a = document.createElement("a");
     a.href = url;
     a.download = `MIS_${fy}.xlsx`;
     a.click();
-  }, [fy]);
+  }, [fy, tenantParam]);
+
+  if (isSuperAdmin && !tenantId) {
+    return (
+      <div className="p-12 text-center">
+        <FileSpreadsheet className="h-12 w-12 text-muted-foreground/40 mx-auto mb-4" />
+        <h2 className="text-lg font-semibold text-foreground mb-1">Select a tenant</h2>
+        <p className="text-sm text-muted-foreground">Choose a tenant from the sidebar to view MIS reports.</p>
+      </div>
+    );
+  }
 
   if (error) {
     return (
@@ -281,6 +310,7 @@ export default function AdminReports() {
           monthIdx={drilldownInfo.monthIdx}
           monthLabel={drilldownInfo.monthLabel}
           label={drilldownInfo.label}
+          tenantId={tenantId}
         />
       )}
     </div>
@@ -521,45 +551,47 @@ function OverviewView({ report, onNavigate }: { report: MISReport; onNavigate: (
           </h3>
 
           {/* Expense Pie */}
-          <Card>
-            <CardHeader className="pb-1">
-              <CardTitle className="text-sm font-medium">Indirect Expenses Breakdown</CardTitle>
-            </CardHeader>
-            <CardContent className="pb-4">
-              <div className="h-[160px] flex items-center">
-                <ResponsiveContainer width="50%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={expensePieData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={35}
-                      outerRadius={60}
-                      dataKey="value"
-                      stroke="none"
-                    >
-                      {expensePieData.map((_, i) => (
-                        <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(v: number) => formatCurrency(v)} />
-                  </PieChart>
-                </ResponsiveContainer>
-                <div className="flex-1 space-y-1.5 pl-2 overflow-hidden">
-                  {expensePieData.slice(0, 5).map((d, i) => (
-                    <div key={i} className="flex items-center gap-2 text-xs">
-                      <div
-                        className="h-2.5 w-2.5 rounded-sm shrink-0"
-                        style={{ backgroundColor: d.fill }}
-                      />
-                      <span className="truncate text-muted-foreground">{d.name}</span>
-                      <span className="ml-auto font-medium tabular-nums">{formatLakh(d.value)}</span>
-                    </div>
-                  ))}
+          {expensePieData.length > 0 && (
+            <Card>
+              <CardHeader className="pb-1">
+                <CardTitle className="text-sm font-medium">Indirect Expenses Breakdown</CardTitle>
+              </CardHeader>
+              <CardContent className="pb-4">
+                <div className="h-[160px] flex items-center">
+                  <ResponsiveContainer width="50%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={expensePieData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={35}
+                        outerRadius={60}
+                        dataKey="value"
+                        stroke="none"
+                      >
+                        {expensePieData.map((_, i) => (
+                          <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(v: number) => formatCurrency(v)} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="flex-1 space-y-1.5 pl-2 overflow-hidden">
+                    {expensePieData.slice(0, 5).map((d, i) => (
+                      <div key={i} className="flex items-center gap-2 text-xs">
+                        <div
+                          className="h-2.5 w-2.5 rounded-sm shrink-0"
+                          style={{ backgroundColor: d.fill }}
+                        />
+                        <span className="truncate text-muted-foreground">{d.name}</span>
+                        <span className="ml-auto font-medium tabular-nums">{formatLakh(d.value)}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Revenue by Center Bar */}
           {revCenterData.length > 0 && (
@@ -950,7 +982,7 @@ function ExpenseView({
 
     for (const item of selected.items) {
       r.push(row(item.label, item.values, "data", {
-        categorySlug: slugFromLabel(item.label),
+        categorySlug: item.slug ?? slugFromLabel(item.label),
         transactionType: "expense",
       }));
     }
@@ -1026,7 +1058,40 @@ function ExpenseView({
 
 // ── Helpers ──
 
+// Slug mapping for well-known cashflow/P&L line items
+const LABEL_TO_SLUG: Record<string, string> = {
+  "Medico-Revenue": "medico_revenue",
+  "Academic Income (Including Crash Batch)": "academic_income",
+  "Hostel Income (Including Electricity Charges)": "hostel_income",
+  "Security Deposit Collected": "security_deposit_collected",
+  "Revenue Sharing Income (TIPS)": "revenue_sharing_tips",
+  "Reading Room": "reading_room",
+  "Study Material": "study_material",
+  "Other Income": "other_income",
+  "Rent Expenses": "rent_expenses",
+  "Faculty Payments (Including Medico)": "faculty_payments",
+  "Operating Expenses (Opex)": "operating_expenses",
+  "Employee Benefit Expenses (Salary)": "employee_benefit_expenses",
+  "Advertising Expenses": "advertising_expenses",
+  "Food Expenses (Mess Bill)": "food_expenses_mess_bill",
+  "Commission Charges": "commission_charges",
+  "Security Deposit Refund (SD Refund)": "security_deposit_refund",
+  "Electricity Charges": "electricity_charges",
+  "Bank Charges": "bank_charges",
+  "Income Tax & GST Payment": "income_tax_gst_payment",
+  "Legal Fee": "legal_fee",
+  "TDS Payment": "tds_payment",
+  "Capital Expenditures (Capex)": "capital_expenditures",
+  "Rent Deposit Paid": "rent_deposit_paid",
+  "Rent Deposit Refund": "rent_deposit_refund",
+  "Payroll Expenses": "employee_benefit_expenses",
+  "Marketing Expenses": "advertising_expenses",
+  "Food Expenses": "food_expenses_mess_bill",
+  "Other Indirect Expenses": "operating_expenses",
+};
+
 function slugFromLabel(label: string): string {
+  if (LABEL_TO_SLUG[label]) return LABEL_TO_SLUG[label];
   return label
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, "")
