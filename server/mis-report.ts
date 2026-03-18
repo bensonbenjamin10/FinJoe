@@ -86,21 +86,29 @@ export interface MISReport {
 
 const MONTH_LABELS = ["Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar"];
 
-function fyMonths(fyStartYear: number): { labels: string[]; starts: Date[]; ends: Date[] } {
+function lastDayOfMonth(year: number, month: number): number {
+  // month is 0-based (0=Jan, 11=Dec)
+  return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function fyMonths(fyStartYear: number): { labels: string[]; startDates: string[]; endDates: string[] } {
   const labels: string[] = [];
-  const starts: Date[] = [];
-  const ends: Date[] = [];
+  const startDates: string[] = [];
+  const endDates: string[] = [];
   for (let i = 0; i < 12; i++) {
     const month = (3 + i) % 12; // Apr=3, May=4, ..., Mar=2
     const year = month >= 3 ? fyStartYear : fyStartYear + 1;
     const shortYear = String(year).slice(-2);
     labels.push(`${MONTH_LABELS[i]}'${shortYear}`);
-    starts.push(new Date(year, month, 1));
-    const nextMonth = month + 1;
-    const nextYear = nextMonth > 11 ? year + 1 : year;
-    ends.push(new Date(nextYear, nextMonth % 12, 0)); // last day of month
+    startDates.push(`${year}-${pad2(month + 1)}-01`);
+    const lastDay = lastDayOfMonth(year, month);
+    endDates.push(`${year}-${pad2(month + 1)}-${pad2(lastDay)}`);
   }
-  return { labels, starts, ends };
+  return { labels, startDates, endDates };
 }
 
 function monthIndex(date: Date, fyStartYear: number): number {
@@ -187,9 +195,9 @@ const OTHER_INDIRECT_SLUG = "operating_expenses";
 export async function getMISReport(tenantId: string, fy: string): Promise<MISReport> {
   const [startYearStr] = fy.split("-");
   const fyStartYear = parseInt(startYearStr, 10) + (parseInt(startYearStr, 10) < 100 ? 2000 : 0);
-  const { labels, starts, ends } = fyMonths(fyStartYear);
-  const fyStart = starts[0];
-  const fyEnd = ends[11];
+  const { labels, startDates, endDates } = fyMonths(fyStartYear);
+  const fyStartDate = startDates[0];
+  const fyEndDate = endDates[11];
 
   const fyLabel = `FY ${fyStartYear}-${String(fyStartYear + 1).slice(-2)}`;
 
@@ -211,8 +219,8 @@ export async function getMISReport(tenantId: string, fy: string): Promise<MISRep
     .where(
       and(
         eq(expenses.tenantId, tenantId),
-        sql`${expenses.expenseDate} >= ${fyStart.toISOString().slice(0, 10)}::date`,
-        sql`${expenses.expenseDate} <= ${fyEnd.toISOString().slice(0, 10)}::date`,
+        sql`${expenses.expenseDate} >= ${fyStartDate}::date`,
+        sql`${expenses.expenseDate} <= ${fyEndDate}::date`,
       )
     );
 
@@ -233,8 +241,8 @@ export async function getMISReport(tenantId: string, fy: string): Promise<MISRep
     .where(
       and(
         eq(incomeRecords.tenantId, tenantId),
-        sql`${incomeRecords.incomeDate} >= ${fyStart.toISOString().slice(0, 10)}::date`,
-        sql`${incomeRecords.incomeDate} <= ${fyEnd.toISOString().slice(0, 10)}::date`,
+        sql`${incomeRecords.incomeDate} >= ${fyStartDate}::date`,
+        sql`${incomeRecords.incomeDate} <= ${fyEndDate}::date`,
       )
     );
 
@@ -362,13 +370,34 @@ export async function getMISReport(tenantId: string, fy: string): Promise<MISRep
 
   const totalIncomeVals = addArrays(...inflowItems.map((i) => i.values));
 
+  // Build slug->name lookup from expense rows for labeling
+  const slugToName = new Map<string, string>();
+  for (const sc of subCategoryRows) {
+    if (!sc.parentId) slugToName.set(sc.slug, sc.name);
+  }
+  for (const row of expenseRows) {
+    if (row.categorySlug && row.categoryName && !slugToName.has(row.categorySlug)) {
+      slugToName.set(row.categorySlug, row.categoryName);
+    }
+  }
+
+  function expenseLabel(slug: string): string {
+    return slugToName.get(slug) ?? slug.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  const knownCashflowSlugs = new Set([...CASHFLOW_OUTFLOW_SLUGS, ...CASHFLOW_INVESTING_SLUGS]);
+
   const outflowItems: MISLineItem[] = [];
   for (const slug of CASHFLOW_OUTFLOW_SLUGS) {
     const vals = expenseBySlug.get(slug) ?? emptyValues();
     if (sumValues(vals) !== 0) {
-      const label =
-        subCategoryRows.find((sc) => sc.slug === slug && !sc.parentId)?.name ?? slug;
-      outflowItems.push(makeLine(label, negateArray(vals)));
+      outflowItems.push(makeLine(expenseLabel(slug), negateArray(vals)));
+    }
+  }
+  // Include any expense categories NOT in the known MIS lists
+  for (const [slug, vals] of expenseBySlug) {
+    if (!knownCashflowSlugs.has(slug) && sumValues(vals) !== 0) {
+      outflowItems.push(makeLine(expenseLabel(slug), negateArray(vals)));
     }
   }
 
@@ -380,9 +409,7 @@ export async function getMISReport(tenantId: string, fy: string): Promise<MISRep
   for (const slug of CASHFLOW_INVESTING_SLUGS) {
     const vals = expenseBySlug.get(slug) ?? emptyValues();
     if (sumValues(vals) !== 0) {
-      const label =
-        subCategoryRows.find((sc) => sc.slug === slug && !sc.parentId)?.name ?? slug;
-      investingItems.push(makeLine(label, negateArray(vals)));
+      investingItems.push(makeLine(expenseLabel(slug), negateArray(vals)));
     }
   }
 
@@ -406,14 +433,15 @@ export async function getMISReport(tenantId: string, fy: string): Promise<MISRep
   const totalRevenueVals = subtractArrays(totalIncomeVals, otherIncomeVals);
   const revenueOfflineVals = subtractArrays(totalRevenueVals, revenueMedicoVals);
 
+  // Track which expense slugs are accounted for in the P&L
+  const pnlAccountedSlugs = new Set<string>([...DIRECT_EXPENSE_SLUGS, ...Object.keys(INDIRECT_EXPENSE_MAP), OTHER_INDIRECT_SLUG, ...CASHFLOW_INVESTING_SLUGS]);
+
   // Direct Expenses
   const directExpenseItems: MISLineItem[] = [];
   for (const slug of DIRECT_EXPENSE_SLUGS) {
     const vals = expenseBySlug.get(slug) ?? emptyValues();
     if (sumValues(vals) !== 0) {
-      const label =
-        subCategoryRows.find((sc) => sc.slug === slug && !sc.parentId)?.name ?? slug;
-      directExpenseItems.push(makeLine(label, vals));
+      directExpenseItems.push(makeLine(expenseLabel(slug), vals));
     }
   }
   const totalDirectVals = addArrays(...directExpenseItems.map((i) => i.values));
@@ -436,6 +464,12 @@ export async function getMISReport(tenantId: string, fy: string): Promise<MISRep
   const otherIndirectVals = expenseBySlug.get(OTHER_INDIRECT_SLUG) ?? emptyValues();
   if (sumValues(otherIndirectVals) !== 0) {
     indirectExpenseItems.push(makeLine("Other Indirect Expenses", otherIndirectVals));
+  }
+  // Include any remaining expense categories not yet accounted for
+  for (const [slug, vals] of expenseBySlug) {
+    if (!pnlAccountedSlugs.has(slug) && sumValues(vals) !== 0) {
+      indirectExpenseItems.push(makeLine(expenseLabel(slug), vals));
+    }
   }
 
   const totalIndirectVals = addArrays(...indirectExpenseItems.map((i) => i.values));
@@ -558,12 +592,12 @@ export async function getMISCellTransactions(
 ) {
   const [startYearStr] = fy.split("-");
   const fyStartYear = parseInt(startYearStr, 10) + (parseInt(startYearStr, 10) < 100 ? 2000 : 0);
-  const { starts, ends } = fyMonths(fyStartYear);
+  const { startDates, endDates } = fyMonths(fyStartYear);
 
   if (monthIdx < 0 || monthIdx > 11) return [];
 
-  const monthStart = starts[monthIdx].toISOString().slice(0, 10);
-  const monthEnd = ends[monthIdx].toISOString().slice(0, 10);
+  const monthStart = startDates[monthIdx];
+  const monthEnd = endDates[monthIdx];
 
   if (type === "expense") {
     // Find category ids matching the slug (including sub-categories)
