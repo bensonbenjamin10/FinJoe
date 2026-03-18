@@ -17,6 +17,7 @@ import AdminTenants from "@/pages/admin-tenants";
 import AdminTenantUsers from "@/pages/admin-tenant-users";
 import AdminAccountSettings from "@/pages/admin-account-settings";
 import AdminReconciliation from "@/pages/admin-reconciliation";
+import AdminReports from "@/pages/admin-reports";
 import { AdminShell } from "@/components/layout/AdminShell";
 import { ProtectedRoute } from "@/components/protected-route";
 
@@ -59,6 +60,13 @@ function Router() {
           <ProtectedRoute>
             <AdminShell>
               <AdminDashboard />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/reports">
+          <ProtectedRoute>
+            <AdminShell>
+              <AdminReports />
             </AdminShell>
           </ProtectedRoute>
         </Route>

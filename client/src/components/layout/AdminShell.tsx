@@ -43,6 +43,7 @@ import {
   Repeat,
   Zap,
   GitCompareArrows,
+  FileSpreadsheet,
 } from "lucide-react";
 import type { Tenant } from "@shared/schema";
 
@@ -86,6 +87,7 @@ export function AdminShell({ children }: AdminShellProps) {
 
   const navItems = [
     { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { href: "/admin/reports", label: "Reports", icon: FileSpreadsheet },
     ...(isSuperAdmin
       ? [
           { href: "/admin/tenants", label: "Tenants", icon: Building2 },

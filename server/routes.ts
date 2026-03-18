@@ -38,6 +38,7 @@ import { sendFinJoeSms, sendFinJoeWhatsAppTemplate } from "../worker/src/twilio.
 import { getCredentialsForTenant } from "../worker/src/providers/resolver.js";
 import { getAnalytics, getPredictions } from "./analytics.js";
 import { generateAnalyticsInsights } from "../lib/analytics-insights.js";
+import { getMISReport, getMISCellTransactions } from "./mis-report.js";
 import { getMedia } from "../lib/media-storage.js";
 import {
   notifyFinanceForApproval,
@@ -1999,6 +2000,186 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("Predictions error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to fetch predictions" });
+    }
+  });
+
+  // ── MIS Reports ──
+
+  app.get("/api/admin/mis/report", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? (req.query?.tenantId as string);
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const fy = (req.query?.fy as string) ?? "";
+      if (!/^\d{4}-\d{2}$/.test(fy)) return res.status(400).json({ error: "fy must be YYYY-YY format, e.g. 2025-26" });
+      const data = await getMISReport(tid, fy);
+      res.json(data);
+    } catch (e) {
+      logger.error("MIS report error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to generate MIS report" });
+    }
+  });
+
+  app.get("/api/admin/mis/transactions", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? (req.query?.tenantId as string);
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const fy = (req.query?.fy as string) ?? "";
+      const type = (req.query?.type as string) ?? "expense";
+      const categorySlug = (req.query?.categorySlug as string) ?? "";
+      const monthIdx = parseInt((req.query?.monthIdx as string) ?? "0", 10);
+      if (!/^\d{4}-\d{2}$/.test(fy)) return res.status(400).json({ error: "fy must be YYYY-YY format" });
+      if (!categorySlug) return res.status(400).json({ error: "categorySlug required" });
+      const rows = await getMISCellTransactions(tid, fy, type as "expense" | "income", categorySlug, monthIdx);
+      res.json(rows);
+    } catch (e) {
+      logger.error("MIS transactions error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch transactions" });
+    }
+  });
+
+  app.get("/api/admin/mis/export", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? (req.query?.tenantId as string);
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const fy = (req.query?.fy as string) ?? "";
+      if (!/^\d{4}-\d{2}$/.test(fy)) return res.status(400).json({ error: "fy must be YYYY-YY format" });
+
+      const data = await getMISReport(tid, fy);
+      const XLSX = await import("xlsx");
+      const wb = XLSX.utils.book_new();
+      const months = data.months;
+      const headerRow = ["Particulars", ...months, data.fyLabel];
+
+      function lineToRow(line: { label: string; values: number[]; fyTotal: number }) {
+        return [line.label, ...line.values, line.fyTotal];
+      }
+      function numRow(label: string, vals: number[]) {
+        return [label, ...vals, vals.reduce((a, b) => a + b, 0)];
+      }
+
+      // Cashflow Statement
+      const cfRows: (string | number)[][] = [headerRow];
+      cfRows.push(numRow("Opening Balance", data.cashflow.openingBalance));
+      cfRows.push(["Inflow", ...new Array(months.length + 1).fill("")]);
+      for (const item of data.cashflow.inflows) cfRows.push(lineToRow(item));
+      cfRows.push(lineToRow(data.cashflow.totalIncome));
+      cfRows.push(["Outflow", ...new Array(months.length + 1).fill("")]);
+      for (const item of data.cashflow.outflows) cfRows.push(lineToRow(item));
+      cfRows.push(lineToRow(data.cashflow.totalOutflow));
+      cfRows.push(lineToRow(data.cashflow.netOperating));
+      cfRows.push([""]);
+      cfRows.push(["Cash Flows from Investing Activities", ...new Array(months.length + 1).fill("")]);
+      for (const item of data.cashflow.investingActivities) cfRows.push(lineToRow(item));
+      cfRows.push(lineToRow(data.cashflow.netInvesting));
+      cfRows.push([""]);
+      cfRows.push(lineToRow(data.cashflow.netCashFlow));
+      cfRows.push(numRow("Closing Balance", data.cashflow.closingBalance));
+      const cfSheet = XLSX.utils.aoa_to_sheet(cfRows);
+      cfSheet["!cols"] = [{ wch: 45 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
+      XLSX.utils.book_append_sheet(wb, cfSheet, "Cashflow Statement");
+
+      // Profit and Loss
+      const plRows: (string | number)[][] = [headerRow];
+      plRows.push(lineToRow(data.pnl.revenueOffline));
+      plRows.push(lineToRow(data.pnl.revenueMedico));
+      plRows.push(lineToRow(data.pnl.totalRevenue));
+      plRows.push([""]);
+      plRows.push(lineToRow(data.pnl.totalDirectExpenses));
+      plRows.push(lineToRow(data.pnl.grossProfit));
+      plRows.push(["Gross Profit (%)", ...data.pnl.grossProfitPct, ""]);
+      plRows.push([""]);
+      plRows.push(lineToRow(data.pnl.otherIncome));
+      plRows.push([""]);
+      plRows.push(["Indirect Expenses", ...new Array(months.length + 1).fill("")]);
+      for (const item of data.pnl.indirectExpenses) plRows.push(lineToRow(item));
+      plRows.push(lineToRow(data.pnl.totalIndirectExpenses));
+      plRows.push([""]);
+      plRows.push(lineToRow(data.pnl.ebitda));
+      plRows.push(["EBITDA (%)", ...data.pnl.ebitdaPct, ""]);
+      const plSheet = XLSX.utils.aoa_to_sheet(plRows);
+      plSheet["!cols"] = [{ wch: 45 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
+      XLSX.utils.book_append_sheet(wb, plSheet, "Profit and Loss");
+
+      // Direct Expenses
+      const deRows: (string | number)[][] = [headerRow];
+      for (const item of data.pnl.directExpenses) deRows.push(lineToRow(item));
+      deRows.push(lineToRow(data.pnl.totalDirectExpenses));
+      const deSheet = XLSX.utils.aoa_to_sheet(deRows);
+      deSheet["!cols"] = [{ wch: 45 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
+      XLSX.utils.book_append_sheet(wb, deSheet, "Direct Expenses");
+
+      // Revenue (Offline) by center
+      const roRows: (string | number)[][] = [headerRow];
+      for (const item of data.drilldowns.revenueByCenter) roRows.push(lineToRow(item));
+      roRows.push(lineToRow(data.drilldowns.totalRevenueByCenter));
+      const roSheet = XLSX.utils.aoa_to_sheet(roRows);
+      roSheet["!cols"] = [{ wch: 30 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
+      XLSX.utils.book_append_sheet(wb, roSheet, "Revenue (Offline)");
+
+      // Other Indirect Expenses
+      const oiRows: (string | number)[][] = [headerRow];
+      for (const item of data.drilldowns.otherIndirect) oiRows.push(lineToRow(item));
+      oiRows.push(lineToRow(data.drilldowns.totalOtherIndirect));
+      const oiSheet = XLSX.utils.aoa_to_sheet(oiRows);
+      oiSheet["!cols"] = [{ wch: 45 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
+      XLSX.utils.book_append_sheet(wb, oiSheet, "Other Indirect expenses");
+
+      // Payroll Expenses
+      const prRows: (string | number)[][] = [headerRow];
+      for (const item of data.drilldowns.payrollBreakdown) prRows.push(lineToRow(item));
+      prRows.push(lineToRow(data.drilldowns.totalPayroll));
+      const prSheet = XLSX.utils.aoa_to_sheet(prRows);
+      prSheet["!cols"] = [{ wch: 35 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
+      XLSX.utils.book_append_sheet(wb, prSheet, "Payroll Expenses");
+
+      // Electricity Charges
+      const ecRows: (string | number)[][] = [headerRow];
+      for (const item of data.drilldowns.electricityByCenter) ecRows.push(lineToRow(item));
+      ecRows.push(lineToRow(data.drilldowns.totalElectricity));
+      const ecSheet = XLSX.utils.aoa_to_sheet(ecRows);
+      ecSheet["!cols"] = [{ wch: 25 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
+      XLSX.utils.book_append_sheet(wb, ecSheet, "Electricity Charges");
+
+      // Marketing Expenses
+      const meRows: (string | number)[][] = [headerRow];
+      for (const item of data.drilldowns.marketingByType) meRows.push(lineToRow(item));
+      meRows.push(lineToRow(data.drilldowns.totalMarketing));
+      const meSheet = XLSX.utils.aoa_to_sheet(meRows);
+      meSheet["!cols"] = [{ wch: 30 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
+      XLSX.utils.book_append_sheet(wb, meSheet, "Marketing Expenses");
+
+      // Food Expenses
+      const feRows: (string | number)[][] = [headerRow];
+      for (const item of data.drilldowns.foodByCenter) feRows.push(lineToRow(item));
+      feRows.push(lineToRow(data.drilldowns.totalFood));
+      const feSheet = XLSX.utils.aoa_to_sheet(feRows);
+      feSheet["!cols"] = [{ wch: 25 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
+      XLSX.utils.book_append_sheet(wb, feSheet, "Food Expenses");
+
+      // Capital Expenditure
+      const ceRows: (string | number)[][] = [headerRow];
+      for (const item of data.drilldowns.capexByType) ceRows.push(lineToRow(item));
+      ceRows.push(lineToRow(data.drilldowns.totalCapex));
+      const ceSheet = XLSX.utils.aoa_to_sheet(ceRows);
+      ceSheet["!cols"] = [{ wch: 35 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
+      XLSX.utils.book_append_sheet(wb, ceSheet, "Capital Expenditure");
+
+      const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="MIS_${fy}.xlsx"`);
+      res.send(buf);
+    } catch (e) {
+      logger.error("MIS export error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to export MIS" });
     }
   });
 
