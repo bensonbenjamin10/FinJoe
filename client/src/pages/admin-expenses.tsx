@@ -1575,19 +1575,19 @@ export default function AdminExpenses() {
                                     <Eye className="h-4 w-4 mr-1" />
                                     View Details
                                   </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      setActionMenu(null);
+                                      setEditExpenseDialog(exp);
+                                    }}
+                                  >
+                                    <Pencil className="h-4 w-4 mr-1" />
+                                    Edit
+                                  </Button>
                                   {exp.status === "draft" && (
                                     <>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => {
-                                          setActionMenu(null);
-                                          setEditExpenseDialog(exp);
-                                        }}
-                                      >
-                                        <Pencil className="h-4 w-4 mr-1" />
-                                        Edit
-                                      </Button>
                                       <Button
                                         variant="ghost"
                                         size="sm"
@@ -2256,11 +2256,9 @@ export default function AdminExpenses() {
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setViewExpenseDialog(null)}>Close</Button>
-                {viewExpenseDialog.status === "draft" && (
-                  <Button onClick={() => { setEditExpenseDialog(viewExpenseDialog); setViewExpenseDialog(null); }}>
-                    Edit
-                  </Button>
-                )}
+                <Button onClick={() => { setEditExpenseDialog(viewExpenseDialog); setViewExpenseDialog(null); }}>
+                  Edit
+                </Button>
               </DialogFooter>
             </div>
           )}
@@ -2272,7 +2270,7 @@ export default function AdminExpenses() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit Expense</DialogTitle>
-            <DialogDescription>Update draft expense details.</DialogDescription>
+            <DialogDescription>Update expense details.</DialogDescription>
           </DialogHeader>
           {editExpenseDialog && (
             <EditExpenseForm

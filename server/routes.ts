@@ -3301,7 +3301,6 @@ export async function registerRoutes(app: Express) {
       const whereClause = and(eq(expenses.id, req.params.id), eq(expenses.tenantId, tid));
       const [existing] = await db.select({ status: expenses.status }).from(expenses).where(whereClause).limit(1);
       if (!existing) return res.status(404).json({ error: "Not found" });
-      if (existing.status !== "draft") return res.status(400).json({ error: "Only draft expenses can be edited" });
       const [updated] = await db.update(expenses).set(updates as any).where(whereClause).returning();
       if (!updated) return res.status(404).json({ error: "Not found" });
       res.json(updated);
