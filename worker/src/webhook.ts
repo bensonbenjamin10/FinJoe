@@ -306,62 +306,48 @@ export async function handleWebhook(req: Request, res: Response) {
       }
       let sendResult: { sid?: string } | null = null;
       let outboundBody = reply;
-      const primaryHash = makePayloadHash(reply);
-      const primaryKey = buildOutboundIdempotencyKey(conversation.id, messageSid, "primary", primaryHash);
-      const primaryReservation = await reserveOutboundSend(
-        tenantId,
-        conversation.id,
-        messageSid,
-        primaryKey,
-        primaryHash
-      );
 
-      if (primaryReservation.state === "already_sent") {
-        sendResult = primaryReservation.providerMessageSid
-          ? { sid: primaryReservation.providerMessageSid }
-          : null;
-        logger.info("Primary outbound reply deduped from idempotency", { traceId, conversationId: conversation.id, key: primaryKey });
-      } else if (primaryReservation.state === "in_flight") {
-        logger.warn("Primary outbound reply currently in-flight; skipping duplicate send", { traceId, conversationId: conversation.id, key: primaryKey });
-      } else {
+      let primaryReservation: OutboundSendReservation | null = null;
+      try {
+        const primaryHash = makePayloadHash(reply);
+        const primaryKey = buildOutboundIdempotencyKey(conversation.id, messageSid, "primary", primaryHash);
+        primaryReservation = await reserveOutboundSend(tenantId, conversation.id, messageSid, primaryKey, primaryHash);
+
+        if (primaryReservation.state === "already_sent") {
+          sendResult = primaryReservation.providerMessageSid ? { sid: primaryReservation.providerMessageSid } : null;
+          logger.info("Primary outbound reply deduped from idempotency", { traceId, conversationId: conversation.id, key: primaryKey });
+        } else if (primaryReservation.state === "in_flight") {
+          logger.warn("Primary outbound reply currently in-flight; skipping duplicate send", { traceId, conversationId: conversation.id, key: primaryKey });
+        }
+      } catch (idempErr) {
+        logger.warn("Outbound idempotency check failed; proceeding without dedup", { traceId, err: String(idempErr) });
+        primaryReservation = null;
+      }
+
+      const shouldSend = !primaryReservation || primaryReservation.state === "new" || primaryReservation.state === "retry";
+      if (shouldSend) {
         try {
           sendResult = await sendFinJoeWhatsApp(contact.phone, reply, traceId, tenantId, { maxAttempts: 3 });
-          await markOutboundSendSent(primaryReservation.rowId, sendResult?.sid ?? null);
+          if (primaryReservation && (primaryReservation.state === "new" || primaryReservation.state === "retry")) {
+            await markOutboundSendSent(primaryReservation.rowId, sendResult?.sid ?? null).catch(() => {});
+          }
         } catch (sendErr) {
-          await markOutboundSendFailed(primaryReservation.rowId, sendErr);
+          if (primaryReservation && (primaryReservation.state === "new" || primaryReservation.state === "retry")) {
+            await markOutboundSendFailed(primaryReservation.rowId, sendErr).catch(() => {});
+          }
           logger.error("Primary WhatsApp reply failed", { traceId, conversationId: conversation.id, contactPhone: contact.phone, ...serializeError(sendErr) });
 
           outboundBody = FALLBACK_REPLY;
-          const fallbackHash = makePayloadHash(FALLBACK_REPLY);
-          const fallbackKey = buildOutboundIdempotencyKey(conversation.id, messageSid, "fallback", fallbackHash);
-          const fallbackReservation = await reserveOutboundSend(
-            tenantId,
-            conversation.id,
-            messageSid,
-            fallbackKey,
-            fallbackHash
-          );
-          if (fallbackReservation.state === "already_sent") {
-            sendResult = fallbackReservation.providerMessageSid
-              ? { sid: fallbackReservation.providerMessageSid }
-              : null;
-            logger.warn("Fallback reply deduped from idempotency", { traceId, conversationId: conversation.id, key: fallbackKey });
-          } else if (fallbackReservation.state === "in_flight") {
-            logger.warn("Fallback outbound currently in-flight; skipping duplicate send", { traceId, conversationId: conversation.id, key: fallbackKey });
-          } else {
-            try {
-              sendResult = await sendFinJoeWhatsApp(contact.phone, FALLBACK_REPLY, traceId, tenantId, { maxAttempts: 2 });
-              await markOutboundSendSent(fallbackReservation.rowId, sendResult?.sid ?? null);
-              logger.warn("Fallback reply delivered after primary failure", { traceId, conversationId: conversation.id, contactPhone: contact.phone });
-            } catch (fallbackErr) {
-              await markOutboundSendFailed(fallbackReservation.rowId, fallbackErr);
-              logger.error("Fallback WhatsApp reply also failed", {
-                traceId,
-                conversationId: conversation.id,
-                contactPhone: contact.phone,
-                ...serializeError(fallbackErr),
-              });
-            }
+          try {
+            sendResult = await sendFinJoeWhatsApp(contact.phone, FALLBACK_REPLY, traceId, tenantId, { maxAttempts: 2 });
+            logger.warn("Fallback reply delivered after primary failure", { traceId, conversationId: conversation.id, contactPhone: contact.phone });
+          } catch (fallbackErr) {
+            logger.error("Fallback WhatsApp reply also failed", {
+              traceId,
+              conversationId: conversation.id,
+              contactPhone: contact.phone,
+              ...serializeError(fallbackErr),
+            });
           }
         }
       }
