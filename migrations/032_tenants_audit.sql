@@ -1,0 +1,2 @@
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS created_by_id VARCHAR REFERENCES users(id);
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS updated_by_id VARCHAR REFERENCES users(id);

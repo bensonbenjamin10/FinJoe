@@ -346,12 +346,16 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
     },
 
     async getExpenseWithDetails(id: string): Promise<Record<string, unknown> | null> {
+      const submitterTable = aliasedTable(users, "submitter");
+      const approverTable = aliasedTable(users, "approver");
+
       const [row] = await db
         .select()
         .from(expenses)
         .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
-        .leftJoin(users, eq(expenses.submittedById, users.id))
+        .leftJoin(submitterTable, eq(expenses.submittedById, submitterTable.id))
+        .leftJoin(approverTable, eq(expenses.approvedById, approverTable.id))
         .where(and(eq(expenses.id, id), eq(expenses.tenantId, tenantId)))
         .limit(1);
       if (!row?.expenses) return null;
@@ -361,7 +365,8 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         campus: costCenter ? { id: costCenter.id, name: costCenter.name, slug: costCenter.slug } : null,
         costCenter: costCenter ? { id: costCenter.id, name: costCenter.name, slug: costCenter.slug } : null,
         category: row.expense_categories ? { id: row.expense_categories.id, name: row.expense_categories.name, slug: row.expense_categories.slug } : null,
-        submittedBy: row.users ? { id: row.users.id, name: row.users.name } : null,
+        submittedByName: row.submitter ? row.submitter.name : null,
+        approvedByName: row.approver ? row.approver.name : null,
       };
     },
 

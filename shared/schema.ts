@@ -22,6 +22,8 @@ export const tenants = pgTable("tenants", {
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
   isActive: boolean("is_active").notNull().default(true),
+  createdById: varchar("created_by_id"),
+  updatedById: varchar("updated_by_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -391,6 +393,7 @@ export const bankTransactions = pgTable("bank_transactions", {
   matchedIncomeId: varchar("matched_income_id"),
   matchConfidence: text("match_confidence"),
   matchedAt: timestamp("matched_at"),
+  matchedById: varchar("matched_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

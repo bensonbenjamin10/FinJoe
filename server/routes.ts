@@ -3651,6 +3651,7 @@ export async function registerRoutes(app: Express) {
         updates.slug = slugNorm;
       }
       if (isActive !== undefined) updates.isActive = isActive;
+      updates.updatedById = req.user?.id || null;
       const [updated] = await db.update(tenants).set(updates as any).where(eq(tenants.id, tenantId)).returning();
       res.json(updated);
     } catch (e: any) {
