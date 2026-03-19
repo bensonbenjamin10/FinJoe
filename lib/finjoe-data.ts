@@ -348,6 +348,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
     async getExpenseWithDetails(id: string): Promise<Record<string, unknown> | null> {
       const submitterTable = aliasedTable(users, "submitter");
       const approverTable = aliasedTable(users, "approver");
+      const matcherTable = aliasedTable(users, "matcher");
 
       const [row] = await db
         .select()
@@ -356,6 +357,8 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
         .leftJoin(submitterTable, eq(expenses.submittedById, submitterTable.id))
         .leftJoin(approverTable, eq(expenses.approvedById, approverTable.id))
+        .leftJoin(bankTransactions, eq(expenses.id, bankTransactions.matchedExpenseId))
+        .leftJoin(matcherTable, eq(bankTransactions.matchedById, matcherTable.id))
         .where(and(eq(expenses.id, id), eq(expenses.tenantId, tenantId)))
         .limit(1);
       if (!row?.expenses) return null;
@@ -367,6 +370,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         category: row.expense_categories ? { id: row.expense_categories.id, name: row.expense_categories.name, slug: row.expense_categories.slug } : null,
         submittedByName: row.submitter ? row.submitter.name : null,
         approvedByName: row.approver ? row.approver.name : null,
+        matchedByName: row.matcher ? row.matcher.name : null,
       };
     },
 
@@ -381,6 +385,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
     }): Promise<Array<Record<string, unknown>>> {
       const submitterTable = aliasedTable(users, "submitter");
       const approverTable = aliasedTable(users, "approver");
+      const matcherTable = aliasedTable(users, "matcher");
 
       const conditions = [eq(expenses.tenantId, tenantId)];
       const ccId = filters?.costCenterId ?? filters?.campusId;
@@ -408,12 +413,15 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           categoryName: expenseCategories.name,
           submittedByName: submitterTable.name,
           approvedByName: approverTable.name,
+          matchedByName: matcherTable.name,
         })
         .from(expenses)
         .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
         .leftJoin(submitterTable, eq(expenses.submittedById, submitterTable.id))
         .leftJoin(approverTable, eq(expenses.approvedById, approverTable.id))
+        .leftJoin(bankTransactions, eq(expenses.id, bankTransactions.matchedExpenseId))
+        .leftJoin(matcherTable, eq(bankTransactions.matchedById, matcherTable.id))
         .orderBy(desc(expenses.expenseDate), desc(expenses.createdAt))
         .$dynamic();
 
@@ -433,6 +441,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         categoryName: r.categoryName,
         submittedByName: r.submittedByName,
         approvedByName: r.approvedByName,
+        matchedByName: r.matchedByName,
       }));
     },
 
@@ -495,6 +504,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       const pattern = `%${q}%`;
       const submitterTable = aliasedTable(users, "submitter");
       const approverTable = aliasedTable(users, "approver");
+      const matcherTable = aliasedTable(users, "matcher");
 
       const conditions = [eq(expenses.tenantId, tenantId)];
       if (filters?.startDate) conditions.push(sql`${expenses.expenseDate} >= ${filters.startDate}::date`);
@@ -520,12 +530,15 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           categoryName: expenseCategories.name,
           submittedByName: submitterTable.name,
           approvedByName: approverTable.name,
+          matchedByName: matcherTable.name,
         })
         .from(expenses)
         .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
         .leftJoin(submitterTable, eq(expenses.submittedById, submitterTable.id))
         .leftJoin(approverTable, eq(expenses.approvedById, approverTable.id))
+        .leftJoin(bankTransactions, eq(expenses.id, bankTransactions.matchedExpenseId))
+        .leftJoin(matcherTable, eq(bankTransactions.matchedById, matcherTable.id))
         .where(
           and(
             ...conditions,
@@ -545,6 +558,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         shortId: toShortExpenseId(r.id as string),
         submittedByName: r.submittedByName,
         approvedByName: r.approvedByName,
+        matchedByName: r.matchedByName,
       }));
     },
 
@@ -590,12 +604,14 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         const query = `
           SELECT e.id, e.amount, e.status, e.expense_date, e.vendor_name, e.invoice_number, e.description,
             c.name as cost_center_name, ec.name as category_name,
-            sub.name as submitted_by_name, app.name as approved_by_name
+            sub.name as submitted_by_name, app.name as approved_by_name, mat.name as matched_by_name
           FROM expenses e
           LEFT JOIN cost_centers c ON e.cost_center_id = c.id
           LEFT JOIN expense_categories ec ON e.category_id = ec.id
           LEFT JOIN users sub ON e.submitted_by_id = sub.id
           LEFT JOIN users app ON e.approved_by_id = app.id
+          LEFT JOIN bank_transactions bt ON e.id = bt.matched_expense_id
+          LEFT JOIN users mat ON bt.matched_by_id = mat.id
           WHERE ${whereClause}
           ORDER BY e.embedding <=> $${vectorParam}::vector
           LIMIT $${limitParam}
@@ -611,6 +627,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           shortId: toShortExpenseId(r.id as string),
           submittedByName: r.submitted_by_name,
           approvedByName: r.approved_by_name,
+          matchedByName: r.matched_by_name,
         }));
       } catch (err) {
         console.error("[finjoe-data] searchExpensesByEmbedding failed", err);
