@@ -348,6 +348,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
     async getExpenseWithDetails(id: string): Promise<Record<string, unknown> | null> {
       const submitterTable = aliasedTable(users, "submitter");
       const approverTable = aliasedTable(users, "approver");
+      const matcherTable = aliasedTable(users, "matcher");
 
       const [row] = await db
         .select()
@@ -356,6 +357,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
         .leftJoin(submitterTable, eq(expenses.submittedById, submitterTable.id))
         .leftJoin(approverTable, eq(expenses.approvedById, approverTable.id))
+        .leftJoin(matcherTable, eq(expenses.matchedById, matcherTable.id))
         .where(and(eq(expenses.id, id), eq(expenses.tenantId, tenantId)))
         .limit(1);
       if (!row?.expenses) return null;
@@ -367,6 +369,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         category: row.expense_categories ? { id: row.expense_categories.id, name: row.expense_categories.name, slug: row.expense_categories.slug } : null,
         submittedByName: row.submitter ? row.submitter.name : null,
         approvedByName: row.approver ? row.approver.name : null,
+        matchedByName: row.matcher ? row.matcher.name : null,
       };
     },
 
@@ -379,6 +382,9 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       endDate?: string;
       limit?: number;
     }): Promise<Array<Record<string, unknown>>> {
+      const submitterTable = aliasedTable(users, "submitter");
+      const approverTable = aliasedTable(users, "approver");
+
       const conditions = [eq(expenses.tenantId, tenantId)];
       const ccId = filters?.costCenterId ?? filters?.campusId;
       if (ccId !== undefined && ccId !== null && ccId !== "") {
@@ -403,10 +409,14 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           description: expenses.description,
           costCenterName: costCenters.name,
           categoryName: expenseCategories.name,
+          submittedByName: submitterTable.name,
+          approvedByName: approverTable.name,
         })
         .from(expenses)
         .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
+        .leftJoin(submitterTable, eq(expenses.submittedById, submitterTable.id))
+        .leftJoin(approverTable, eq(expenses.approvedById, approverTable.id))
         .orderBy(desc(expenses.expenseDate), desc(expenses.createdAt))
         .$dynamic();
 
@@ -424,6 +434,8 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         campusName: r.costCenterName,
         costCenterName: r.costCenterName,
         categoryName: r.categoryName,
+        submittedByName: r.submittedByName,
+        approvedByName: r.approvedByName,
       }));
     },
 
@@ -484,6 +496,9 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       const q = query.trim();
       if (!q) return [];
       const pattern = `%${q}%`;
+      const submitterTable = aliasedTable(users, "submitter");
+      const approverTable = aliasedTable(users, "approver");
+
       const conditions = [eq(expenses.tenantId, tenantId)];
       if (filters?.startDate) conditions.push(sql`${expenses.expenseDate} >= ${filters.startDate}::date`);
       if (filters?.endDate) conditions.push(sql`${expenses.expenseDate} <= ${filters.endDate}::date`);
@@ -506,10 +521,14 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           description: expenses.description,
           costCenterName: costCenters.name,
           categoryName: expenseCategories.name,
+          submittedByName: submitterTable.name,
+          approvedByName: approverTable.name,
         })
         .from(expenses)
         .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
+        .leftJoin(submitterTable, eq(expenses.submittedById, submitterTable.id))
+        .leftJoin(approverTable, eq(expenses.approvedById, approverTable.id))
         .where(
           and(
             ...conditions,
@@ -527,6 +546,8 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         ...r,
         campusName: r.costCenterName,
         shortId: toShortExpenseId(r.id as string),
+        submittedByName: r.submittedByName,
+        approvedByName: r.approvedByName,
       }));
     },
 
@@ -571,10 +592,13 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       try {
         const query = `
           SELECT e.id, e.amount, e.status, e.expense_date, e.vendor_name, e.invoice_number, e.description,
-            c.name as cost_center_name, ec.name as category_name
+            c.name as cost_center_name, ec.name as category_name,
+            sub.name as submitted_by_name, app.name as approved_by_name
           FROM expenses e
           LEFT JOIN cost_centers c ON e.cost_center_id = c.id
           LEFT JOIN expense_categories ec ON e.category_id = ec.id
+          LEFT JOIN users sub ON e.submitted_by_id = sub.id
+          LEFT JOIN users app ON e.approved_by_id = app.id
           WHERE ${whereClause}
           ORDER BY e.embedding <=> $${vectorParam}::vector
           LIMIT $${limitParam}
@@ -588,6 +612,8 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           costCenterName: r.cost_center_name,
           categoryName: r.category_name,
           shortId: toShortExpenseId(r.id as string),
+          submittedByName: r.submitted_by_name,
+          approvedByName: r.approved_by_name,
         }));
       } catch (err) {
         console.error("[finjoe-data] searchExpensesByEmbedding failed", err);
@@ -899,6 +925,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       submittedByContactPhone?: string | null;
       source?: string;
       recurringTemplateId?: string | null;
+      recordedById?: string | null;
     }): Promise<{ id: string } | null> {
       const costCenterIdForDb = data.costCenterId === "__corporate__" || data.costCenterId === "null" ? null : data.costCenterId;
       const [created] = await db
@@ -913,6 +940,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           incomeType: data.incomeType ?? "other",
           source: data.source ?? "finjoe",
           recurringTemplateId: data.recurringTemplateId ?? null,
+          recordedById: data.recordedById ?? null,
         })
         .returning({ id: incomeRecords.id });
       return created ?? null;
@@ -1117,6 +1145,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       if (updates.dayOfWeek !== undefined) setValues.dayOfWeek = updates.dayOfWeek;
       if (updates.endDate !== undefined) setValues.endDate = updates.endDate ? new Date(updates.endDate) : null;
       if (updates.isActive !== undefined) setValues.isActive = updates.isActive;
+      if (updates.updatedById !== undefined) setValues.updatedById = updates.updatedById;
 
       // Only recompute nextRunDate when schedule changed (frequency/day). Use today as fromDate so we get the next occurrence from now, not from startDate (which would reset to past dates).
       const scheduleChanged =
@@ -1147,6 +1176,57 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       if (!existing) return false;
       await db.delete(recurringExpenseTemplates).where(eq(recurringExpenseTemplates.id, id));
       return true;
+    },
+
+    async listBankTransactions(filters?: { status?: string, limit?: number }): Promise<Array<Record<string, unknown>>> {
+      const matcherTable = aliasedTable(users, "matcher");
+      const conditions = [eq(bankTransactions.tenantId, tenantId)];
+      if (filters?.status) conditions.push(eq(bankTransactions.reconciliationStatus, filters.status));
+      const rows = await db
+        .select({
+          id: bankTransactions.id,
+          transactionDate: bankTransactions.transactionDate,
+          particulars: bankTransactions.particulars,
+          amount: bankTransactions.amount,
+          type: bankTransactions.type,
+          reconciliationStatus: bankTransactions.reconciliationStatus,
+          matchedExpenseId: bankTransactions.matchedExpenseId,
+          matchedIncomeId: bankTransactions.matchedIncomeId,
+          matchConfidence: bankTransactions.matchConfidence,
+          matchedAt: bankTransactions.matchedAt,
+          matchedByName: matcherTable.name,
+        })
+        .from(bankTransactions)
+        .leftJoin(matcherTable, eq(bankTransactions.matchedById, matcherTable.id))
+        .where(and(...conditions))
+        .orderBy(desc(bankTransactions.transactionDate))
+        .limit(filters?.limit ?? 20);
+      return rows;
+    },
+
+    async listIncomes(filters?: { limit?: number }): Promise<Array<Record<string, unknown>>> {
+      const recorderTable = aliasedTable(users, "recorder");
+      const conditions = [eq(incomeRecords.tenantId, tenantId)];
+      const rows = await db
+        .select({
+          id: incomeRecords.id,
+          amount: incomeRecords.amount,
+          incomeDate: incomeRecords.incomeDate,
+          particulars: incomeRecords.particulars,
+          incomeType: incomeRecords.incomeType,
+          source: incomeRecords.source,
+          categoryName: incomeCategories.name,
+          costCenterName: costCenters.name,
+          recordedByName: recorderTable.name,
+        })
+        .from(incomeRecords)
+        .leftJoin(costCenters, eq(incomeRecords.costCenterId, costCenters.id))
+        .leftJoin(incomeCategories, eq(incomeRecords.categoryId, incomeCategories.id))
+        .leftJoin(recorderTable, eq(incomeRecords.recordedById, recorderTable.id))
+        .where(and(...conditions))
+        .orderBy(desc(incomeRecords.incomeDate))
+        .limit(filters?.limit ?? 20);
+      return rows;
     },
 
     async getTemplatesDueForRun(today: string): Promise<Array<Record<string, unknown>>> {

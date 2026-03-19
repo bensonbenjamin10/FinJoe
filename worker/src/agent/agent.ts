@@ -426,6 +426,7 @@ async function executeFunctionCall(
           incomeDate: d.incomeDate,
           particulars: d.particulars ?? null,
           submittedByContactPhone: contactPhone,
+          recordedById: execCtx.contactStudentId,
         });
       } catch (err) {
         logger.error("Confirm income create error", { traceId, err: String(err) });
@@ -596,6 +597,7 @@ async function executeFunctionCall(
         campusId,
         particulars: particulars ?? null,
         incomeDate,
+        recordedById: execCtx.contactStudentId,
       };
 
       // Require confirmation before posting: store/update pending and ask user to confirm (handles user corrections too)
@@ -880,6 +882,19 @@ async function executeFunctionCall(
       const limit = typeof args.limit === "number" ? Math.min(Math.max(1, args.limit), 100) : undefined;
       const rows = await finJoeData.listExpenses({ costCenterId: campusId, campusId, status, categoryId, startDate, endDate, limit });
       return { success: true, data: { expenses: rows } };
+    }
+
+    case "list_incomes": {
+      const limit = typeof args.limit === "number" ? Math.min(Math.max(1, args.limit), 100) : undefined;
+      const rows = await finJoeData.listIncomes({ limit });
+      return { success: true, data: { incomes: rows } };
+    }
+
+    case "list_bank_transactions": {
+      const limit = typeof args.limit === "number" ? Math.min(Math.max(1, args.limit), 100) : undefined;
+      const status = args.status ? String(args.status) : undefined;
+      const rows = await finJoeData.listBankTransactions({ status, limit });
+      return { success: true, data: { bankTransactions: rows } };
     }
 
     case "get_expense": {
@@ -1388,6 +1403,7 @@ async function executeFunctionCall(
         dayOfWeek,
         startDate,
         endDate: endDateNorm,
+        createdById: contactStudentId,
       });
       if (template && "error" in template) return { success: false, error: template.error };
       if (!template?.id) return { success: false, error: USER_FACING_ERROR };
@@ -1424,6 +1440,7 @@ async function executeFunctionCall(
       if (args.dayOfWeek !== undefined) updates.dayOfWeek = Math.min(6, Math.max(0, Number(args.dayOfWeek)));
       if (args.endDate !== undefined) updates.endDate = args.endDate ? parseDateToISO(String(args.endDate)) ?? null : null;
       if (args.isActive !== undefined) updates.isActive = Boolean(args.isActive);
+      updates.updatedById = contactStudentId;
       if (Object.keys(updates).length === 0) return { success: false, error: "No fields to update. Specify at least one." };
       const result = await finJoeData.updateRecurringTemplate(templateId, updates as any);
       if (!result) return { success: false, error: `Could not update template #${templateId}. It may not exist.` };

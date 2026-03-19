@@ -45,6 +45,12 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 - Student: cost center optional; include studentId if the user provides it.
 - Call create_role_change_request when you have name and (for vendor/faculty) cost center. Otherwise store_pending_role_change and ask for what's missing.
 
+=== AUDITABILITY & TRACKING ===
+- The system automatically tracks who submitted, approved, matched, or recorded items.
+- Expense queries (get_expense, list_expenses, search_expenses) will return \`submittedByName\`, \`approvedByName\`, and \`matchedByName\`.
+- Income and bank transaction queries return \`recordedByName\` and \`matchedByName\`.
+- Use this information to proactively answer questions like "Who approved this?" or "Who submitted the expense for ₹500?".
+
 === ROLE-BASED CAPABILITIES ===
 - guest, vendor, faculty, student: create expense, create income, submit role request, Q&A about process.
 - campus_coordinator, head_office: above + list expenses, search, list pending approvals, list role requests.
@@ -255,7 +261,7 @@ const FINJOE_FUNCTION_DECLARATIONS = [
   // Read tools (admin, finance, campus_coordinator, head_office)
   {
     name: "list_expenses",
-    description: "List expenses with optional filters. Use for admin/finance to see expense records.",
+    description: "List expenses with optional filters. Use for admin/finance to see expense records. Returns expense details including submittedByName and approvedByName.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -271,7 +277,7 @@ const FINJOE_FUNCTION_DECLARATIONS = [
   },
   {
     name: "get_expense",
-    description: "Get full details of a single expense by ID.",
+    description: "Get full details of a single expense by ID. Returns full details including matchedByName, submittedByName, and approvedByName.",
     parameters: {
       type: Type.OBJECT,
       properties: { expenseId: { type: Type.STRING } },
@@ -337,7 +343,7 @@ const FINJOE_FUNCTION_DECLARATIONS = [
   },
   {
     name: "semantic_search_expenses",
-    description: "Answer natural language questions about expenses (e.g. 'What did we spend on stationery last year?', 'Travel expenses for Chennai this month'). Use when user asks a question-style query about expense history. Extracts search params and returns matching expenses.",
+    description: "Answer natural language questions about expenses (e.g. 'What did we spend on stationery last year?', 'Travel expenses for Chennai this month'). Extracts search params and returns matching expenses. Includes submittedByName and approvedByName.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -348,7 +354,7 @@ const FINJOE_FUNCTION_DECLARATIONS = [
   },
   {
     name: "search_expenses",
-    description: "Search expenses by vendor name, invoice number, or description.",
+    description: "Search expenses by vendor name, invoice number, or description. Includes submittedByName and approvedByName.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -356,6 +362,29 @@ const FINJOE_FUNCTION_DECLARATIONS = [
         limit: { type: Type.NUMBER },
       },
       required: ["query"],
+    },
+  },
+  {
+    name: "list_incomes",
+    description: "List recent income records. Returns income details including recordedByName.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        limit: { type: Type.NUMBER, description: "Max results (default 20)" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "list_bank_transactions",
+    description: "List recent bank transactions for reconciliation. Returns details including matchedByName.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        status: { type: Type.STRING, description: "unmatched, matched" },
+        limit: { type: Type.NUMBER, description: "Max results (default 20)" },
+      },
+      required: [],
     },
   },
   // Analytics (admin, finance only)
@@ -543,7 +572,7 @@ const FINJOE_FUNCTION_DECLARATIONS = [
 ];
 
 const BASE_TOOLS = ["create_expense", "create_income", "create_role_change_request", "store_pending_expense", "store_pending_role_change", "confirm_expense", "confirm_income"];
-const READ_TOOLS = ["list_expenses", "get_expense", "submit_expense", "update_expense", "delete_expense", "list_pending_approvals", "list_role_change_requests", "search_expenses", "semantic_search_expenses", "bulk_create_expenses"];
+const READ_TOOLS = ["list_expenses", "list_incomes", "list_bank_transactions", "get_expense", "submit_expense", "update_expense", "delete_expense", "list_pending_approvals", "list_role_change_requests", "search_expenses", "semantic_search_expenses", "bulk_create_expenses"];
 const ANALYTICS_TOOLS = ["expense_summary", "pending_workload", "petty_cash_summary", "dashboard_summary", "predict_cash_requirement"];
 const APPROVE_TOOLS = ["approve_expense", "reject_expense", "approve_role_request", "reject_role_request", "record_payout"];
 const RECURRING_TOOLS = ["create_recurring_template", "list_recurring_templates", "update_recurring_template", "delete_recurring_template"];
