@@ -276,7 +276,7 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(400).json({ error: "tenantId required" });
       if (!tenantId || typeof tenantId !== "string") return res.status(400).json({ error: "tenantId required" });
       const whereClause = and(eq(costCenters.id, req.params.id), eq(costCenters.tenantId, tenantId));
-      const [updated] = await db.update(costCenters).set({ isActive: false, updatedAt: new Date() }).where(whereClause).returning();
+      const [updated] = await db.update(costCenters).set({ isActive: false, updatedAt: new Date(), updatedById: user?.id || null }).where(whereClause).returning();
       if (!updated) return res.status(404).json({ error: "Not found" });
       res.status(204).send();
     } catch (e) {
@@ -1318,6 +1318,8 @@ export async function registerRoutes(app: Express) {
         ...r,
         campusId: r.costCenterId,
         campusName: r.costCenterName,
+        campus: r.costCenterId ? { id: r.costCenterId, name: r.costCenterName } : null,
+        category: r.categoryId ? { id: r.categoryId, name: r.categoryName } : null,
       }));
       res.json({ rows: result, total, limit, offset, hasMore: offset + rows.length < total });
     } catch (e) {
@@ -1721,6 +1723,7 @@ export async function registerRoutes(app: Express) {
               matchedIncomeId: op.incomeId ?? null,
               matchConfidence: op.confidence,
               matchedAt: new Date(),
+              matchedById: req.user?.id || null,
             }).where(eq(bankTransactions.id, op.bankTxnId));
 
             if (op.expenseId) {
@@ -2356,7 +2359,7 @@ export async function registerRoutes(app: Express) {
           skipped++;
           continue;
         }
-        await db.insert(expenseCategories).values({ tenantId: tid, ...d, isActive: true });
+        await db.insert(expenseCategories).values({ tenantId: tid, ...d, isActive: true, createdById: user?.id || null });
         created++;
       }
       res.json({ created, skipped });
@@ -3592,7 +3595,7 @@ export async function registerRoutes(app: Express) {
       if (!name || !slug) return res.status(400).json({ error: "name and slug required" });
       const slugNorm = slug.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
       if (!slugNorm) return res.status(400).json({ error: "Invalid slug" });
-      const [created] = await db.insert(tenants).values({ name, slug: slugNorm, isActive: true }).returning();
+      const [created] = await db.insert(tenants).values({ name, slug: slugNorm, isActive: true, createdById: req.user?.id || null }).returning();
       if (!created) return res.status(500).json({ error: "Failed to create tenant" });
 
       // Auto-seed MIS categories for the new tenant
@@ -3667,7 +3670,7 @@ export async function registerRoutes(app: Express) {
       const [existing] = await db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
       if (!existing) return res.status(404).json({ error: "Tenant not found" });
       if (tenantId === "default") return res.status(400).json({ error: "Cannot delete default tenant" });
-      await db.update(tenants).set({ isActive: false, updatedAt: new Date() }).where(eq(tenants.id, tenantId));
+      await db.update(tenants).set({ isActive: false, updatedAt: new Date(), updatedById: req.user?.id || null }).where(eq(tenants.id, tenantId));
       res.status(204).send();
     } catch (e) {
       logger.error("Tenant delete error", { requestId: req.requestId, err: String(e) });

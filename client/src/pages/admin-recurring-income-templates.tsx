@@ -62,6 +62,8 @@ type RecurringIncomeTemplate = {
   costCenterName: string | null;
   categoryName: string | null;
   campusName?: string | null;
+  createdByName?: string | null;
+  updatedByName?: string | null;
 };
 
 const FREQUENCY_LABELS: Record<string, string> = {

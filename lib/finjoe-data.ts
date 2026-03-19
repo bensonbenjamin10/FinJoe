@@ -6,6 +6,7 @@ import { eq, and, desc, sql, or, isNull, aliasedTable } from "drizzle-orm";
 import { embedExpenseText } from "./expense-embeddings.js";
 import { isFullUuid, toShortExpenseId } from "./expense-id.js";
 import {
+  bankTransactions,
   costCenters,
   expenseCategories,
   finjoeSettings,

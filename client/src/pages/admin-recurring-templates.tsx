@@ -66,6 +66,8 @@ type RecurringTemplate = {
   costCenterName: string | null;
   categoryName: string | null;
   campusName?: string | null;
+  createdByName?: string | null;
+  updatedByName?: string | null;
 };
 
 /** GSTIN must be exactly 15 alphanumeric characters when provided */
