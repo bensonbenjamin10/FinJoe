@@ -1,7 +1,7 @@
 import express, { type Express } from "express";
 import multer from "multer";
 import passport from "passport";
-import { eq, and, desc, or, sql, inArray, isNull, gte, lte } from "drizzle-orm";
+import { eq, and, desc, or, sql, inArray, isNull, gte, lte, aliasedTable } from "drizzle-orm";
 import { db, pool } from "./db.js";
 import { parseBankStatementCsv, isValidDateString } from "../lib/bank-statement-parser.js";
 import { analyzeImportSuggestions } from "../lib/import-analyzer.js";
@@ -1264,6 +1264,8 @@ export async function registerRoutes(app: Express) {
         .from(incomeRecords)
         .where(whereClause);
 
+      const recorderTable = aliasedTable(users, "recorder");
+
       const rows = await db
         .select({
           id: incomeRecords.id,
@@ -1278,10 +1280,12 @@ export async function registerRoutes(app: Express) {
           createdAt: incomeRecords.createdAt,
           costCenterName: costCenters.name,
           categoryName: incomeCategories.name,
+          recordedByName: recorderTable.name,
         })
         .from(incomeRecords)
         .leftJoin(costCenters, eq(incomeRecords.costCenterId, costCenters.id))
         .leftJoin(incomeCategories, eq(incomeRecords.categoryId, incomeCategories.id))
+        .leftJoin(recorderTable, eq(incomeRecords.recordedById, recorderTable.id))
         .where(whereClause)
         .orderBy(desc(incomeRecords.incomeDate), desc(incomeRecords.createdAt))
         .limit(limit)
@@ -1321,6 +1325,7 @@ export async function registerRoutes(app: Express) {
           particulars: particulars || null,
           incomeType: incomeType ?? "other",
           source: "manual",
+          recordedById: user?.id || null,
         })
         .returning();
       if (!created) return res.status(500).json({ error: "Failed to create" });
@@ -3032,6 +3037,9 @@ export async function registerRoutes(app: Express) {
         .from(expenses)
         .where(whereClause);
 
+      const submitterTable = aliasedTable(users, "submitter");
+      const approverTable = aliasedTable(users, "approver");
+
       const rows = await db
         .select({
           id: expenses.id,
@@ -3054,10 +3062,14 @@ export async function registerRoutes(app: Express) {
           createdAt: expenses.createdAt,
           costCenterName: costCenters.name,
           categoryName: expenseCategories.name,
+          submittedByName: submitterTable.name,
+          approvedByName: approverTable.name,
         })
         .from(expenses)
         .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
+        .leftJoin(submitterTable, eq(expenses.submittedById, submitterTable.id))
+        .leftJoin(approverTable, eq(expenses.approvedById, approverTable.id))
         .where(whereClause)
         .orderBy(desc(expenses.expenseDate), desc(expenses.createdAt))
         .limit(limit)
@@ -3168,6 +3180,9 @@ export async function registerRoutes(app: Express) {
       if (startDate > endDate) {
         return res.status(400).json({ error: "startDate must be before or equal to endDate" });
       }
+      const submitterTable = aliasedTable(users, "submitter");
+      const approverTable = aliasedTable(users, "approver");
+
       const rows = await db
         .select({
           id: expenses.id,
@@ -3187,10 +3202,14 @@ export async function registerRoutes(app: Express) {
           payoutAt: expenses.payoutAt,
           costCenterName: costCenters.name,
           categoryName: expenseCategories.name,
+          submittedByName: submitterTable.name,
+          approvedByName: approverTable.name,
         })
         .from(expenses)
         .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
+        .leftJoin(submitterTable, eq(expenses.submittedById, submitterTable.id))
+        .leftJoin(approverTable, eq(expenses.approvedById, approverTable.id))
         .where(
           and(
             eq(expenses.tenantId, tid),
@@ -3201,7 +3220,7 @@ export async function registerRoutes(app: Express) {
         .orderBy(expenses.expenseDate, expenses.createdAt)
         .limit(EXPORT_ROW_LIMIT);
       const lines = [
-        "Date,Cost Center,Category,Amount,Description,Particulars,Vendor,Invoice Number,Invoice Date,GSTIN,Tax Type,Voucher Number,Status,Payout Method,Payout Ref,Payout At",
+        "Date,Cost Center,Category,Amount,Description,Particulars,Vendor,Invoice Number,Invoice Date,GSTIN,Tax Type,Voucher Number,Status,Payout Method,Payout Ref,Payout At,Requested By,Approved By",
       ];
       for (const r of rows) {
         const date = r.expenseDate ? new Date(r.expenseDate).toISOString().slice(0, 10) : "";
@@ -3225,6 +3244,8 @@ export async function registerRoutes(app: Express) {
             escapeCsv(r.payoutMethod ?? ""),
             escapeCsv(r.payoutRef ?? ""),
             payoutAt,
+            escapeCsv(r.submittedByName ?? ""),
+            escapeCsv(r.approvedByName ?? ""),
           ].join(",")
         );
       }

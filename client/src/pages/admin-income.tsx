@@ -501,8 +501,17 @@ export default function AdminIncome() {
                       {incomeList.map((inc) => (
                         <TableRow key={inc.id}>
                           <TableCell>{format(new Date(inc.incomeDate), "dd MMM yyyy")}</TableCell>
-                          <TableCell className="max-w-[220px] truncate" title={inc.particulars || undefined}>
-                            {inc.particulars || "—"}
+                          <TableCell className="max-w-[220px]">
+                            <div className="flex flex-col gap-0.5 truncate">
+                              <span className="truncate" title={inc.particulars || undefined}>
+                                {inc.particulars || "—"}
+                              </span>
+                              {inc.recordedByName && (
+                                <div className="text-xs text-muted-foreground truncate">
+                                  Rec: {inc.recordedByName}
+                                </div>
+                              )}
+                            </div>
                           </TableCell>
                           <TableCell>{inc.category?.name || "-"}</TableCell>
                           <TableCell>{inc.campus?.name || "Corporate"}</TableCell>
@@ -857,6 +866,7 @@ export default function AdminIncome() {
               <p><span className="font-medium">Source:</span> {SOURCE_LABELS[viewIncomeDialog.source] || viewIncomeDialog.source}</p>
               <p><span className="font-medium">{costCenterLabel}:</span> {viewIncomeDialog.campus?.name || "Corporate"}</p>
               <p><span className="font-medium">Particulars:</span> {viewIncomeDialog.particulars || "—"}</p>
+              <p><span className="font-medium">Recorded By:</span> {viewIncomeDialog.recordedByName || "System"}</p>
             </div>
           )}
         </DialogContent>

@@ -396,6 +396,7 @@ export const incomeRecords = pgTable("income_records", {
   source: text("source").notNull().default("manual"),
   bankTransactionId: varchar("bank_transaction_id").references(() => bankTransactions.id),
   recurringTemplateId: varchar("recurring_template_id"),
+  recordedById: varchar("recorded_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -544,6 +545,8 @@ export type ExpenseWithDetails = Expense & {
   campus?: { id: string; name: string | null; slug: string } | null;
   costCenter?: { id: string; name: string | null; slug: string } | null;
   category?: { id: string; name: string | null; slug: string } | null;
+  submittedByName?: string | null;
+  approvedByName?: string | null;
 };
 export type FinJoeContact = typeof finJoeContacts.$inferSelect;
 export type InsertFinJoeContact = typeof finJoeContacts.$inferInsert;
@@ -578,6 +581,7 @@ export type IncomeWithDetails = IncomeRecord & {
   categoryName?: string | null;
   campusId?: string | null;
   campusName?: string | null;
+  recordedByName?: string | null;
 };
 
 export type RegistrationWithDetails = Record<string, unknown>;

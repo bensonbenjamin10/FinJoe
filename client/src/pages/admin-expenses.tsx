@@ -1518,18 +1518,25 @@ export default function AdminExpenses() {
                         <TableRow key={exp.id}>
                           <TableCell>{format(new Date(exp.expenseDate), "dd MMM yyyy")}</TableCell>
                           <TableCell className="max-w-[200px]">
-                            <div className="flex items-center gap-2 truncate">
-                              {(exp as ExpenseWithDetails).recurringTemplateId && (
-                                <Link href={tenantId ? `/admin/recurring-templates?tenantId=${tenantId}` : "/admin/recurring-templates"}>
-                                  <Badge variant="secondary" className="shrink-0 text-xs gap-1 cursor-pointer hover:bg-secondary/80">
-                                    <Repeat className="h-3 w-3" />
-                                    Recurring
-                                  </Badge>
-                                </Link>
+                            <div className="flex flex-col gap-0.5 truncate">
+                              <div className="flex items-center gap-2 truncate">
+                                {(exp as ExpenseWithDetails).recurringTemplateId && (
+                                  <Link href={tenantId ? `/admin/recurring-templates?tenantId=${tenantId}` : "/admin/recurring-templates"}>
+                                    <Badge variant="secondary" className="shrink-0 text-xs gap-1 cursor-pointer hover:bg-secondary/80">
+                                      <Repeat className="h-3 w-3" />
+                                      Recurring
+                                    </Badge>
+                                  </Link>
+                                )}
+                                <span className="truncate" title={exp.description || exp.particulars || undefined}>
+                                  {exp.description || exp.particulars || "—"}
+                                </span>
+                              </div>
+                              {((exp as any).submittedByName || (exp as any).submittedById) && (
+                                <div className="text-xs text-muted-foreground truncate">
+                                  Req: {(exp as any).submittedByName || "Unknown"}
+                                </div>
                               )}
-                              <span className="truncate" title={exp.description || exp.particulars || undefined}>
-                                {exp.description || exp.particulars || "—"}
-                              </span>
                             </div>
                           </TableCell>
                           <TableCell className="max-w-[120px] truncate" title={(exp as any).invoiceNumber}>
@@ -1546,7 +1553,10 @@ export default function AdminExpenses() {
                             </span>
                           </TableCell>
                           <TableCell>
-                            <Badge variant={STATUS_BADGES[exp.status]?.variant || "outline"}>
+                            <Badge 
+                              variant={STATUS_BADGES[exp.status]?.variant || "outline"}
+                              title={`Requested: ${(exp as any).submittedByName || "Unknown"}\nApproved: ${(exp as any).approvedByName || "Pending"}`}
+                            >
                               {STATUS_BADGES[exp.status]?.label || exp.status}
                             </Badge>
                           </TableCell>
@@ -2246,6 +2256,14 @@ export default function AdminExpenses() {
                       {STATUS_BADGES[viewExpenseDialog.status]?.label || viewExpenseDialog.status}
                     </Badge>
                   </p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Requested By</span>
+                  <p className="font-medium">{(viewExpenseDialog as any).submittedByName || "—"}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Approved By</span>
+                  <p className="font-medium">{(viewExpenseDialog as any).approvedByName || "—"}</p>
                 </div>
                 {(viewExpenseDialog.status === "paid" && (viewExpenseDialog.payoutRef || (viewExpenseDialog as any).replenishmentId)) && (
                   <div className="col-span-2">

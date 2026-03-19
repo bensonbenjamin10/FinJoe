@@ -1,0 +1,1 @@
+ALTER TABLE income_records ADD COLUMN IF NOT EXISTS recorded_by_id VARCHAR REFERENCES users(id);
