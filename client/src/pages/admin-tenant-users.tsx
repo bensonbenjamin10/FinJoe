@@ -131,7 +131,7 @@ export default function AdminTenantUsers() {
 
   return (
     <>
-      <div className="max-w-4xl">
+      <div className="w-full space-y-6">
         <Breadcrumb className="mb-4">
           <BreadcrumbList>
             <BreadcrumbItem>

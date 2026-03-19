@@ -158,7 +158,7 @@ export default function AdminTenants() {
 
   return (
     <>
-      <div className="max-w-4xl">
+      <div className="w-full space-y-6">
         <PageHeader
           title="Tenant Management"
           description="Create and manage organizations. Each tenant has its own FinJoe instance with separate contacts and WhatsApp settings."
