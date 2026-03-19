@@ -44,6 +44,8 @@ type TenantUser = {
   role: string;
   isActive: boolean;
   createdAt: string;
+  createdByName?: string | null;
+  updatedByName?: string | null;
 };
 
 type Tenant = {
@@ -192,7 +194,19 @@ export default function AdminTenantUsers() {
                     {users.map((u) => (
                       <TableRow key={u.id}>
                         <TableCell className="px-6 py-4">{u.email}</TableCell>
-                        <TableCell className="px-6 py-4">{u.name}</TableCell>
+                        <TableCell className="px-6 py-4">
+                          <div className="flex flex-col gap-0.5">
+                            <span>{u.name}</span>
+                            {(u.createdByName || u.updatedByName) && (
+                              <span 
+                                className="text-xs text-muted-foreground cursor-help"
+                                title={`Created by: ${u.createdByName || 'Unknown'}\nUpdated by: ${u.updatedByName || 'Unknown'}`}
+                              >
+                                {u.updatedByName ? `Upd: ${u.updatedByName}` : `By: ${u.createdByName}`}
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
                         <TableCell className="px-6 py-4">
                           <span className="capitalize">{u.role}</span>
                         </TableCell>

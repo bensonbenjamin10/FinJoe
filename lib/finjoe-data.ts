@@ -2,7 +2,7 @@
  * FinJoe data layer - direct DB access for FinJoe service.
  */
 
-import { eq, and, desc, sql, or, isNull } from "drizzle-orm";
+import { eq, and, desc, sql, or, isNull, aliasedTable } from "drizzle-orm";
 import { embedExpenseText } from "./expense-embeddings.js";
 import { isFullUuid, toShortExpenseId } from "./expense-id.js";
 import {
@@ -1025,6 +1025,8 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
     },
 
     async listRecurringTemplates(filters?: { isActive?: boolean }): Promise<Array<Record<string, unknown>>> {
+      const creatorTable = aliasedTable(users, "creator");
+      const updaterTable = aliasedTable(users, "updater");
       const conditions = [eq(recurringExpenseTemplates.tenantId, tenantId)];
       if (filters?.isActive !== undefined) conditions.push(eq(recurringExpenseTemplates.isActive, filters.isActive));
       const rows = await db
@@ -1048,10 +1050,16 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           nextRunDate: sql<string>`${recurringExpenseTemplates.nextRunDate}::text`.as("nextRunDate"),
           costCenterName: costCenters.name,
           categoryName: expenseCategories.name,
+          createdById: recurringExpenseTemplates.createdById,
+          updatedById: recurringExpenseTemplates.updatedById,
+          createdByName: creatorTable.name,
+          updatedByName: updaterTable.name,
         })
         .from(recurringExpenseTemplates)
         .leftJoin(costCenters, eq(recurringExpenseTemplates.costCenterId, costCenters.id))
         .leftJoin(expenseCategories, eq(recurringExpenseTemplates.categoryId, expenseCategories.id))
+        .leftJoin(creatorTable, eq(recurringExpenseTemplates.createdById, creatorTable.id))
+        .leftJoin(updaterTable, eq(recurringExpenseTemplates.updatedById, updaterTable.id))
         .where(and(...conditions))
         .orderBy(recurringExpenseTemplates.nextRunDate);
       return rows.map((r: Record<string, unknown>) => ({
@@ -1197,6 +1205,8 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
     },
 
     async listRecurringIncomeTemplates(filters?: { isActive?: boolean }): Promise<Array<Record<string, unknown>>> {
+      const creatorTable = aliasedTable(users, "creator");
+      const updaterTable = aliasedTable(users, "updater");
       const conditions = [eq(recurringIncomeTemplates.tenantId, tenantId)];
       if (filters?.isActive !== undefined) conditions.push(eq(recurringIncomeTemplates.isActive, filters.isActive));
       const rows = await db
@@ -1216,10 +1226,16 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           nextRunDate: sql<string>`${recurringIncomeTemplates.nextRunDate}::text`.as("nextRunDate"),
           costCenterName: costCenters.name,
           categoryName: incomeCategories.name,
+          createdById: recurringIncomeTemplates.createdById,
+          updatedById: recurringIncomeTemplates.updatedById,
+          createdByName: creatorTable.name,
+          updatedByName: updaterTable.name,
         })
         .from(recurringIncomeTemplates)
         .leftJoin(costCenters, eq(recurringIncomeTemplates.costCenterId, costCenters.id))
         .leftJoin(incomeCategories, eq(recurringIncomeTemplates.categoryId, incomeCategories.id))
+        .leftJoin(creatorTable, eq(recurringIncomeTemplates.createdById, creatorTable.id))
+        .leftJoin(updaterTable, eq(recurringIncomeTemplates.updatedById, updaterTable.id))
         .where(and(...conditions))
         .orderBy(recurringIncomeTemplates.nextRunDate);
       return rows.map((r: Record<string, unknown>) => ({

@@ -183,9 +183,26 @@ export async function registerRoutes(app: Express) {
       const user = req.user as Express.User;
       if (user.role !== "super_admin" && !tenantId) return res.status(400).json({ error: "tenantId required" });
       if (!tenantId || typeof tenantId !== "string") return res.status(400).json({ error: "tenantId required" });
+
+      const creatorTable = aliasedTable(users, "creator");
+      const updaterTable = aliasedTable(users, "updater");
+
       const rows = await db
-        .select()
+        .select({
+          id: costCenters.id,
+          tenantId: costCenters.tenantId,
+          name: costCenters.name,
+          slug: costCenters.slug,
+          type: costCenters.type,
+          isActive: costCenters.isActive,
+          createdAt: costCenters.createdAt,
+          updatedAt: costCenters.updatedAt,
+          createdByName: creatorTable.name,
+          updatedByName: updaterTable.name,
+        })
         .from(costCenters)
+        .leftJoin(creatorTable, eq(costCenters.createdById, creatorTable.id))
+        .leftJoin(updaterTable, eq(costCenters.updatedById, updaterTable.id))
         .where(eq(costCenters.tenantId, tenantId))
         .orderBy(costCenters.name);
       res.json(rows);
@@ -215,6 +232,7 @@ export async function registerRoutes(app: Express) {
           slug: slugVal,
           type: (type && typeof type === "string") ? type.trim() || null : null,
           isActive: true,
+          createdById: user?.id || null,
         })
         .returning();
       if (!created) return res.status(500).json({ error: "Failed to create" });
@@ -239,6 +257,7 @@ export async function registerRoutes(app: Express) {
         updates.slug = slug.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
       if (type !== undefined) updates.type = (typeof type === "string" && type.trim()) ? type.trim() : null;
       if (typeof isActive === "boolean") updates.isActive = isActive;
+      updates.updatedById = user?.id || null;
       const whereClause = and(eq(costCenters.id, req.params.id), eq(costCenters.tenantId, tenantId));
       const [updated] = await db.update(costCenters).set(updates as any).where(whereClause).returning();
       if (!updated) return res.status(404).json({ error: "Not found" });
@@ -1074,6 +1093,7 @@ export async function registerRoutes(app: Express) {
           incomeType: incomeType ?? "other",
           displayOrder: displayOrder ?? 0,
           isActive: true,
+          createdById: user?.id || null,
         })
         .returning();
       if (!created) return res.status(500).json({ error: "Failed to create" });
@@ -1088,6 +1108,7 @@ export async function registerRoutes(app: Express) {
   app.patch("/api/admin/income-categories/:id", requireAdmin, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
       const tid = tenantId ?? req.body?.tenantId;
       const { name, slug, incomeType, displayOrder, isActive } = req.body;
       const updates: Record<string, unknown> = { updatedAt: new Date() };
@@ -1096,6 +1117,7 @@ export async function registerRoutes(app: Express) {
       if (incomeType !== undefined) updates.incomeType = incomeType;
       if (displayOrder !== undefined) updates.displayOrder = displayOrder;
       if (isActive !== undefined) updates.isActive = isActive;
+      updates.updatedById = user?.id || null;
       const whereClause = tid ? and(eq(incomeCategories.id, req.params.id), eq(incomeCategories.tenantId, tid)) : eq(incomeCategories.id, req.params.id);
       const [updated] = await db.update(incomeCategories).set(updates as any).where(whereClause).returning();
       if (!updated) return res.status(404).json({ error: "Not found" });
@@ -1460,6 +1482,8 @@ export async function registerRoutes(app: Express) {
 
       const [countRow] = await db.select({ count: sql<number>`count(*)::int` }).from(bankTransactions).where(whereClause);
 
+      const matcherTable = aliasedTable(users, "matcher");
+
       const rows = await db.select({
         id: bankTransactions.id,
         transactionDate: bankTransactions.transactionDate,
@@ -1473,7 +1497,9 @@ export async function registerRoutes(app: Express) {
         matchedAt: bankTransactions.matchedAt,
         importBatchId: bankTransactions.importBatchId,
         createdAt: bankTransactions.createdAt,
+        matchedByName: matcherTable.name,
       }).from(bankTransactions)
+        .leftJoin(matcherTable, eq(bankTransactions.matchedById, matcherTable.id))
         .where(whereClause)
         .orderBy(desc(bankTransactions.transactionDate))
         .limit(limit)
@@ -1790,6 +1816,7 @@ export async function registerRoutes(app: Express) {
           matchedIncomeId: iId ?? null,
           matchConfidence: "manual",
           matchedAt: new Date(),
+          matchedById: req.user?.id || null,
         }).where(eq(bankTransactions.id, btId));
 
         if (eId) {
@@ -1829,6 +1856,7 @@ export async function registerRoutes(app: Express) {
           matchedIncomeId: null,
           matchConfidence: null,
           matchedAt: null,
+          matchedById: null,
         }).where(eq(bankTransactions.id, btId));
       });
 
@@ -2202,9 +2230,28 @@ export async function registerRoutes(app: Express) {
       const includeInactive = req.query?.includeInactive === "true";
       const conditions = [or(eq(expenseCategories.tenantId, tid), isNull(expenseCategories.tenantId))];
       if (!includeInactive) conditions.push(eq(expenseCategories.isActive, true));
+
+      const creatorTable = aliasedTable(users, "creator");
+      const updaterTable = aliasedTable(users, "updater");
+
       const rows = await db
-        .select()
+        .select({
+          id: expenseCategories.id,
+          tenantId: expenseCategories.tenantId,
+          name: expenseCategories.name,
+          slug: expenseCategories.slug,
+          parentId: expenseCategories.parentId,
+          displayOrder: expenseCategories.displayOrder,
+          cashflowLabel: expenseCategories.cashflowLabel,
+          isActive: expenseCategories.isActive,
+          createdAt: expenseCategories.createdAt,
+          updatedAt: expenseCategories.updatedAt,
+          createdByName: creatorTable.name,
+          updatedByName: updaterTable.name,
+        })
         .from(expenseCategories)
+        .leftJoin(creatorTable, eq(expenseCategories.createdById, creatorTable.id))
+        .leftJoin(updaterTable, eq(expenseCategories.updatedById, updaterTable.id))
         .where(and(...conditions))
         .orderBy(expenseCategories.displayOrder, expenseCategories.name);
       res.json(rows);
@@ -2233,6 +2280,7 @@ export async function registerRoutes(app: Express) {
           cashflowLabel: cashflowLabel || name,
           displayOrder: displayOrder ?? 0,
           isActive: true,
+          createdById: user?.id || null,
         })
         .returning();
       if (!created) return res.status(500).json({ error: "Failed to create" });
@@ -2247,6 +2295,7 @@ export async function registerRoutes(app: Express) {
   app.patch("/api/admin/expense-categories/:id", requireAdmin, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
       const tid = tenantId ?? req.body?.tenantId;
       const { name, slug, cashflowLabel, displayOrder, isActive } = req.body;
       const updates: Record<string, unknown> = { updatedAt: new Date() };
@@ -2255,6 +2304,7 @@ export async function registerRoutes(app: Express) {
       if (cashflowLabel !== undefined) updates.cashflowLabel = cashflowLabel;
       if (displayOrder !== undefined) updates.displayOrder = displayOrder;
       if (isActive !== undefined) updates.isActive = isActive;
+      updates.updatedById = user?.id || null;
       const whereClause = tid ? and(eq(expenseCategories.id, req.params.id), eq(expenseCategories.tenantId, tid)) : eq(expenseCategories.id, req.params.id);
       const [updated] = await db.update(expenseCategories).set(updates as any).where(whereClause).returning();
       if (!updated) return res.status(404).json({ error: "Not found" });
@@ -2402,6 +2452,7 @@ export async function registerRoutes(app: Express) {
       if (dayOfWeek !== undefined) updates.dayOfWeek = Math.min(6, Math.max(0, Number(dayOfWeek)));
       if (endDate !== undefined) updates.endDate = endDate ? String(endDate) : null;
       if (isActive !== undefined) updates.isActive = Boolean(isActive);
+      updates.updatedById = user?.id || null;
       if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No fields to update" });
       const finJoeData = createFinJoeData(db, tid);
       const result = await finJoeData.updateRecurringTemplate(req.params.id, updates as any);
@@ -2507,6 +2558,7 @@ export async function registerRoutes(app: Express) {
       if (dayOfWeek !== undefined) updates.dayOfWeek = Math.min(6, Math.max(0, Number(dayOfWeek)));
       if (endDate !== undefined) updates.endDate = endDate ? String(endDate) : null;
       if (isActive !== undefined) updates.isActive = Boolean(isActive);
+      updates.updatedById = user?.id || null;
       if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No fields to update" });
       const finJoeData = createFinJoeData(db, tid);
       const result = await finJoeData.updateRecurringIncomeTemplate(req.params.id, updates as any);
@@ -3627,9 +3679,24 @@ export async function registerRoutes(app: Express) {
       const tenantId = req.params.id;
       const [tenant] = await db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
       if (!tenant) return res.status(404).json({ error: "Tenant not found" });
+
+      const creatorTable = aliasedTable(users, "creator");
+      const updaterTable = aliasedTable(users, "updater");
+
       const rows = await db
-        .select({ id: users.id, email: users.email, name: users.name, role: users.role, isActive: users.isActive, createdAt: users.createdAt })
+        .select({ 
+          id: users.id, 
+          email: users.email, 
+          name: users.name, 
+          role: users.role, 
+          isActive: users.isActive, 
+          createdAt: users.createdAt,
+          createdByName: creatorTable.name,
+          updatedByName: updaterTable.name
+        })
         .from(users)
+        .leftJoin(creatorTable, eq(users.createdById, creatorTable.id))
+        .leftJoin(updaterTable, eq(users.updatedById, updaterTable.id))
         .where(eq(users.tenantId, tenantId))
         .orderBy(users.name);
       res.json(rows);
@@ -3655,6 +3722,7 @@ export async function registerRoutes(app: Express) {
           role: "admin",
           tenantId,
           isActive: true,
+          createdById: req.user?.id || null,
         })
         .returning();
       if (!created) return res.status(500).json({ error: "Failed to create admin" });
@@ -3681,6 +3749,7 @@ export async function registerRoutes(app: Express) {
       if (typeof password === "string" && password.trim()) {
         updates.passwordHash = await hashPassword(password);
       }
+      updates.updatedById = req.user?.id || null;
       const [updated] = await db.update(users).set(updates as any).where(eq(users.id, userId)).returning();
       if (!updated) return res.status(404).json({ error: "User not found" });
       const { passwordHash, ...u } = updated;

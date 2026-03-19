@@ -378,8 +378,20 @@ export default function AdminRecurringIncomeTemplates() {
               <TableBody>
                 {templates.map((tpl) => (
                   <TableRow key={tpl.id}>
-                    <TableCell className="max-w-[200px] truncate" title={tpl.particulars || undefined}>
-                      {tpl.particulars || "—"}
+                    <TableCell className="max-w-[200px]">
+                      <div className="flex flex-col gap-0.5 truncate">
+                        <span className="truncate" title={tpl.particulars || undefined}>
+                          {tpl.particulars || "—"}
+                        </span>
+                        {(tpl.createdByName || tpl.updatedByName) && (
+                          <div 
+                            className="text-xs text-muted-foreground truncate cursor-help"
+                            title={`Created by: ${tpl.createdByName || 'Unknown'}\nUpdated by: ${tpl.updatedByName || 'Unknown'}`}
+                          >
+                            {tpl.updatedByName ? `Upd: ${tpl.updatedByName}` : `By: ${tpl.createdByName}`}
+                          </div>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>{tpl.categoryName || tpl.categoryId}</TableCell>
                     <TableCell>{tpl.campusName || tpl.costCenterName || "Corporate"}</TableCell>

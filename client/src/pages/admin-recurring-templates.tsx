@@ -443,6 +443,14 @@ export default function AdminRecurringTemplates() {
                         {tpl.vendorName && tpl.description && (
                           <div className="text-sm text-muted-foreground truncate">{tpl.vendorName}</div>
                         )}
+                        {(tpl.createdByName || tpl.updatedByName) && (
+                          <div 
+                            className="text-xs text-muted-foreground truncate mt-0.5 cursor-help"
+                            title={`Created by: ${tpl.createdByName || 'Unknown'}\nUpdated by: ${tpl.updatedByName || 'Unknown'}`}
+                          >
+                            {tpl.updatedByName ? `Upd: ${tpl.updatedByName}` : `By: ${tpl.createdByName}`}
+                          </div>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell>{tpl.categoryName || tpl.categoryId}</TableCell>

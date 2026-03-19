@@ -231,7 +231,19 @@ export default function AdminCostCenters({
                 <TableBody>
                   {costCenters.map((cc) => (
                     <TableRow key={cc.id}>
-                      <TableCell className="px-6 py-4 font-medium">{cc.name}</TableCell>
+                      <TableCell className="px-6 py-4">
+                        <div className="flex flex-col gap-0.5">
+                          <span className="font-medium">{cc.name}</span>
+                          {((cc as any).createdByName || (cc as any).updatedByName) && (
+                            <span 
+                              className="text-xs text-muted-foreground cursor-help"
+                              title={`Created by: ${(cc as any).createdByName || 'Unknown'}\nUpdated by: ${(cc as any).updatedByName || 'Unknown'}`}
+                            >
+                              {(cc as any).updatedByName ? `Upd: ${(cc as any).updatedByName}` : `By: ${(cc as any).createdByName}`}
+                            </span>
+                          )}
+                        </div>
+                      </TableCell>
                       <TableCell className="px-6 py-4 font-mono text-sm">{cc.slug}</TableCell>
                       <TableCell className="px-6 py-4">{cc.type || "-"}</TableCell>
                       <TableCell className="px-6 py-4">

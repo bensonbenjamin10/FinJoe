@@ -50,6 +50,8 @@ export const costCenters = pgTable("cost_centers", {
   slug: text("slug").notNull(),
   type: varchar("type"),
   isActive: boolean("is_active").notNull().default(true),
+  createdById: varchar("created_by_id"),
+  updatedById: varchar("updated_by_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -67,6 +69,8 @@ export const users = pgTable("users", {
   role: text("role").notNull().default("admin"),
   costCenterId: varchar("cost_center_id").references(() => costCenters.id),
   isActive: boolean("is_active").notNull().default(true),
+  createdById: varchar("created_by_id"),
+  updatedById: varchar("updated_by_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -81,6 +85,8 @@ export const expenseCategories = pgTable("expense_categories", {
   displayOrder: integer("display_order").notNull().default(0),
   cashflowLabel: text("cashflow_label").notNull(),
   isActive: boolean("is_active").notNull().default(true),
+  createdById: varchar("created_by_id"),
+  updatedById: varchar("updated_by_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -95,6 +101,8 @@ export const pettyCashFunds = pgTable("petty_cash_funds", {
   custodianId: varchar("custodian_id").references(() => users.id).notNull(),
   imprestAmount: integer("imprest_amount").notNull(),
   currentBalance: integer("current_balance").notNull().default(0),
+  createdById: varchar("created_by_id").references(() => users.id),
+  updatedById: varchar("updated_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -130,6 +138,7 @@ export const expenses = pgTable("expenses", {
   taxType: text("tax_type"),
   voucherNumber: text("voucher_number"),
   bankTransactionId: varchar("bank_transaction_id"),
+  matchedById: varchar("matched_by_id").references(() => users.id),
   recurringTemplateId: varchar("recurring_template_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -158,6 +167,7 @@ export const recurringExpenseTemplates = pgTable("recurring_expense_templates", 
   isActive: boolean("is_active").notNull().default(true),
   nextRunDate: timestamp("next_run_date").notNull(),
   createdById: varchar("created_by_id").references(() => users.id),
+  updatedById: varchar("updated_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -333,6 +343,8 @@ export const incomeCategories = pgTable("income_categories", {
   incomeType: text("income_type").notNull().default("other"),
   displayOrder: integer("display_order").notNull().default(0),
   isActive: boolean("is_active").notNull().default(true),
+  createdById: varchar("created_by_id"),
+  updatedById: varchar("updated_by_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -356,6 +368,7 @@ export const recurringIncomeTemplates = pgTable("recurring_income_templates", {
   isActive: boolean("is_active").notNull().default(true),
   nextRunDate: timestamp("next_run_date").notNull(),
   createdById: varchar("created_by_id").references(() => users.id),
+  updatedById: varchar("updated_by_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

@@ -550,7 +550,11 @@ export default function AdminReconciliation() {
                               </TableCell>
                               <TableCell>
                                 {bt.reconciliationStatus === "matched" || bt.reconciliationStatus === "auto_from_import" ? (
-                                  <Badge variant="default" className="text-xs">
+                                  <Badge 
+                                    variant="default" 
+                                    className="text-xs"
+                                    title={(bt as any).matchedByName ? `Matched by: ${(bt as any).matchedByName}` : "Matched automatically"}
+                                  >
                                     <CheckCircle2 className="h-3 w-3 mr-1" />
                                     {bt.matchConfidence ?? "matched"}
                                   </Badge>
