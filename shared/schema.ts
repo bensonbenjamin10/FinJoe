@@ -140,7 +140,6 @@ export const expenses = pgTable("expenses", {
   taxType: text("tax_type"),
   voucherNumber: text("voucher_number"),
   bankTransactionId: varchar("bank_transaction_id"),
-  matchedById: varchar("matched_by_id").references(() => users.id),
   recurringTemplateId: varchar("recurring_template_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

@@ -348,7 +348,6 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
     async getExpenseWithDetails(id: string): Promise<Record<string, unknown> | null> {
       const submitterTable = aliasedTable(users, "submitter");
       const approverTable = aliasedTable(users, "approver");
-      const matcherTable = aliasedTable(users, "matcher");
 
       const [row] = await db
         .select()
@@ -357,7 +356,6 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
         .leftJoin(submitterTable, eq(expenses.submittedById, submitterTable.id))
         .leftJoin(approverTable, eq(expenses.approvedById, approverTable.id))
-        .leftJoin(matcherTable, eq(expenses.matchedById, matcherTable.id))
         .where(and(eq(expenses.id, id), eq(expenses.tenantId, tenantId)))
         .limit(1);
       if (!row?.expenses) return null;
@@ -369,7 +367,6 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         category: row.expense_categories ? { id: row.expense_categories.id, name: row.expense_categories.name, slug: row.expense_categories.slug } : null,
         submittedByName: row.submitter ? row.submitter.name : null,
         approvedByName: row.approver ? row.approver.name : null,
-        matchedByName: row.matcher ? row.matcher.name : null,
       };
     },
 
