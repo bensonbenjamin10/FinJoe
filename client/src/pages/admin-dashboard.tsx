@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+import { useState } from "react";
 import { useSearchParams, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -259,7 +259,7 @@ export default function AdminDashboard() {
 
   if (!tenantId) {
     return (
-      <div className="container max-w-7xl py-8">
+      <div className="w-full py-8">
         <Card>
           <CardContent className="py-12 text-center">
             <p className="text-muted-foreground">
@@ -275,7 +275,7 @@ export default function AdminDashboard() {
   const comparison = analytics?.comparison;
 
   return (
-    <div className="container max-w-7xl py-8 space-y-8">
+    <div className="w-full py-8 space-y-8">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">

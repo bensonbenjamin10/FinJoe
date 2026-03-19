@@ -390,7 +390,7 @@ export default function AdminIncome() {
 
   if (!tenantId) {
     return (
-      <div className="container max-w-7xl py-8">
+      <div className="w-full py-8">
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
             {isSuperAdmin ? "Select a tenant to manage income." : "Tenant context required."}
@@ -401,7 +401,7 @@ export default function AdminIncome() {
   }
 
   return (
-    <div className="container max-w-7xl py-8">
+    <div className="w-full py-8">
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin/finjoe">
           <Button variant="ghost" size="icon">

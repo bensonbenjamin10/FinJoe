@@ -116,7 +116,7 @@ export default function AdminCron() {
   });
 
   return (
-    <div className="container max-w-4xl py-8 space-y-6">
+    <div className="w-full max-w-4xl mx-auto py-8 space-y-6">
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

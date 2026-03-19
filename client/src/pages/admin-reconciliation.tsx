@@ -305,7 +305,7 @@ export default function AdminReconciliation() {
 
   if (!tenantId) {
     return (
-      <div className="container max-w-7xl py-8">
+      <div className="w-full py-8">
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
             {isSuperAdmin ? "Select a tenant to manage reconciliation." : "Tenant context required."}
@@ -316,7 +316,7 @@ export default function AdminReconciliation() {
   }
 
   return (
-    <div className="container max-w-7xl py-8 space-y-6">
+    <div className="w-full py-8 space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">

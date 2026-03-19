@@ -364,7 +364,7 @@ export default function AdminRecurringTemplates() {
 
   if (!tenantId) {
     return (
-      <div className="container max-w-7xl py-8">
+      <div className="w-full py-8">
         <Card>
           <CardContent className="py-12 text-center">
             <p className="text-muted-foreground">
@@ -377,7 +377,7 @@ export default function AdminRecurringTemplates() {
   }
 
   return (
-    <div className="container max-w-7xl py-8">
+    <div className="w-full py-8">
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
