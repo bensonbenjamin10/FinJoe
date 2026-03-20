@@ -118,7 +118,7 @@ export const expenses = pgTable("expenses", {
   costCenterId: varchar("cost_center_id").references(() => costCenters.id),
   categoryId: varchar("category_id").references(() => expenseCategories.id).notNull(),
   amount: integer("amount").notNull(),
-  expenseDate: timestamp("expense_date").notNull(),
+  expenseDate: timestamp("expense_date"),
   description: text("description"),
   particulars: text("particulars"),
   status: text("status").notNull().default("draft"),
@@ -380,7 +380,7 @@ export const bankTransactions = pgTable("bank_transactions", {
   tenantId: varchar("tenant_id")
     .notNull()
     .references(() => tenants.id),
-  transactionDate: timestamp("transaction_date").notNull(),
+  transactionDate: timestamp("transaction_date"),
   particulars: text("particulars"),
   amount: integer("amount").notNull(),
   type: text("type").notNull(),
@@ -405,7 +405,7 @@ export const incomeRecords = pgTable("income_records", {
   costCenterId: varchar("cost_center_id").references(() => costCenters.id),
   categoryId: varchar("category_id").references(() => incomeCategories.id),
   amount: integer("amount").notNull(),
-  incomeDate: timestamp("income_date").notNull(),
+  incomeDate: timestamp("income_date"),
   particulars: text("particulars"),
   incomeType: text("income_type").notNull().default("other"),
   source: text("source").notNull().default("manual"),

@@ -63,8 +63,15 @@ import type {
   Campus,
 } from "@shared/schema";
 
-type PreviewRow = { date: string; particulars: string; amount: number; majorHead?: string; branch?: string; categoryMatch: string; potentialDuplicate?: boolean; matchConfidence?: "exact" | "probable"; matchedExpenseId?: string; matchedExpenseStatus?: string; matchedExpenseSource?: string };
-type IncomePreviewRow = { date: string; particulars: string; amount: number; majorHead?: string; branch?: string; categoryMatch: string; potentialDuplicate?: boolean; matchConfidence?: "exact" | "probable"; matchedExpenseId?: string; matchedExpenseSource?: string };
+type PreviewRow = { date: string | null; dateRaw?: string; particulars: string; amount: number; majorHead?: string; branch?: string; categoryMatch: string; potentialDuplicate?: boolean; matchConfidence?: "exact" | "probable"; matchedExpenseId?: string; matchedExpenseStatus?: string; matchedExpenseSource?: string };
+type IncomePreviewRow = { date: string | null; dateRaw?: string; particulars: string; amount: number; majorHead?: string; branch?: string; categoryMatch: string; potentialDuplicate?: boolean; matchConfidence?: "exact" | "probable"; matchedExpenseId?: string; matchedExpenseSource?: string };
+
+function importPreviewDateCell(r: { date?: string | null; dateRaw?: string }): { label: string; title?: string } {
+  if (r.date) return { label: r.date };
+  const raw = r.dateRaw?.trim();
+  if (raw) return { label: "No date", title: `Unparsed CSV date: ${raw}` };
+  return { label: "No date", title: "Date column empty or missing" };
+}
 
 const ROW_HEIGHT = 52;
 
@@ -184,7 +191,9 @@ function ImportPreviewVirtualizedRows({
                   <div>
                     <Badge variant="outline">Expense</Badge>
                   </div>
-                  <div className="text-xs">{r.date}</div>
+                  <div className="text-xs text-muted-foreground truncate max-w-[88px]" title={importPreviewDateCell(r).title}>
+                    {importPreviewDateCell(r).label}
+                  </div>
                   <div className="truncate min-w-0 text-sm" title={r.particulars}>{r.particulars}</div>
                   <div className="text-sm">₹ {r.amount.toLocaleString("en-IN")}</div>
                   <div className="min-w-0">
@@ -256,7 +265,9 @@ function ImportPreviewVirtualizedRows({
                   <div>
                     <Badge className="bg-green-600">Income</Badge>
                   </div>
-                  <div className="text-xs">{r.date}</div>
+                  <div className="text-xs text-muted-foreground truncate max-w-[88px]" title={importPreviewDateCell(r).title}>
+                    {importPreviewDateCell(r).label}
+                  </div>
                   <div className="truncate min-w-0 text-sm" title={r.particulars}>{r.particulars}</div>
                   <div className="text-green-600 text-sm">₹ {r.amount.toLocaleString("en-IN")}</div>
                   <div className="min-w-0">

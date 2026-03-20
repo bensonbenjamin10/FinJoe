@@ -277,6 +277,7 @@ export async function getMISReport(tenantId: string, fy: string, throughDate?: s
   const incomeByCenterName = new Map<string, number[]>();
 
   for (const row of incomeRows) {
+    if (!row.incomeDate) continue;
     const d = new Date(row.incomeDate);
     const mi = monthIndex(d, fyStartYear);
     if (mi < 0 || mi > 11) continue;
@@ -301,6 +302,7 @@ export async function getMISReport(tenantId: string, fy: string, throughDate?: s
   const expenseByCatCenter = new Map<string, Map<string, number[]>>();
 
   for (const row of expenseRows) {
+    if (!row.expenseDate) continue;
     const d = new Date(row.expenseDate);
     const mi = monthIndex(d, fyStartYear);
     if (mi < 0 || mi > 11) continue;

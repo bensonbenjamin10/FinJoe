@@ -178,6 +178,7 @@ export async function getAnalytics(filters: AnalyticsFilters) {
   const seriesMap: Record<string, { expenses: number; income: number }> = {};
 
   for (const r of expenseRows) {
+    if (!r.expenseDate) continue;
     const d = new Date(r.expenseDate);
     let key: string;
     if (granularity === "day") key = toDateKey(d, "local");
@@ -187,6 +188,7 @@ export async function getAnalytics(filters: AnalyticsFilters) {
     seriesMap[key].expenses += r.amount ?? 0;
   }
   for (const r of incomeRows) {
+    if (!r.incomeDate) continue;
     const d = new Date(r.incomeDate);
     let key: string;
     if (granularity === "day") key = toDateKey(d, "local");
@@ -478,6 +480,7 @@ export async function getPredictions(filters: PredictionsFilters) {
 
   const dailyExpenses: Record<string, number> = {};
   for (const r of expenseRows) {
+    if (!r.expenseDate) continue;
     const key = toDateKey(new Date(r.expenseDate), "local");
     dailyExpenses[key] = (dailyExpenses[key] ?? 0) + (r.amount ?? 0);
   }
@@ -488,6 +491,7 @@ export async function getPredictions(filters: PredictionsFilters) {
 
   const dailyIncome: Record<string, number> = {};
   for (const r of incomeRows) {
+    if (!r.incomeDate) continue;
     const key = toDateKey(new Date(r.incomeDate), "local");
     dailyIncome[key] = (dailyIncome[key] ?? 0) + (r.amount ?? 0);
   }
@@ -661,6 +665,7 @@ export async function getPredictions(filters: PredictionsFilters) {
   // Unusually large single expense (last 30 days): >3x median
   const last30Expenses = expenseRows
     .filter((r) => {
+      if (!r.expenseDate) return false;
       const d = new Date(r.expenseDate);
       const diff = (today.getTime() - d.getTime()) / (24 * 60 * 60 * 1000);
       return diff >= 0 && diff <= 30;
@@ -722,11 +727,13 @@ export async function getPredictions(filters: PredictionsFilters) {
   // Build bounded context for Gemini: capped daily points + compressed monthly summaries.
   const expenseDailyMap: Record<string, number> = {};
   for (const r of geminiExpenseRows) {
+    if (!r.expenseDate) continue;
     const key = toDateKey(new Date(r.expenseDate), "local");
     expenseDailyMap[key] = (expenseDailyMap[key] ?? 0) + (r.amount ?? 0);
   }
   const incomeDailyMap: Record<string, number> = {};
   for (const r of geminiIncomeRows) {
+    if (!r.incomeDate) continue;
     const key = toDateKey(new Date(r.incomeDate), "local");
     incomeDailyMap[key] = (incomeDailyMap[key] ?? 0) + (r.amount ?? 0);
   }
@@ -741,6 +748,7 @@ export async function getPredictions(filters: PredictionsFilters) {
 
   const monthlyExpenseTotals = Object.entries(
     geminiExpenseRows.reduce<Record<string, number>>((acc, r) => {
+      if (!r.expenseDate) return acc;
       const month = toMonthKey(new Date(r.expenseDate));
       acc[month] = (acc[month] ?? 0) + (r.amount ?? 0);
       return acc;
@@ -752,6 +760,7 @@ export async function getPredictions(filters: PredictionsFilters) {
 
   const monthlyIncomeTotals = Object.entries(
     geminiIncomeRows.reduce<Record<string, number>>((acc, r) => {
+      if (!r.incomeDate) return acc;
       const month = toMonthKey(new Date(r.incomeDate));
       acc[month] = (acc[month] ?? 0) + (r.amount ?? 0);
       return acc;

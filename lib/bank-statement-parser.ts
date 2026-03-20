@@ -7,7 +7,10 @@
 import Papa from "papaparse";
 
 export type ParsedExpenseRow = {
-  date: string;
+  /** Normalized YYYY-MM-DD when parseable; null if missing or unreadable (row still imported). */
+  date: string | null;
+  /** Original Date cell from CSV when `date` is null (for review in UI). */
+  dateRaw?: string;
   particulars: string;
   amount: number;
   majorHead?: string;
@@ -16,7 +19,8 @@ export type ParsedExpenseRow = {
 };
 
 export type ParsedIncomeRow = {
-  date: string;
+  date: string | null;
+  dateRaw?: string;
   particulars: string;
   amount: number;
   majorHead?: string;
@@ -88,8 +92,8 @@ function parseDate(val: string | undefined): string | null {
 }
 
 /** Returns true if the date string produces a valid Date */
-export function isValidDateString(dateStr: string): boolean {
-  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
+export function isValidDateString(dateStr: string | null | undefined): boolean {
+  if (dateStr == null || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
   const d = new Date(dateStr + "T12:00:00Z");
   return !isNaN(d.getTime());
 }
@@ -143,6 +147,7 @@ export function parseBankStatementCsv(
   for (const row of rows) {
     const dateVal = findColumn(row, DATE_HEADERS) ?? row["Date"] ?? row["date"];
     const date = parseDate(dateVal);
+    const dateRawTrimmed = dateVal != null && String(dateVal).trim() ? String(dateVal).trim() : undefined;
     const particulars = findColumn(row, PARTICULARS_HEADERS) ?? row["Particulars"] ?? row["particulars"] ?? "";
 
     const withdrawalStr = findColumn(row, WITHDRAWAL_HEADERS) ?? row["Withdrawals"] ?? row["withdrawals"];
@@ -173,11 +178,11 @@ export function parseBankStatementCsv(
     }
 
     if (withdrawalVal != null && withdrawalVal > 0) {
-      if (!date) continue;
       const categorySlug = matchExpenseCategory(particulars, expenseCategorySlugs);
       const categoryName = expenseCategorySlugs.includes(categorySlug) ? categorySlug : expenseCategorySlugs[0] ?? categorySlug;
       expenses.push({
         date,
+        dateRaw: date ? undefined : dateRawTrimmed,
         particulars,
         amount: withdrawalVal,
         categoryMatch: categoryName,
@@ -185,11 +190,11 @@ export function parseBankStatementCsv(
         branch: branch ?? undefined,
       });
     } else if (depositVal != null && depositVal > 0) {
-      if (!date) continue;
       const categorySlug = matchIncomeCategory(particulars, incomeCategorySlugs);
       const categoryName = incomeCategorySlugs.includes(categorySlug) ? categorySlug : incomeCategorySlugs[0] ?? categorySlug;
       income.push({
         date,
+        dateRaw: date ? undefined : dateRawTrimmed,
         particulars,
         amount: depositVal,
         categoryMatch: categoryName,

@@ -1637,6 +1637,7 @@ export async function registerRoutes(app: Express) {
 
       const expByAmountDate = new Map<string, typeof unmatchedExp>();
       for (const e of unmatchedExp) {
+        if (!e.expenseDate) continue;
         const dateStr = e.expenseDate.toISOString().slice(0, 10);
         for (let d = -5; d <= 5; d++) {
           const key = `${shiftDate(dateStr, d)}|${e.amount}`;
@@ -1648,6 +1649,7 @@ export async function registerRoutes(app: Express) {
 
       const incByAmountDate = new Map<string, typeof unmatchedInc>();
       for (const i of unmatchedInc) {
+        if (!i.incomeDate) continue;
         const dateStr = i.incomeDate.toISOString().slice(0, 10);
         for (let d = -5; d <= 5; d++) {
           const key = `${shiftDate(dateStr, d)}|${i.amount}`;
@@ -1662,6 +1664,7 @@ export async function registerRoutes(app: Express) {
       const matchOps: Array<{ bankTxnId: string; expenseId?: string; incomeId?: string; confidence: string }> = [];
 
       for (const bt of unmatchedBankTxns) {
+        if (!bt.transactionDate) continue;
         const btDate = bt.transactionDate.toISOString().slice(0, 10);
         const lookupKey = `${btDate}|${bt.amount}`;
 
@@ -1669,15 +1672,18 @@ export async function registerRoutes(app: Express) {
           const candidates = expByAmountDate.get(lookupKey)?.filter((e) => !matchedExpIds.has(e.id)) ?? [];
           if (candidates.length > 0) {
             const exact = candidates.find((e) => {
+              if (!e.expenseDate) return false;
               const eDateStr = e.expenseDate.toISOString().slice(0, 10);
               return eDateStr === btDate && textsOverlap(bt.particulars ?? undefined, e.description, e.vendorName);
             });
             const close = !exact ? candidates.find((e) => {
+              if (!e.expenseDate) return false;
               const eDateStr = e.expenseDate.toISOString().slice(0, 10);
               const dayDiff = Math.abs(new Date(btDate).getTime() - new Date(eDateStr).getTime()) / 86400000;
               return dayDiff <= 2 && textsOverlap(bt.particulars ?? undefined, e.description, e.vendorName);
             }) : undefined;
             const amountOnly = !exact && !close ? candidates.find((e) => {
+              if (!e.expenseDate) return false;
               const eDateStr = e.expenseDate.toISOString().slice(0, 10);
               const dayDiff = Math.abs(new Date(btDate).getTime() - new Date(eDateStr).getTime()) / 86400000;
               return dayDiff <= 5;
@@ -1694,10 +1700,12 @@ export async function registerRoutes(app: Express) {
           const candidates = incByAmountDate.get(lookupKey)?.filter((i) => !matchedIncIds.has(i.id)) ?? [];
           if (candidates.length > 0) {
             const exact = candidates.find((i) => {
+              if (!i.incomeDate) return false;
               const iDateStr = i.incomeDate.toISOString().slice(0, 10);
               return iDateStr === btDate && textsOverlap(bt.particulars ?? undefined, i.particulars, null);
             });
             const close = !exact ? candidates.find((i) => {
+              if (!i.incomeDate) return false;
               const iDateStr = i.incomeDate.toISOString().slice(0, 10);
               const dayDiff = Math.abs(new Date(btDate).getTime() - new Date(iDateStr).getTime()) / 86400000;
               return dayDiff <= 2;
@@ -1778,21 +1786,27 @@ export async function registerRoutes(app: Express) {
 
       const { suggestBankReconciliationMatches } = await import("../lib/reconciliation-suggestions.js");
       const suggestions = await suggestBankReconciliationMatches(
-        unmatchedBankTxns.map((bt) => ({
-          id: bt.id, amount: bt.amount, type: bt.type,
-          transactionDate: bt.transactionDate.toISOString().slice(0, 10),
-          particulars: bt.particulars,
-        })),
-        unmatchedExp.map((e) => ({
-          id: e.id, amount: e.amount,
-          expenseDate: e.expenseDate.toISOString().slice(0, 10),
-          vendorName: e.vendorName, description: e.description, particulars: e.particulars,
-        })),
-        unmatchedInc.map((i) => ({
-          id: i.id, amount: i.amount,
-          incomeDate: i.incomeDate.toISOString().slice(0, 10),
-          particulars: i.particulars,
-        })),
+        unmatchedBankTxns
+          .filter((bt) => bt.transactionDate)
+          .map((bt) => ({
+            id: bt.id, amount: bt.amount, type: bt.type,
+            transactionDate: bt.transactionDate!.toISOString().slice(0, 10),
+            particulars: bt.particulars,
+          })),
+        unmatchedExp
+          .filter((e) => e.expenseDate)
+          .map((e) => ({
+            id: e.id, amount: e.amount,
+            expenseDate: e.expenseDate!.toISOString().slice(0, 10),
+            vendorName: e.vendorName, description: e.description, particulars: e.particulars,
+          })),
+        unmatchedInc
+          .filter((i) => i.incomeDate)
+          .map((i) => ({
+            id: i.id, amount: i.amount,
+            incomeDate: i.incomeDate!.toISOString().slice(0, 10),
+            particulars: i.particulars,
+          })),
       );
 
       res.json({ suggestions });
@@ -1898,7 +1912,7 @@ export async function registerRoutes(app: Express) {
       }> = [];
 
       for (const r of expRows) {
-        if (!isValidDateString(r.date)) continue;
+        if (r.date == null || !isValidDateString(r.date)) continue;
         bankTxnInserts.push({
           tenantId: tid, transactionDate: toDate(r.date),
           particulars: r.particulars || "Bank import", amount: r.amount,
@@ -1906,7 +1920,7 @@ export async function registerRoutes(app: Express) {
         });
       }
       for (const r of incRows) {
-        if (!isValidDateString(r.date)) continue;
+        if (r.date == null || !isValidDateString(r.date)) continue;
         bankTxnInserts.push({
           tenantId: tid, transactionDate: toDate(r.date),
           particulars: r.particulars || "Bank import", amount: r.amount,
@@ -2659,9 +2673,9 @@ export async function registerRoutes(app: Express) {
     matchedExpenseSource?: string;
   };
 
-  /** YYYY-MM-DD from a DB Date, or null if invalid (avoids RangeError from toISOString). */
-  function safeDbDateKey(d: Date): string | null {
-    if (!(d instanceof Date) || Number.isNaN(d.getTime())) return null;
+  /** YYYY-MM-DD from a DB Date, or null if missing/invalid (avoids RangeError from toISOString). */
+  function safeDbDateKey(d: Date | null): string | null {
+    if (d == null || !(d instanceof Date) || Number.isNaN(d.getTime())) return null;
     try {
       return d.toISOString().slice(0, 10);
     } catch {
@@ -2669,8 +2683,8 @@ export async function registerRoutes(app: Express) {
     }
   }
 
-  function shiftDate(dateStr: string, days: number): string {
-    if (!isValidDateString(dateStr)) return dateStr;
+  function shiftDate(dateStr: string | null | undefined, days: number): string {
+    if (dateStr == null || !isValidDateString(dateStr)) return dateStr ?? "";
     const d = new Date(dateStr + "T12:00:00Z");
     if (Number.isNaN(d.getTime())) return dateStr;
     d.setUTCDate(d.getUTCDate() + days);
@@ -2681,30 +2695,33 @@ export async function registerRoutes(app: Express) {
     }
   }
 
-  function getDateRange(rows: Array<{ date: string }>): { minDate: string; maxDate: string } | null {
-    const dates = rows.map((r) => r.date).filter((s) => isValidDateString(s));
+  function getDateRange(rows: Array<{ date: string | null }>): { minDate: string; maxDate: string } | null {
+    const dates = rows.map((r) => r.date).filter((s): s is string => isValidDateString(s));
     if (dates.length === 0) return null;
     dates.sort();
     return { minDate: dates[0], maxDate: dates[dates.length - 1] };
   }
 
   function findDuplicateExpenses(
-    csvRows: Array<{ date: string; particulars: string; amount: number }>,
-    existingExpenses: Array<{ id: string; amount: number; expenseDate: Date; description: string | null; vendorName: string | null; status: string; source: string }>
+    csvRows: Array<{ date: string | null; particulars: string; amount: number }>,
+    existingExpenses: Array<{ id: string; amount: number; expenseDate: Date | null; description: string | null; vendorName: string | null; status: string; source: string }>
   ): DuplicateInfo[] {
     const byDateAmount = new Map<string, typeof existingExpenses>();
     for (const e of existingExpenses) {
       const dk = safeDbDateKey(e.expenseDate);
-      if (!dk) continue;
-      const key = `${dk}|${e.amount}`;
+      const key = `${dk ?? "__no_date__"}|${e.amount}`;
       const arr = byDateAmount.get(key);
       if (arr) arr.push(e);
       else byDateAmount.set(key, [e]);
     }
     return csvRows.map((row) => {
-      const key = `${row.date}|${row.amount}`;
+      const rowDateKey = row.date && isValidDateString(row.date) ? row.date : "__no_date__";
+      const key = `${rowDateKey}|${row.amount}`;
       const candidates = byDateAmount.get(key);
       if (!candidates || candidates.length === 0) {
+        if (!row.date || !isValidDateString(row.date)) {
+          return { potentialDuplicate: false };
+        }
         const fuzzyKey1 = `${shiftDate(row.date, 1)}|${row.amount}`;
         const fuzzyKey2 = `${shiftDate(row.date, -1)}|${row.amount}`;
         const fuzzyCandidates = [...(byDateAmount.get(fuzzyKey1) ?? []), ...(byDateAmount.get(fuzzyKey2) ?? [])];
@@ -2721,20 +2738,20 @@ export async function registerRoutes(app: Express) {
   }
 
   function findDuplicateIncome(
-    csvRows: Array<{ date: string; particulars: string; amount: number }>,
-    existingIncome: Array<{ id: string; amount: number; incomeDate: Date; particulars: string | null; source: string }>
+    csvRows: Array<{ date: string | null; particulars: string; amount: number }>,
+    existingIncome: Array<{ id: string; amount: number; incomeDate: Date | null; particulars: string | null; source: string }>
   ): DuplicateInfo[] {
     const byDateAmount = new Map<string, typeof existingIncome>();
     for (const e of existingIncome) {
       const dk = safeDbDateKey(e.incomeDate);
-      if (!dk) continue;
-      const key = `${dk}|${e.amount}`;
+      const key = `${dk ?? "__no_date__"}|${e.amount}`;
       const arr = byDateAmount.get(key);
       if (arr) arr.push(e);
       else byDateAmount.set(key, [e]);
     }
     return csvRows.map((row) => {
-      const key = `${row.date}|${row.amount}`;
+      const rowDateKey = row.date && isValidDateString(row.date) ? row.date : "__no_date__";
+      const key = `${rowDateKey}|${row.amount}`;
       const candidates = byDateAmount.get(key);
       if (!candidates || candidates.length === 0) return { potentialDuplicate: false };
       const exact = candidates.find((e) => e.particulars && row.particulars && (e.particulars.toLowerCase().includes(row.particulars.toLowerCase().slice(0, 20)) || row.particulars.toLowerCase().includes(e.particulars.toLowerCase().slice(0, 20))));
@@ -2778,10 +2795,24 @@ export async function registerRoutes(app: Express) {
       const totalIncAmount = incRows.reduce((s, r) => s + r.amount, 0);
 
       res.json({
-        preview: expRows.map((r) => ({ date: r.date, particulars: r.particulars, amount: r.amount, majorHead: r.majorHead ?? "", branch: r.branch ?? "", categoryMatch: r.categoryMatch })),
+        preview: expRows.map((r) => ({
+          date: r.date,
+          dateRaw: r.dateRaw ?? "",
+          particulars: r.particulars,
+          amount: r.amount,
+          majorHead: r.majorHead ?? "",
+          branch: r.branch ?? "",
+          categoryMatch: r.categoryMatch,
+        })),
         totalRows: expRows.length,
         totalAmount: totalExpAmount,
-        incomePreview: incRows.map((r) => ({ date: r.date, particulars: r.particulars, amount: r.amount, categoryMatch: r.categoryMatch })),
+        incomePreview: incRows.map((r) => ({
+          date: r.date,
+          dateRaw: r.dateRaw ?? "",
+          particulars: r.particulars,
+          amount: r.amount,
+          categoryMatch: r.categoryMatch,
+        })),
         incomeTotalRows: incRows.length,
         incomeTotalAmount: totalIncAmount,
         skippedZero,
@@ -2856,10 +2887,28 @@ export async function registerRoutes(app: Express) {
       }
 
       res.json({
-        preview: expRows.map((r, i) => ({ date: r.date, particulars: r.particulars, amount: r.amount, majorHead: r.majorHead ?? "", branch: r.branch ?? "", categoryMatch: r.categoryMatch, ...(expDuplicates[i] ?? {}) })),
+        preview: expRows.map((r, i) => ({
+          date: r.date,
+          dateRaw: r.dateRaw ?? "",
+          particulars: r.particulars,
+          amount: r.amount,
+          majorHead: r.majorHead ?? "",
+          branch: r.branch ?? "",
+          categoryMatch: r.categoryMatch,
+          ...(expDuplicates[i] ?? {}),
+        })),
         totalRows: expRows.length,
         totalAmount: totalExpAmount,
-        incomePreview: incRows.map((r, i) => ({ date: r.date, particulars: r.particulars, amount: r.amount, majorHead: r.majorHead ?? "", branch: r.branch ?? "", categoryMatch: r.categoryMatch, ...(incDuplicates[i] ?? {}) })),
+        incomePreview: incRows.map((r, i) => ({
+          date: r.date,
+          dateRaw: r.dateRaw ?? "",
+          particulars: r.particulars,
+          amount: r.amount,
+          majorHead: r.majorHead ?? "",
+          branch: r.branch ?? "",
+          categoryMatch: r.categoryMatch,
+          ...(incDuplicates[i] ?? {}),
+        })),
         incomeTotalRows: incRows.length,
         incomeTotalAmount: totalIncAmount,
         skippedZero,
@@ -2949,7 +2998,7 @@ export async function registerRoutes(app: Express) {
         costCenterId: string | null;
         categoryId: string;
         amount: number;
-        expenseDate: Date;
+        expenseDate: Date | null;
         description: string;
         status: string;
         source: string;
@@ -2957,7 +3006,6 @@ export async function registerRoutes(app: Express) {
       for (let i = 0; i < expRows.length; i++) {
         if (skipExpenseIndices.has(i)) continue;
         const r = expRows[i];
-        if (!isValidDateString(r.date)) continue;
         const overrideCat = expenseOverrides[String(i)];
         const categoryId = (overrideCat && validExpCatIds.has(overrideCat) ? overrideCat : null) ?? expSlugToId[r.categoryMatch] ?? expCats[0]?.id;
         if (!categoryId) continue;
@@ -2965,12 +3013,13 @@ export async function registerRoutes(app: Express) {
         const ccId = overrideCc !== undefined
           ? (overrideCc === null || overrideCc === "__corporate__" ? null : validCcIds.has(overrideCc) ? overrideCc : null)
           : branchToCcId(r.branch);
+        const expenseDate = r.date != null && isValidDateString(r.date) ? toDate(r.date) : null;
         expToInsert.push({
           tenantId: tid,
           costCenterId: ccId,
           categoryId,
           amount: r.amount,
-          expenseDate: toDate(r.date),
+          expenseDate,
           description: r.particulars || "Bank import",
           status: "draft",
           source: "bank_import",
@@ -2983,7 +3032,7 @@ export async function registerRoutes(app: Express) {
         costCenterId: string | null;
         categoryId: string;
         amount: number;
-        incomeDate: Date;
+        incomeDate: Date | null;
         particulars: string;
         incomeType: string;
         source: string;
@@ -2991,7 +3040,6 @@ export async function registerRoutes(app: Express) {
       for (let i = 0; i < incRows.length; i++) {
         if (skipIncomeIndices.has(i)) continue;
         const r = incRows[i];
-        if (!isValidDateString(r.date)) continue;
         const overrideCat = incomeOverrides[String(i)];
         const categoryId = (overrideCat && validIncCatIds.has(overrideCat) ? overrideCat : null) ?? incSlugToId[r.categoryMatch] ?? defaultIncCatId;
         if (!categoryId) continue;
@@ -2999,12 +3047,13 @@ export async function registerRoutes(app: Express) {
         const ccId = overrideCc !== undefined
           ? (overrideCc === null || overrideCc === "__corporate__" ? null : validCcIds.has(overrideCc) ? overrideCc : null)
           : branchToCcId(r.branch);
+        const incomeDate = r.date != null && isValidDateString(r.date) ? toDate(r.date) : null;
         incToInsert.push({
           tenantId: tid,
           costCenterId: ccId,
           categoryId,
           amount: r.amount,
-          incomeDate: toDate(r.date),
+          incomeDate,
           particulars: r.particulars || "Bank import",
           incomeType: "other",
           source: "bank_import",
@@ -3234,6 +3283,7 @@ export async function registerRoutes(app: Express) {
         .limit(EXPORT_ROW_LIMIT);
       const byCategoryMonth: Record<string, { category: string; month: string; amount: number; count: number }> = {};
       for (const r of rows) {
+        if (!r.expenseDate) continue;
         const cat = r.categoryName || "Uncategorized";
         const month = new Date(r.expenseDate).toISOString().slice(0, 7);
         const key = `${cat}|${month}`;
