@@ -51,15 +51,44 @@ async function main() {
       [tenantId]
     )
   ).rows;
-  console.log(`Before: ${expCount.c} expenses, ${incCount.c} income records`);
+  const bankTable = await pool.query(
+    "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'bank_transactions' LIMIT 1"
+  );
+  const hasBankTxns = bankTable.rows.length > 0;
 
-  if (expCount.c === 0 && incCount.c === 0) {
+  let bankCount = 0;
+  if (hasBankTxns) {
+    const [b] = (
+      await pool.query(
+        "SELECT COUNT(*)::int as c FROM bank_transactions WHERE tenant_id = $1",
+        [tenantId]
+      )
+    ).rows;
+    bankCount = b.c;
+  }
+
+  console.log(
+    `Before: ${expCount.c} expenses, ${incCount.c} income records` +
+      (hasBankTxns ? `, ${bankCount} bank_transactions` : "")
+  );
+
+  if (expCount.c === 0 && incCount.c === 0 && (!hasBankTxns || bankCount === 0)) {
     console.log("No transaction data to reset.");
     await pool.end();
     return;
   }
 
-  // 3. Clear expense_id in fin_joe_tasks (FK reference)
+  // 3. Expense-linked media for this tenant
+  const mediaDel = await pool.query(
+    `DELETE FROM fin_joe_media
+     WHERE expense_id IN (SELECT id FROM expenses WHERE tenant_id = $1)`,
+    [tenantId]
+  );
+  if ((mediaDel.rowCount ?? 0) > 0) {
+    console.log(`Deleted ${mediaDel.rowCount} fin_joe_media row(s) tied to expenses`);
+  }
+
+  // 4. Clear expense_id in fin_joe_tasks (FK reference)
   const tasksRes = await pool.query(
     `UPDATE fin_joe_tasks SET expense_id = NULL
      WHERE expense_id IN (SELECT id FROM expenses WHERE tenant_id = $1)
@@ -71,21 +100,47 @@ async function main() {
     console.log(`Cleared expense_id from ${tasksCleared} fin_joe_tasks`);
   }
 
-  // 4. Delete expenses
+  // 5. Bank transactions for tenant (if table exists)
+  if (hasBankTxns) {
+    await pool.query(
+      `UPDATE bank_transactions SET matched_expense_id = NULL, matched_income_id = NULL
+       WHERE tenant_id = $1`,
+      [tenantId]
+    );
+    await pool.query(
+      `UPDATE expenses SET bank_transaction_id = NULL
+       WHERE tenant_id = $1 AND bank_transaction_id IS NOT NULL`,
+      [tenantId]
+    );
+    await pool.query(
+      `UPDATE income_records SET bank_transaction_id = NULL
+       WHERE tenant_id = $1 AND bank_transaction_id IS NOT NULL`,
+      [tenantId]
+    );
+    const delBank = await pool.query(
+      "DELETE FROM bank_transactions WHERE tenant_id = $1",
+      [tenantId]
+    );
+    if ((delBank.rowCount ?? 0) > 0) {
+      console.log(`Deleted ${delBank.rowCount} bank_transactions`);
+    }
+  }
+
+  // 6. Delete expenses
   const delExp = await pool.query(
     "DELETE FROM expenses WHERE tenant_id = $1",
     [tenantId]
   );
   console.log(`Deleted ${delExp.rowCount ?? 0} expenses`);
 
-  // 5. Delete income_records
+  // 7. Delete income_records
   const delInc = await pool.query(
     "DELETE FROM income_records WHERE tenant_id = $1",
     [tenantId]
   );
   console.log(`Deleted ${delInc.rowCount ?? 0} income records`);
 
-  // 6. Reset petty_cash_funds balance to imprest_amount (no transaction history = full imprest)
+  // 8. Reset petty_cash_funds balance to imprest_amount (no transaction history = full imprest)
   const resetPetty = await pool.query(
     `UPDATE petty_cash_funds
      SET current_balance = imprest_amount, updated_at = NOW()

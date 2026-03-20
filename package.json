@@ -12,6 +12,7 @@
     "start": "node start.mjs",
     "db:migrate": "node scripts/run-migrations.mjs",
     "db:query": "node scripts/db-query.mjs",
+    "db:wipe-financial": "node scripts/wipe-financial-data.mjs",
     "cron:weekly-insights": "node scripts/run-weekly-insights.mjs",
     "cron:recurring-expenses": "node scripts/run-recurring-expenses.mjs",
     "create-templates": "node scripts/create-finjoe-templates.mjs",

@@ -2659,13 +2659,44 @@ export async function registerRoutes(app: Express) {
     matchedExpenseSource?: string;
   };
 
+  /** YYYY-MM-DD from a DB Date, or null if invalid (avoids RangeError from toISOString). */
+  function safeDbDateKey(d: Date): string | null {
+    if (!(d instanceof Date) || Number.isNaN(d.getTime())) return null;
+    try {
+      return d.toISOString().slice(0, 10);
+    } catch {
+      return null;
+    }
+  }
+
+  function shiftDate(dateStr: string, days: number): string {
+    if (!isValidDateString(dateStr)) return dateStr;
+    const d = new Date(dateStr + "T12:00:00Z");
+    if (Number.isNaN(d.getTime())) return dateStr;
+    d.setUTCDate(d.getUTCDate() + days);
+    try {
+      return d.toISOString().slice(0, 10);
+    } catch {
+      return dateStr;
+    }
+  }
+
+  function getDateRange(rows: Array<{ date: string }>): { minDate: string; maxDate: string } | null {
+    const dates = rows.map((r) => r.date).filter((s) => isValidDateString(s));
+    if (dates.length === 0) return null;
+    dates.sort();
+    return { minDate: dates[0], maxDate: dates[dates.length - 1] };
+  }
+
   function findDuplicateExpenses(
     csvRows: Array<{ date: string; particulars: string; amount: number }>,
     existingExpenses: Array<{ id: string; amount: number; expenseDate: Date; description: string | null; vendorName: string | null; status: string; source: string }>
   ): DuplicateInfo[] {
     const byDateAmount = new Map<string, typeof existingExpenses>();
     for (const e of existingExpenses) {
-      const key = `${e.expenseDate.toISOString().slice(0, 10)}|${e.amount}`;
+      const dk = safeDbDateKey(e.expenseDate);
+      if (!dk) continue;
+      const key = `${dk}|${e.amount}`;
       const arr = byDateAmount.get(key);
       if (arr) arr.push(e);
       else byDateAmount.set(key, [e]);
@@ -2695,7 +2726,9 @@ export async function registerRoutes(app: Express) {
   ): DuplicateInfo[] {
     const byDateAmount = new Map<string, typeof existingIncome>();
     for (const e of existingIncome) {
-      const key = `${e.incomeDate.toISOString().slice(0, 10)}|${e.amount}`;
+      const dk = safeDbDateKey(e.incomeDate);
+      if (!dk) continue;
+      const key = `${dk}|${e.amount}`;
       const arr = byDateAmount.get(key);
       if (arr) arr.push(e);
       else byDateAmount.set(key, [e]);
@@ -2721,18 +2754,6 @@ export async function registerRoutes(app: Express) {
       if (p.includes(vendorName.toLowerCase())) return true;
     }
     return false;
-  }
-
-  function shiftDate(dateStr: string, days: number): string {
-    const d = new Date(dateStr + "T12:00:00Z");
-    d.setUTCDate(d.getUTCDate() + days);
-    return d.toISOString().slice(0, 10);
-  }
-
-  function getDateRange(rows: Array<{ date: string }>): { minDate: string; maxDate: string } | null {
-    const dates = rows.map((r) => r.date).filter(Boolean).sort();
-    if (dates.length === 0) return null;
-    return { minDate: dates[0], maxDate: dates[dates.length - 1] };
   }
 
   // Expense/Income import from bank statement CSV
@@ -2803,9 +2824,12 @@ export async function registerRoutes(app: Express) {
       let incDuplicates: DuplicateInfo[] = [];
       const expDateRange = getDateRange(expRows);
       const incDateRange = getDateRange(incRows);
-      if (expDateRange) {
+      if (expDateRange && isValidDateString(expDateRange.minDate) && isValidDateString(expDateRange.maxDate)) {
         const minD = new Date(expDateRange.minDate + "T00:00:00Z");
         const maxD = new Date(expDateRange.maxDate + "T23:59:59Z");
+        if (Number.isNaN(minD.getTime()) || Number.isNaN(maxD.getTime())) {
+          logger.warn("Import analyze: invalid date range bounds, skipping expense duplicate scan", { expDateRange });
+        } else {
         minD.setUTCDate(minD.getUTCDate() - 1);
         maxD.setUTCDate(maxD.getUTCDate() + 1);
         const existingExp = await db
@@ -2813,10 +2837,14 @@ export async function registerRoutes(app: Express) {
           .from(expenses)
           .where(and(eq(expenses.tenantId, tid), gte(expenses.expenseDate, minD), lte(expenses.expenseDate, maxD)));
         expDuplicates = findDuplicateExpenses(expRows, existingExp);
+        }
       }
-      if (incDateRange) {
+      if (incDateRange && isValidDateString(incDateRange.minDate) && isValidDateString(incDateRange.maxDate)) {
         const minD = new Date(incDateRange.minDate + "T00:00:00Z");
         const maxD = new Date(incDateRange.maxDate + "T23:59:59Z");
+        if (Number.isNaN(minD.getTime()) || Number.isNaN(maxD.getTime())) {
+          logger.warn("Import analyze: invalid date range bounds, skipping income duplicate scan", { incDateRange });
+        } else {
         minD.setUTCDate(minD.getUTCDate() - 1);
         maxD.setUTCDate(maxD.getUTCDate() + 1);
         const existingInc = await db
@@ -2824,6 +2852,7 @@ export async function registerRoutes(app: Express) {
           .from(incomeRecords)
           .where(and(eq(incomeRecords.tenantId, tid), gte(incomeRecords.incomeDate, minD), lte(incomeRecords.incomeDate, maxD)));
         incDuplicates = findDuplicateIncome(incRows, existingInc);
+        }
       }
 
       res.json({
