@@ -2830,7 +2830,7 @@ export async function registerRoutes(app: Express) {
         preview: expRows.map((r, i) => ({ date: r.date, particulars: r.particulars, amount: r.amount, majorHead: r.majorHead ?? "", branch: r.branch ?? "", categoryMatch: r.categoryMatch, ...(expDuplicates[i] ?? {}) })),
         totalRows: expRows.length,
         totalAmount: totalExpAmount,
-        incomePreview: incRows.map((r, i) => ({ date: r.date, particulars: r.particulars, amount: r.amount, categoryMatch: r.categoryMatch, ...(incDuplicates[i] ?? {}) })),
+        incomePreview: incRows.map((r, i) => ({ date: r.date, particulars: r.particulars, amount: r.amount, majorHead: r.majorHead ?? "", branch: r.branch ?? "", categoryMatch: r.categoryMatch, ...(incDuplicates[i] ?? {}) })),
         incomeTotalRows: incRows.length,
         incomeTotalAmount: totalIncAmount,
         skippedZero,
@@ -2857,6 +2857,7 @@ export async function registerRoutes(app: Express) {
       let expenseOverrides: Record<string, string> = {};
       let incomeOverrides: Record<string, string> = {};
       let costCenterOverrides: Record<string, string | null> = {};
+      let incomeCostCenterOverrides: Record<string, string | null> = {};
       let skipExpenseIndices = new Set<number>();
       let skipIncomeIndices = new Set<number>();
       try {
@@ -2868,6 +2869,9 @@ export async function registerRoutes(app: Express) {
         }
         if (req.body?.costCenterOverrides && typeof req.body.costCenterOverrides === "string") {
           costCenterOverrides = JSON.parse(req.body.costCenterOverrides) || {};
+        }
+        if (req.body?.incomeCostCenterOverrides && typeof req.body.incomeCostCenterOverrides === "string") {
+          incomeCostCenterOverrides = JSON.parse(req.body.incomeCostCenterOverrides) || {};
         }
         if (req.body?.skipExpenseIndices && typeof req.body.skipExpenseIndices === "string") {
           const arr = JSON.parse(req.body.skipExpenseIndices);
@@ -2947,7 +2951,7 @@ export async function registerRoutes(app: Express) {
       const defaultIncCatId = incCats[0]?.id;
       const incToInsert: Array<{
         tenantId: string;
-        costCenterId: null;
+        costCenterId: string | null;
         categoryId: string;
         amount: number;
         incomeDate: Date;
@@ -2962,9 +2966,13 @@ export async function registerRoutes(app: Express) {
         const overrideCat = incomeOverrides[String(i)];
         const categoryId = (overrideCat && validIncCatIds.has(overrideCat) ? overrideCat : null) ?? incSlugToId[r.categoryMatch] ?? defaultIncCatId;
         if (!categoryId) continue;
+        const overrideCc = incomeCostCenterOverrides[String(i)];
+        const ccId = overrideCc !== undefined
+          ? (overrideCc === null || overrideCc === "__corporate__" ? null : validCcIds.has(overrideCc) ? overrideCc : null)
+          : branchToCcId(r.branch);
         incToInsert.push({
           tenantId: tid,
-          costCenterId: null,
+          costCenterId: ccId,
           categoryId,
           amount: r.amount,
           incomeDate: toDate(r.date),

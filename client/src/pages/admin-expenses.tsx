@@ -64,7 +64,7 @@ import type {
 } from "@shared/schema";
 
 type PreviewRow = { date: string; particulars: string; amount: number; majorHead?: string; branch?: string; categoryMatch: string; potentialDuplicate?: boolean; matchConfidence?: "exact" | "probable"; matchedExpenseId?: string; matchedExpenseStatus?: string; matchedExpenseSource?: string };
-type IncomePreviewRow = { date: string; particulars: string; amount: number; categoryMatch: string; potentialDuplicate?: boolean; matchConfidence?: "exact" | "probable"; matchedExpenseId?: string; matchedExpenseSource?: string };
+type IncomePreviewRow = { date: string; particulars: string; amount: number; majorHead?: string; branch?: string; categoryMatch: string; potentialDuplicate?: boolean; matchConfidence?: "exact" | "probable"; matchedExpenseId?: string; matchedExpenseSource?: string };
 
 const ROW_HEIGHT = 52;
 
@@ -78,9 +78,11 @@ function ImportPreviewVirtualizedRows({
   expenseOverrides,
   incomeOverrides,
   costCenterOverrides,
+  incomeCostCenterOverrides,
   setExpenseOverrides,
   setIncomeOverrides,
   setCostCenterOverrides,
+  setIncomeCostCenterOverrides,
   slugToExpCatId,
   slugToIncCatId,
   skippedExpenseIndices,
@@ -97,9 +99,11 @@ function ImportPreviewVirtualizedRows({
   expenseOverrides: Record<string, string>;
   incomeOverrides: Record<string, string>;
   costCenterOverrides: Record<string, string | null>;
+  incomeCostCenterOverrides: Record<string, string | null>;
   setExpenseOverrides: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   setIncomeOverrides: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   setCostCenterOverrides: React.Dispatch<React.SetStateAction<Record<string, string | null>>>;
+  setIncomeCostCenterOverrides: React.Dispatch<React.SetStateAction<Record<string, string | null>>>;
   slugToExpCatId: Record<string, string>;
   slugToIncCatId: Record<string, string>;
   skippedExpenseIndices: Set<number>;
@@ -255,7 +259,26 @@ function ImportPreviewVirtualizedRows({
                   <div className="text-xs">{r.date}</div>
                   <div className="truncate min-w-0 text-sm" title={r.particulars}>{r.particulars}</div>
                   <div className="text-green-600 text-sm">₹ {r.amount.toLocaleString("en-IN")}</div>
-                  <div>—</div>
+                  <div className="min-w-0">
+                    <Select
+                      value={
+                        incomeCostCenterOverrides[String(i)] !== undefined
+                          ? (incomeCostCenterOverrides[String(i)] ?? "__corporate__")
+                          : (r.branch ? campuses.find((c) => c.name.toLowerCase() === r.branch?.toLowerCase() || c.slug?.toLowerCase() === r.branch?.toLowerCase())?.id ?? "__corporate__" : "__corporate__")
+                      }
+                      onValueChange={(v) => setIncomeCostCenterOverrides((o) => ({ ...o, [String(i)]: v === "__corporate__" ? null : v }))}
+                    >
+                      <SelectTrigger className="h-8 w-full max-w-[130px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__corporate__">Corporate</SelectItem>
+                        {campuses.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <div className="min-w-0">
                     <Select
                       value={incomeOverrides[String(i)] ?? slugToIncCatId[r.categoryMatch] ?? incomeCategories[0]?.id ?? (incomeCategories.length === 0 ? "__skip__" : "")}
@@ -369,6 +392,7 @@ function ImportWizard({
   const [expenseOverrides, setExpenseOverrides] = useState<Record<string, string>>({});
   const [incomeOverrides, setIncomeOverrides] = useState<Record<string, string>>({});
   const [costCenterOverrides, setCostCenterOverrides] = useState<Record<string, string | null>>({});
+  const [incomeCostCenterOverrides, setIncomeCostCenterOverrides] = useState<Record<string, string | null>>({});
   const [bulkMapPattern, setBulkMapPattern] = useState("");
   const [bulkMapType, setBulkMapType] = useState<"expense" | "income">("expense");
   const [bulkMapCategoryId, setBulkMapCategoryId] = useState("");
@@ -404,6 +428,7 @@ function ImportWizard({
       setExpenseOverrides(expOverrides);
       setIncomeOverrides(incOverrides);
       setCostCenterOverrides({});
+      setIncomeCostCenterOverrides({});
       const autoSkipExp = new Set<number>();
       (data.preview ?? []).forEach((r: PreviewRow, i: number) => {
         if (r.potentialDuplicate) autoSkipExp.add(i);
@@ -427,6 +452,7 @@ function ImportWizard({
       form.append("expenseOverrides", JSON.stringify(expenseOverrides));
       form.append("incomeOverrides", JSON.stringify(incomeOverrides));
       form.append("costCenterOverrides", JSON.stringify(costCenterOverrides));
+      form.append("incomeCostCenterOverrides", JSON.stringify(incomeCostCenterOverrides));
       if (skippedExpenseIndices.size > 0) form.append("skipExpenseIndices", JSON.stringify([...skippedExpenseIndices]));
       if (skippedIncomeIndices.size > 0) form.append("skipIncomeIndices", JSON.stringify([...skippedIncomeIndices]));
       const res = await fetch("/api/admin/expenses/import/execute", { method: "POST", body: form, credentials: "include" });
@@ -503,6 +529,89 @@ function ImportWizard({
               </span>
             )}
           </p>
+          {/* Bulk branch → cost center mapping */}
+          {(() => {
+            const allBranches = new Map<string, { expIndices: number[]; incIndices: number[] }>();
+            expRows.forEach((r, i) => {
+              const b = r.branch?.trim();
+              if (!b) return;
+              if (!allBranches.has(b)) allBranches.set(b, { expIndices: [], incIndices: [] });
+              allBranches.get(b)!.expIndices.push(i);
+            });
+            incRows.forEach((r, i) => {
+              const b = r.branch?.trim();
+              if (!b) return;
+              if (!allBranches.has(b)) allBranches.set(b, { expIndices: [], incIndices: [] });
+              allBranches.get(b)!.incIndices.push(i);
+            });
+            if (allBranches.size === 0) return null;
+            const sorted = [...allBranches.entries()].sort((a, b) => (b[1].expIndices.length + b[1].incIndices.length) - (a[1].expIndices.length + a[1].incIndices.length));
+            return (
+              <div className="space-y-2 rounded-lg border p-3 bg-muted/30">
+                <p className="text-sm font-medium">Map Branches to {costCenterLabel}s</p>
+                <p className="text-xs text-muted-foreground">
+                  {sorted.filter(([b]) => !campuses.some((c) => c.name.toLowerCase() === b.toLowerCase() || c.slug?.toLowerCase() === b.toLowerCase())).length > 0
+                    ? "Some branch values from the CSV don't match any existing cost center. Map them below or they will default to Corporate."
+                    : "All branches matched. You can change mappings below if needed."}
+                </p>
+                <div className="max-h-60 overflow-auto space-y-1">
+                  {sorted.map(([branchName, { expIndices, incIndices }]) => {
+                    const totalRows = expIndices.length + incIndices.length;
+                    const autoMatch = campuses.find((c) => c.name.toLowerCase() === branchName.toLowerCase() || c.slug?.toLowerCase() === branchName.toLowerCase());
+                    const currentVal = (() => {
+                      const firstExpOverride = expIndices.length > 0 ? costCenterOverrides[String(expIndices[0])] : undefined;
+                      const firstIncOverride = incIndices.length > 0 ? incomeCostCenterOverrides[String(incIndices[0])] : undefined;
+                      if (firstExpOverride !== undefined) return firstExpOverride ?? "__corporate__";
+                      if (firstIncOverride !== undefined) return firstIncOverride ?? "__corporate__";
+                      return autoMatch?.id ?? "__unmatched__";
+                    })();
+                    const isUnmatched = !autoMatch && currentVal === "__unmatched__";
+                    return (
+                      <div
+                        key={branchName}
+                        className={cn(
+                          "flex items-center gap-3 rounded-md px-3 py-1.5 text-sm",
+                          isUnmatched && "bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-300 dark:border-yellow-700"
+                        )}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <span className="font-medium">{branchName}</span>
+                          <span className="text-muted-foreground ml-1">({totalRows} rows)</span>
+                          {isUnmatched && <span className="ml-2 text-xs text-yellow-600 dark:text-yellow-400">No match</span>}
+                        </div>
+                        <Select
+                          value={currentVal === "__unmatched__" ? "__corporate__" : currentVal}
+                          onValueChange={(v) => {
+                            const ccVal = v === "__corporate__" ? null : v;
+                            setCostCenterOverrides((prev) => {
+                              const next = { ...prev };
+                              for (const idx of expIndices) next[String(idx)] = ccVal;
+                              return next;
+                            });
+                            setIncomeCostCenterOverrides((prev) => {
+                              const next = { ...prev };
+                              for (const idx of incIndices) next[String(idx)] = ccVal;
+                              return next;
+                            });
+                          }}
+                        >
+                          <SelectTrigger className={cn("h-8 w-[180px]", isUnmatched && "border-yellow-400")}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__corporate__">Corporate</SelectItem>
+                            {campuses.map((c) => (
+                              <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
           {/* Bulk map by pattern */}
           <div className="flex flex-wrap items-end gap-2 rounded-lg border p-3 bg-muted/30">
             <div className="flex-1 min-w-[120px]">
@@ -632,9 +741,11 @@ function ImportWizard({
             expenseOverrides={expenseOverrides}
             incomeOverrides={incomeOverrides}
             costCenterOverrides={costCenterOverrides}
+            incomeCostCenterOverrides={incomeCostCenterOverrides}
             setExpenseOverrides={setExpenseOverrides}
             setIncomeOverrides={setIncomeOverrides}
             setCostCenterOverrides={setCostCenterOverrides}
+            setIncomeCostCenterOverrides={setIncomeCostCenterOverrides}
             slugToExpCatId={slugToExpCatId}
             slugToIncCatId={slugToIncCatId}
             skippedExpenseIndices={skippedExpenseIndices}

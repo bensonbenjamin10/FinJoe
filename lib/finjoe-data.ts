@@ -1132,6 +1132,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         dayOfWeek: number | null;
         endDate: string | null;
         isActive: boolean;
+        updatedById: string | null;
       }>
     ): Promise<{ id: string } | null> {
       const [existing] = await db

@@ -114,6 +114,69 @@ function buildParticularsWithCounts(
   return { expense: sortAndCap(expense), income: sortAndCap(income) };
 }
 
+/**
+ * Build a summary of Major Head values with counts.
+ * These are category hints from the CSV that the AI should use for better categorization.
+ */
+function buildMajorHeadCounts(
+  expenseRows: ParsedExpenseRow[],
+  incomeRows: ParsedIncomeRow[]
+): { expense: Record<string, number>; income: Record<string, number> } {
+  const expense: Record<string, number> = {};
+  const income: Record<string, number> = {};
+  for (const r of expenseRows) {
+    const h = r.majorHead?.trim();
+    if (h) expense[h] = (expense[h] ?? 0) + 1;
+  }
+  for (const r of incomeRows) {
+    const h = r.majorHead?.trim();
+    if (h) income[h] = (income[h] ?? 0) + 1;
+  }
+  return { expense, income };
+}
+
+/**
+ * Try to directly match Major Head values to existing categories by name or slug.
+ * Returns pre-resolved mappings for rows where Major Head matches, so AI can focus on the rest.
+ */
+function preMappFromMajorHead(
+  expenseRows: ParsedExpenseRow[],
+  incomeRows: ParsedIncomeRow[],
+  expenseCategories: CategoryInfo[],
+  incomeCategories: CategoryInfo[]
+): { expMappings: Record<string, string>; incMappings: Record<string, string> } {
+  const expByName = new Map<string, string>();
+  const expBySlug = new Map<string, string>();
+  for (const c of expenseCategories) {
+    expByName.set(c.name.toLowerCase(), c.slug);
+    expBySlug.set(c.slug.toLowerCase(), c.slug);
+  }
+  const incByName = new Map<string, string>();
+  const incBySlug = new Map<string, string>();
+  for (const c of incomeCategories) {
+    incByName.set(c.name.toLowerCase(), c.slug);
+    incBySlug.set(c.slug.toLowerCase(), c.slug);
+  }
+
+  const expMappings: Record<string, string> = {};
+  for (let i = 0; i < expenseRows.length; i++) {
+    const h = expenseRows[i].majorHead?.trim().toLowerCase();
+    if (!h) continue;
+    const match = expByName.get(h) ?? expBySlug.get(h);
+    if (match) expMappings[String(i)] = match;
+  }
+
+  const incMappings: Record<string, string> = {};
+  for (let i = 0; i < incomeRows.length; i++) {
+    const h = incomeRows[i].majorHead?.trim().toLowerCase();
+    if (!h) continue;
+    const match = incByName.get(h) ?? incBySlug.get(h);
+    if (match) incMappings[String(i)] = match;
+  }
+
+  return { expMappings, incMappings };
+}
+
 type PatternRule = { pattern: string; slug: string; type: "expense" | "income"; matchType: "prefix" | "substring" };
 
 function matchesRule(particulars: string, rule: PatternRule): boolean {
@@ -222,6 +285,9 @@ export async function analyzeImportSuggestions(
     const incMap: Record<string, string> = {};
     expenseRows.forEach((_, i) => { expMap[String(i)] = defaultExp; });
     incomeRows.forEach((_, i) => { incMap[String(i)] = defaultInc; });
+    const { expMappings, incMappings } = preMappFromMajorHead(expenseRows, incomeRows, expenseCategories, incomeCategories);
+    Object.assign(expMap, expMappings);
+    Object.assign(incMap, incMappings);
     return {
       suggestedExpenseMappings: expMap,
       suggestedIncomeMappings: incMap,
@@ -234,15 +300,28 @@ export async function analyzeImportSuggestions(
   const defaultIncSlug = incCats[0]?.slug ?? "other";
 
   const { expense: expParticulars, income: incParticulars } = buildParticularsWithCounts(expenseRows, incomeRows);
+  const majorHeadCounts = buildMajorHeadCounts(expenseRows, incomeRows);
 
   const expCatList = expenseCategories.map((c) => `${c.name} (slug: ${c.slug})`).join(", ");
   const incCatList = incCats.map((c) => `${c.name} (slug: ${c.slug})`).join(", ");
+
+  const hasMajorHeads = Object.keys(majorHeadCounts.expense).length > 0 || Object.keys(majorHeadCounts.income).length > 0;
+  const majorHeadSection = hasMajorHeads ? `
+MAJOR HEAD VALUES FROM CSV (these are category hints from the bank statement — use them to determine the correct category):
+Expense Major Heads (majorHead -> rowCount):
+${JSON.stringify(majorHeadCounts.expense, null, 2)}
+
+Income Major Heads (majorHead -> rowCount):
+${JSON.stringify(majorHeadCounts.income, null, 2)}
+
+IMPORTANT: The Major Head column is a strong category signal. Match Major Head values to the closest available category slug. For example, "Faculty Payment" -> faculty_payments, "Rent Expenses" -> rent, "Electricity Charges" -> electricity_charges, "Revenue" -> fee or the default income category.
+` : "";
 
   const prompt = `You are analyzing a bank statement CSV for expense and income import. Return PATTERN RULES to categorize rows, and PROPOSED NEW CATEGORIES when data doesn't fit existing ones.
 
 AVAILABLE EXPENSE CATEGORIES (use slug): ${expCatList || "miscellaneous (slug: miscellaneous)"}
 AVAILABLE INCOME CATEGORIES (use slug): ${incCatList}
-
+${majorHeadSection}
 EXPENSE PARTICULARS WITH ROW COUNTS (particular -> count):
 ${JSON.stringify(expParticulars, null, 2)}
 
@@ -255,8 +334,9 @@ RULES:
 1. Return patternRules: array of { pattern, slug, type, matchType }. pattern is a string; matchType "prefix" means particulars starts with pattern (strip trailing *), "substring" means particulars includes pattern.
 2. Order rules by specificity: more specific patterns first (e.g. "Salary- Jan" before "Salary").
 3. Map common patterns: Salary-*, UPI/, NEFT, Rent, etc. to existing categories.
-4. For proposedNewCategories: propose 0-5 new categories when a clear pattern (5+ rows) doesn't fit. Include pattern and matchType so we can derive rowIndices.
-5. Example: many "Salary- Jan", "Salary- Feb" rows but no payroll category -> propose { name: "Payroll", slug: "payroll", type: "expense", pattern: "Salary-", matchType: "prefix", reason: "33 salary rows" }.
+4. Use the Major Head values (if provided) as strong hints — they indicate the intended category for each row.
+5. For proposedNewCategories: propose 0-5 new categories when a clear pattern (5+ rows) doesn't fit. Include pattern and matchType so we can derive rowIndices.
+6. Example: many "Salary- Jan", "Salary- Feb" rows but no payroll category -> propose { name: "Payroll", slug: "payroll", type: "expense", pattern: "Salary-", matchType: "prefix", reason: "33 salary rows" }.
 
 Return JSON with patternRules and proposedNewCategories.`;
 
@@ -318,6 +398,9 @@ Return JSON with patternRules and proposedNewCategories.`;
     const incMap: Record<string, string> = {};
     expenseRows.forEach((_, i) => { expMap[String(i)] = defaultExpSlug; });
     incomeRows.forEach((_, i) => { incMap[String(i)] = defaultIncSlug; });
+    const { expMappings, incMappings } = preMappFromMajorHead(expenseRows, incomeRows, expenseCategories, incCats);
+    Object.assign(expMap, expMappings);
+    Object.assign(incMap, incMappings);
     return {
       suggestedExpenseMappings: expMap,
       suggestedIncomeMappings: incMap,
@@ -344,6 +427,17 @@ Return JSON with patternRules and proposedNewCategories.`;
         suggestedIncomeMappings[String(idx)] = p.slug;
       }
     }
+  }
+
+  // Overlay direct Major Head → category matches (highest priority)
+  const { expMappings: majorHeadExpMap, incMappings: majorHeadIncMap } = preMappFromMajorHead(
+    expenseRows, incomeRows, expenseCategories, incCats
+  );
+  for (const [idx, slug] of Object.entries(majorHeadExpMap)) {
+    suggestedExpenseMappings[idx] = slug;
+  }
+  for (const [idx, slug] of Object.entries(majorHeadIncMap)) {
+    suggestedIncomeMappings[idx] = slug;
   }
 
   return {

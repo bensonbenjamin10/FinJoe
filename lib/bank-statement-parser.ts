@@ -19,6 +19,8 @@ export type ParsedIncomeRow = {
   date: string;
   particulars: string;
   amount: number;
+  majorHead?: string;
+  branch?: string;
   categoryMatch: string;
 };
 
@@ -34,7 +36,8 @@ const DEPOSIT_HEADERS = [
 ];
 const AMOUNT_HEADERS = ["amount", "transaction amount", "value"];
 const TYPE_HEADERS = ["transaction type", "type", "cr/dr", "debit/credit", "txn type", "transaction type", "dr/cr"];
-const BRANCH_HEADERS = ["branch", "location", "cost center", "campus", "major head"];
+const BRANCH_HEADERS = ["branch", "location", "cost center", "campus"];
+const MAJOR_HEAD_HEADERS = ["major head", "category", "head", "expense head", "expense type"];
 
 function findColumn(row: Record<string, string>, headers: string[]): string | undefined {
   const keys = Object.keys(row);
@@ -147,6 +150,7 @@ export function parseBankStatementCsv(
     const amountStr = findColumn(row, AMOUNT_HEADERS) ?? row["Amount"] ?? row["amount"];
     const typeStr = findColumn(row, TYPE_HEADERS) ?? row["Transaction Type"] ?? row["Cr/Dr"] ?? row["Type"];
     const branch = findColumn(row, BRANCH_HEADERS) ?? row["Branch"] ?? row["branch"];
+    const majorHead = findColumn(row, MAJOR_HEAD_HEADERS) ?? row["Major Head"] ?? row["major head"];
 
     let withdrawalVal = parseAmount(withdrawalStr);
     let depositVal = parseAmount(depositStr);
@@ -177,6 +181,7 @@ export function parseBankStatementCsv(
         particulars,
         amount: withdrawalVal,
         categoryMatch: categoryName,
+        majorHead: majorHead ?? undefined,
         branch: branch ?? undefined,
       });
     } else if (depositVal != null && depositVal > 0) {
@@ -188,6 +193,8 @@ export function parseBankStatementCsv(
         particulars,
         amount: depositVal,
         categoryMatch: categoryName,
+        majorHead: majorHead ?? undefined,
+        branch: branch ?? undefined,
       });
     } else {
       if ((withdrawalVal === 0 || withdrawalVal == null) && (depositVal === 0 || depositVal == null)) skippedZero++;
