@@ -2051,7 +2051,9 @@ export async function registerRoutes(app: Express) {
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
       const fy = (req.query?.fy as string) ?? "";
       if (!/^\d{4}-\d{2}$/.test(fy)) return res.status(400).json({ error: "fy must be YYYY-YY format, e.g. 2025-26" });
-      const data = await getMISReport(tid, fy);
+      const through = (req.query?.through as string) ?? undefined;
+      const throughDate = through && /^\d{4}-\d{2}-\d{2}$/.test(through) ? through : undefined;
+      const data = await getMISReport(tid, fy, throughDate);
       res.json(data);
     } catch (e) {
       logger.error("MIS report error", { requestId: req.requestId, err: String(e) });
@@ -2091,8 +2093,10 @@ export async function registerRoutes(app: Express) {
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
       const fy = (req.query?.fy as string) ?? "";
       if (!/^\d{4}-\d{2}$/.test(fy)) return res.status(400).json({ error: "fy must be YYYY-YY format" });
+      const through = (req.query?.through as string) ?? undefined;
+      const throughDate = through && /^\d{4}-\d{2}-\d{2}$/.test(through) ? through : undefined;
 
-      const data = await getMISReport(tid, fy);
+      const data = await getMISReport(tid, fy, throughDate);
       const XLSX = await import("xlsx");
       const wb = XLSX.utils.book_new();
       const months = data.months;

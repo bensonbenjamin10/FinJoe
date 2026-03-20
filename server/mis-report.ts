@@ -192,12 +192,14 @@ const OTHER_INDIRECT_SLUG = "operating_expenses";
 
 // ── Main function ──
 
-export async function getMISReport(tenantId: string, fy: string): Promise<MISReport> {
+export async function getMISReport(tenantId: string, fy: string, throughDate?: string): Promise<MISReport> {
   const [startYearStr] = fy.split("-");
   const fyStartYear = parseInt(startYearStr, 10) + (parseInt(startYearStr, 10) < 100 ? 2000 : 0);
   const { labels, startDates, endDates } = fyMonths(fyStartYear);
   const fyStartDate = startDates[0];
   const fyEndDate = endDates[11];
+
+  const effectiveEndDate = throughDate && throughDate <= fyEndDate ? throughDate : fyEndDate;
 
   const fyLabel = `FY ${fyStartYear}-${String(fyStartYear + 1).slice(-2)}`;
 
@@ -220,7 +222,7 @@ export async function getMISReport(tenantId: string, fy: string): Promise<MISRep
       and(
         eq(expenses.tenantId, tenantId),
         sql`${expenses.expenseDate} >= ${fyStartDate}::date`,
-        sql`${expenses.expenseDate} <= ${fyEndDate}::date`,
+        sql`${expenses.expenseDate} <= ${effectiveEndDate}::date`,
       )
     );
 
@@ -242,7 +244,7 @@ export async function getMISReport(tenantId: string, fy: string): Promise<MISRep
       and(
         eq(incomeRecords.tenantId, tenantId),
         sql`${incomeRecords.incomeDate} >= ${fyStartDate}::date`,
-        sql`${incomeRecords.incomeDate} <= ${fyEndDate}::date`,
+        sql`${incomeRecords.incomeDate} <= ${effectiveEndDate}::date`,
       )
     );
 

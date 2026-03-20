@@ -1,10 +1,9 @@
-import { useState, useMemo, useCallback, useId } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -27,6 +26,7 @@ import {
   PieChart,
   Pie,
   Cell,
+  ReferenceLine,
 } from "recharts";
 import {
   FileSpreadsheet,
@@ -41,11 +41,10 @@ import {
   Layers,
   ChevronRight,
 } from "lucide-react";
-import { FYSelector, getCurrentFY } from "@/components/mis/fy-selector";
+import { FYSelector, getCurrentFY, isCurrentFY, getCurrentFYMonthIndex } from "@/components/mis/fy-selector";
 import { StatSparkCard } from "@/components/mis/stat-spark-card";
 import { MISTable, type MISRow } from "@/components/mis/mis-table";
 import { CellDrilldown } from "@/components/mis/cell-drilldown";
-import { cn } from "@/lib/utils";
 
 // ── Types matching backend ──
 
@@ -132,6 +131,8 @@ function formatCurrency(n: number): string {
 
 // ── Main Component ──
 
+const VALID_VIEWS: ViewMode[] = ["overview", "cashflow", "pnl", "revenue", "expenses"];
+
 export default function AdminReports() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
@@ -139,12 +140,20 @@ export default function AdminReports() {
   const urlTenantId = searchParams.get("tenantId");
   const tenantId = isSuperAdmin ? (urlTenantId || user?.tenantId || null) : (user?.tenantId ?? null);
 
-  const [fy, setFY] = useState(searchParams.get("fy") || getCurrentFY());
-  const [view, setView] = useState<ViewMode>((searchParams.get("view") as ViewMode) || "overview");
+  const fy = useMemo(() => {
+    const urlFy = searchParams.get("fy");
+    return urlFy && /^\d{4}-\d{2}$/.test(urlFy) ? urlFy : getCurrentFY();
+  }, [searchParams]);
+
+  const view = useMemo(() => {
+    const urlView = searchParams.get("view") as ViewMode;
+    return urlView && VALID_VIEWS.includes(urlView) ? urlView : "overview";
+  }, [searchParams]);
+
+  const [ytdMode, setYtdMode] = useState(true);
   const [drilldownType, setDrilldownType] = useState<DrilldownType>("marketing");
   const [numberFormat, setNumberFormat] = useState<"standard" | "indian">("standard");
 
-  // Cell drilldown state
   const [drilldownOpen, setDrilldownOpen] = useState(false);
   const [drilldownInfo, setDrilldownInfo] = useState<{
     type: "expense" | "income";
@@ -155,11 +164,20 @@ export default function AdminReports() {
   } | null>(null);
 
   const tenantParam = tenantId ? `&tenantId=${tenantId}` : "";
+  const showYtd = isCurrentFY(fy) && ytdMode;
+  const todayISO = useMemo(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }, []);
+  const throughParam = showYtd ? `&through=${todayISO}` : "";
 
   const { data: report, isLoading, error } = useQuery<MISReport>({
-    queryKey: ["/api/admin/mis/report", fy, tenantId],
+    queryKey: ["/api/admin/mis/report", fy, tenantId, showYtd ? todayISO : "full"],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/mis/report?fy=${fy}${tenantParam}`);
+      const res = await fetch(`/api/admin/mis/report?fy=${fy}${tenantParam}${throughParam}`);
       if (!res.ok) throw new Error("Failed to fetch MIS report");
       return res.json();
     },
@@ -167,7 +185,6 @@ export default function AdminReports() {
   });
 
   const handleFYChange = useCallback((newFy: string) => {
-    setFY(newFy);
     setSearchParams((p) => {
       const next = new URLSearchParams(p);
       next.set("fy", newFy);
@@ -176,7 +193,6 @@ export default function AdminReports() {
   }, [setSearchParams]);
 
   const handleViewChange = useCallback((newView: ViewMode) => {
-    setView(newView);
     setSearchParams((p) => {
       const next = new URLSearchParams(p);
       if (newView === "overview") {
@@ -204,12 +220,12 @@ export default function AdminReports() {
   );
 
   const handleExport = useCallback(async () => {
-    const url = `/api/admin/mis/export?fy=${fy}${tenantParam}`;
+    const url = `/api/admin/mis/export?fy=${fy}${tenantParam}${throughParam}`;
     const a = document.createElement("a");
     a.href = url;
-    a.download = `MIS_${fy}.xlsx`;
+    a.download = `MIS_${fy}${showYtd ? "_YTD" : ""}.xlsx`;
     a.click();
-  }, [fy, tenantParam]);
+  }, [fy, tenantParam, throughParam, showYtd]);
 
   if (isSuperAdmin && !tenantId) {
     return (
@@ -252,6 +268,12 @@ export default function AdminReports() {
               {view === "overview"
                 ? "Financial overview and management information system"
                 : "Monthly breakdown with drill-down capability"}
+              {report && (
+                <span className="ml-1 text-xs text-muted-foreground/70">
+                  — {report.fyLabel} (Apr–Mar)
+                  {isCurrentFY(fy) && `, data through ${new Date().toLocaleDateString("en-IN", { month: "short", year: "2-digit" })}`}
+                </span>
+              )}
             </p>
           </div>
         </div>
@@ -268,6 +290,16 @@ export default function AdminReports() {
             </Select>
           )}
           <FYSelector value={fy} onChange={handleFYChange} />
+          {isCurrentFY(fy) && (
+            <Button
+              variant={ytdMode ? "default" : "outline"}
+              size="sm"
+              className="text-xs h-9 px-3"
+              onClick={() => setYtdMode((v) => !v)}
+            >
+              {ytdMode ? "YTD" : "Full Year"}
+            </Button>
+          )}
           <Button variant="outline" size="sm" className="gap-1.5" onClick={handleExport}>
             <Download className="h-3.5 w-3.5" />
             Export
@@ -277,7 +309,7 @@ export default function AdminReports() {
 
       {isLoading ? <LoadingSkeleton /> : report ? (
         <>
-          {view === "overview" && <OverviewView report={report} onNavigate={handleViewChange} />}
+          {view === "overview" && <OverviewView report={report} onNavigate={handleViewChange} fy={fy} />}
           {view === "cashflow" && (
             <CashflowView report={report} onCellClick={handleCellClick} numberFormat={numberFormat} />
           )}
@@ -339,7 +371,7 @@ function LoadingSkeleton() {
 
 // ── Overview View ──
 
-function OverviewView({ report, onNavigate }: { report: MISReport; onNavigate: (v: ViewMode) => void }) {
+function OverviewView({ report, onNavigate, fy }: { report: MISReport; onNavigate: (v: ViewMode) => void; fy: string }) {
   const { pnl, cashflow } = report;
 
   const totalRevenue = pnl.totalRevenue.fyTotal;
@@ -347,20 +379,39 @@ function OverviewView({ report, onNavigate }: { report: MISReport; onNavigate: (
   const ebitda = pnl.ebitda.fyTotal;
   const closingCash = cashflow.closingBalance[cashflow.closingBalance.length - 1];
 
-  // Trend chart data
+  const currentMonthIdx = isCurrentFY(fy) ? getCurrentFYMonthIndex() : 11;
+  const futureMonthLabel = currentMonthIdx < 11 ? report.months[currentMonthIdx] : null;
+
   const trendData = report.months.map((m, i) => ({
     month: m,
     revenue: pnl.totalRevenue.values[i],
     expenses: pnl.totalDirectExpenses.values[i] + pnl.totalIndirectExpenses.values[i],
     netCashflow: cashflow.netCashFlow.values[i],
+    isFuture: i > currentMonthIdx,
   }));
 
-  // Expense category breakdown for pie
-  const expensePieData = pnl.indirectExpenses.map((item, i) => ({
-    name: item.label,
-    value: item.fyTotal,
-    fill: CHART_COLORS[i % CHART_COLORS.length],
-  })).filter((d) => d.value > 0);
+  const expensePieData = useMemo(() => {
+    const sorted = pnl.indirectExpenses
+      .map((item) => ({ name: item.label, value: item.fyTotal }))
+      .filter((d) => d.value > 0)
+      .sort((a, b) => b.value - a.value);
+
+    const total = sorted.reduce((s, d) => s + d.value, 0);
+    const threshold = total * 0.03;
+    const major: typeof sorted = [];
+    let otherTotal = 0;
+    for (const d of sorted) {
+      if (d.value >= threshold || major.length < 5) {
+        major.push(d);
+      } else {
+        otherTotal += d.value;
+      }
+    }
+    if (otherTotal > 0) {
+      major.push({ name: "Other", value: otherTotal });
+    }
+    return major.map((d, i) => ({ ...d, fill: CHART_COLORS[i % CHART_COLORS.length] }));
+  }, [pnl.indirectExpenses]);
 
   // Revenue by center for bar chart
   const revCenterData = report.drilldowns.revenueByCenter
@@ -503,6 +554,15 @@ function OverviewView({ report, onNavigate }: { report: MISReport; onNavigate: (
                   fill="url(#expGrad)"
                   strokeWidth={2}
                 />
+                {futureMonthLabel && (
+                  <ReferenceLine
+                    x={futureMonthLabel}
+                    stroke="hsl(var(--muted-foreground))"
+                    strokeDasharray="4 4"
+                    strokeOpacity={0.5}
+                    label={{ value: "Today", position: "top", fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+                  />
+                )}
               </AreaChart>
             </ResponsiveContainer>
           </div>
