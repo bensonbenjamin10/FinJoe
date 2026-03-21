@@ -55,8 +55,13 @@ export function MarketingLayout({ children }: { children: React.ReactNode }) {
                       {link.label}
                     </Link>
                   ))}
-                  <Link href="/login" onClick={() => setSheetOpen(false)} className="mt-4">
+                  <Link href="/signup" onClick={() => setSheetOpen(false)} className="mt-4">
                     <Button className="w-full min-h-[44px]" size="lg">
+                      Sign Up
+                    </Button>
+                  </Link>
+                  <Link href="/login" onClick={() => setSheetOpen(false)}>
+                    <Button variant="outline" className="w-full min-h-[44px]" size="lg">
                       <LogIn className="h-4 w-4 mr-2" />
                       Log in
                     </Button>
@@ -77,8 +82,13 @@ export function MarketingLayout({ children }: { children: React.ReactNode }) {
                   {link.label}
                 </Link>
               ))}
-              <Link href="/login">
+              <Link href="/signup">
                 <Button size="sm">
+                  Sign Up
+                </Button>
+              </Link>
+              <Link href="/login">
+                <Button variant="outline" size="sm">
                   <LogIn className="h-4 w-4 mr-2" />
                   Log in
                 </Button>
@@ -111,6 +121,9 @@ export function MarketingLayout({ children }: { children: React.ReactNode }) {
                   {link.label}
                 </Link>
               ))}
+              <Link href="/signup" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+                Sign Up
+              </Link>
               <Link href="/login" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
                 Log in
               </Link>

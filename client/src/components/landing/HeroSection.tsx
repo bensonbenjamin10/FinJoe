@@ -29,7 +29,7 @@ export function HeroSection() {
                 {COPY.ctaLogin}
               </Button>
             </Link>
-            <Link href="/setup">
+            <Link href="/signup">
               <Button variant="outline" size="lg" className="min-h-[48px] w-full min-w-[200px] sm:w-auto">
                 {COPY.ctaGetStarted}
               </Button>

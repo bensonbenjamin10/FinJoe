@@ -26,9 +26,9 @@ export function CTASection() {
                 Log in to Admin
               </Button>
             </Link>
-            <Link href="/setup">
+            <Link href="/signup">
               <Button variant="outline" size="lg" className="min-h-[48px] w-full min-w-[200px] sm:w-auto">
-                First time? Set up FinJoe
+                Sign Up Free
               </Button>
             </Link>
           </div>

@@ -143,6 +143,101 @@ export async function registerRoutes(app: Express) {
     }
   });
 
+  // Public self-service tenant sign-up
+  app.post("/api/auth/signup", async (req, res) => {
+    try {
+      const { orgName, industry, phone, address, adminName, adminEmail, adminPassword } = req.body;
+
+      if (!orgName || !adminEmail || !adminPassword || !adminName) {
+        return res.status(400).json({ error: "Organization name, admin name, email, and password are required" });
+      }
+      if (adminPassword.length < 8) {
+        return res.status(400).json({ error: "Password must be at least 8 characters" });
+      }
+
+      const emailLower = adminEmail.toLowerCase().trim();
+
+      const [existingUser] = await db.select().from(users).where(eq(users.email, emailLower)).limit(1);
+      if (existingUser) {
+        return res.status(400).json({ error: "An account with this email already exists" });
+      }
+
+      let baseSlug = orgName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+      if (!baseSlug) baseSlug = "org";
+      let slug = baseSlug;
+      let suffix = 1;
+      while (true) {
+        const [existing] = await db.select().from(tenants).where(eq(tenants.slug, slug)).limit(1);
+        if (!existing) break;
+        suffix++;
+        slug = `${baseSlug}-${suffix}`;
+      }
+
+      const [tenant] = await db
+        .insert(tenants)
+        .values({
+          name: orgName.trim(),
+          slug,
+          industry: industry?.trim() || null,
+          phone: phone?.trim() || null,
+          address: address?.trim() || null,
+          contactEmail: emailLower,
+          isActive: true,
+        })
+        .returning();
+
+      if (!tenant) {
+        return res.status(500).json({ error: "Failed to create organization" });
+      }
+
+      const [adminUser] = await db
+        .insert(users)
+        .values({
+          email: emailLower,
+          passwordHash: await hashPassword(adminPassword),
+          name: adminName.trim(),
+          role: "admin",
+          tenantId: tenant.id,
+          isActive: true,
+        })
+        .returning();
+
+      if (!adminUser) {
+        await db.delete(tenants).where(eq(tenants.id, tenant.id));
+        return res.status(500).json({ error: "Failed to create admin account" });
+      }
+
+      try {
+        await seedMISCategoriesForTenant(tenant.id);
+      } catch (seedErr) {
+        logger.error("Failed to seed MIS categories during signup (tenant still created)", {
+          requestId: req.requestId,
+          tenantId: tenant.id,
+          err: String(seedErr),
+        });
+      }
+
+      req.login(adminUser, (loginErr) => {
+        if (loginErr) {
+          logger.error("Auto-login after signup failed", { requestId: req.requestId, err: String(loginErr) });
+          const { passwordHash, ...u } = adminUser;
+          return res.status(201).json({ ...u, loginFailed: true });
+        }
+        logger.info("Tenant signup completed", {
+          requestId: req.requestId,
+          tenantId: tenant.id,
+          tenantSlug: tenant.slug,
+          adminId: adminUser.id,
+        });
+        const { passwordHash, ...u } = adminUser;
+        res.status(201).json(u);
+      });
+    } catch (e: any) {
+      logger.error("Signup error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Sign-up failed. Please try again." });
+    }
+  });
+
   app.get("/api/cost-centers", async (req, res) => {
     try {
       const q = req.query?.tenantId;

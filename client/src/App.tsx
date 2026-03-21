@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Landing from "@/pages/landing";
 import Login from "@/pages/login";
 import Setup from "@/pages/setup";
+import Signup from "@/pages/signup";
 import AdminDashboard from "@/pages/admin-dashboard";
 import AdminFinJoe from "@/pages/admin-finjoe";
 import AdminExpenses from "@/pages/admin-expenses";
@@ -27,6 +28,7 @@ function Router() {
       <Switch>
         <Route path="/" component={Landing} />
         <Route path="/setup" component={Setup} />
+        <Route path="/signup" component={Signup} />
         <Route path="/login" component={Login} />
         <Route path="/admin/tenants/:id/users">
           <ProtectedRoute requireRoles={["super_admin"]}>
