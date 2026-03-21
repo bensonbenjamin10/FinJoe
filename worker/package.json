@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "@google/genai": "^1.44.0",
-    "drizzle-orm": "^0.39.1",
     "express": "^4.21.2",
     "papaparse": "^5.5.3",
     "pg": "^8.12.0",
