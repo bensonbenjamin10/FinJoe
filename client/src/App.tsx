@@ -19,6 +19,10 @@ import AdminTenantUsers from "@/pages/admin-tenant-users";
 import AdminAccountSettings from "@/pages/admin-account-settings";
 import AdminReconciliation from "@/pages/admin-reconciliation";
 import AdminReports from "@/pages/admin-reports";
+import AdminInvoiceNew from "@/pages/admin-invoice-new";
+import AdminInvoicing from "@/pages/admin-invoicing";
+import AdminInvoiceDetail from "@/pages/admin-invoice-detail";
+import AdminInvoicingCustomers from "@/pages/admin-invoicing-customers";
 import { AdminShell } from "@/components/layout/AdminShell";
 import { ProtectedRoute } from "@/components/protected-route";
 
@@ -111,6 +115,34 @@ function Router() {
           <ProtectedRoute>
             <AdminShell>
               <AdminReconciliation />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/invoicing/invoices/:id">
+          <ProtectedRoute>
+            <AdminShell>
+              <AdminInvoiceDetail />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/invoicing/new">
+          <ProtectedRoute>
+            <AdminShell>
+              <AdminInvoiceNew />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/invoicing/customers">
+          <ProtectedRoute>
+            <AdminShell>
+              <AdminInvoicingCustomers />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/invoicing">
+          <ProtectedRoute>
+            <AdminShell>
+              <AdminInvoicing />
             </AdminShell>
           </ProtectedRoute>
         </Route>

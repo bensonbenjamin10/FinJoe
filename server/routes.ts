@@ -40,6 +40,7 @@ import { getAnalytics, getPredictions } from "./analytics.js";
 import { generateAnalyticsInsights } from "../lib/analytics-insights.js";
 import { getMISReport, getMISCellTransactions } from "./mis-report.js";
 import { registerPaymentRoutes } from "./payments-routes.js";
+import { registerInvoicingRoutes } from "./invoicing-routes.js";
 import { seedMISCategoriesForTenant } from "./seed-mis-categories.js";
 import { getMedia } from "../lib/media-storage.js";
 import {
@@ -3946,6 +3947,7 @@ export async function registerRoutes(app: Express) {
   });
 
   registerPaymentRoutes(app);
+  registerInvoicingRoutes(app);
 
   return server;
 }

@@ -44,6 +44,7 @@ import {
   Zap,
   GitCompareArrows,
   FileSpreadsheet,
+  FileText,
 } from "lucide-react";
 import type { Tenant } from "@shared/schema";
 
@@ -98,6 +99,7 @@ export function AdminShell({ children }: AdminShellProps) {
     { href: "/admin/recurring-templates", label: "Recurring Expenses", icon: Repeat },
     { href: "/admin/income", label: "Income", icon: TrendingUp },
     { href: "/admin/recurring-income-templates", label: "Recurring Income", icon: Repeat },
+    { href: "/admin/invoicing", label: "Invoicing", icon: FileText },
     { href: "/admin/reconciliation", label: "Reconciliation", icon: GitCompareArrows },
     ...(isSuperAdmin
       ? [

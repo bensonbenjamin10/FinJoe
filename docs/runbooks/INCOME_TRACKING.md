@@ -21,11 +21,13 @@ Use this table when investigating duplicates, reconciliation gaps, or training s
 | `bank_import` | From statement CSV | Admin expense import pipeline (credit rows) |
 | `recurring_template` | Scheduled accrual-style line | Cron `generateIncomeFromTemplates` / `/cron/recurring-income` |
 | `razorpay` | Online payment verified | `POST /api/payments/verify` after Razorpay checkout |
+| `invoice_payment` | Payment allocated to invoice | Manual or gateway payment via invoicing module |
 
 **Notes**
 
 - Bank import creates matching `bank_transactions` rows and sets `income_records.bank_transaction_id` immediately for those lines.
 - Razorpay rows are **idempotent** on `income_records.razorpay_payment_id` (one ledger line per Razorpay payment id). Replaying verify is safe.
+- Invoice payments: `payment_allocations` links each capture to an `invoices` row. The allocation service calls `createIncome` with `source: "invoice_payment"` and sets `particulars` to include the invoice number. The `invoices.amount_paid` column is derived from `sum(payment_allocations.amount)` to avoid dual sources of truth.
 
 ---
 
@@ -46,6 +48,8 @@ If these are unset, `/api/payments/create-order` and related endpoints respond w
 
 ## Related code
 
-- Schema: [`shared/schema.ts`](../../shared/schema.ts) — `income_records`, `payment_orders`
-- Routes: [`server/payments-routes.ts`](../../server/payments-routes.ts), [`server/razorpay-api.ts`](../../server/razorpay-api.ts)
+- Schema: [`shared/schema.ts`](../../shared/schema.ts) — `income_records`, `payment_orders`, `billing_customers`, `invoices`, `invoice_lines`, `payment_allocations`
+- Routes: [`server/payments-routes.ts`](../../server/payments-routes.ts), [`server/razorpay-api.ts`](../../server/razorpay-api.ts), [`server/invoicing-routes.ts`](../../server/invoicing-routes.ts)
 - Shared writes: [`lib/finjoe-data.ts`](../../lib/finjoe-data.ts) — `createIncome`
+- Invoicing services: [`lib/invoicing/application/invoice-service.ts`](../../lib/invoicing/application/invoice-service.ts), [`lib/invoicing/application/payment-allocation-service.ts`](../../lib/invoicing/application/payment-allocation-service.ts)
+- Ports: [`lib/invoicing/ports/`](../../lib/invoicing/ports/) — `TaxCalculationPort`, `InvoiceDocumentPort`, `PaymentCapturePort`

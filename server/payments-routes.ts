@@ -3,8 +3,9 @@ import { and, asc, eq } from "drizzle-orm";
 import { db } from "./db.js";
 import { logger } from "./logger.js";
 import { getTenantId } from "./auth.js";
-import { paymentOrders, incomeRecords, incomeCategories } from "../shared/schema.js";
+import { paymentOrders, incomeRecords, incomeCategories, invoices } from "../shared/schema.js";
 import { createFinJoeData } from "../lib/finjoe-data.js";
+import { createPaymentAllocationService } from "../lib/invoicing/application/payment-allocation-service.js";
 import {
   getRazorpayKeyId,
   razorpayConfigured,
@@ -252,8 +253,32 @@ export function registerPaymentRoutes(app: Express) {
             .update(paymentOrders)
             .set({ status: "paid", incomeRecordId: created.id, updatedAt: new Date() })
             .where(eq(paymentOrders.id, locked.id));
-          return { incomeId: created.id, idempotent: false as const };
+
+          const invoiceId = typeof locked.metadata === "object" && locked.metadata && "invoiceId" in locked.metadata
+            ? String((locked.metadata as Record<string, unknown>).invoiceId)
+            : null;
+          return { incomeId: created.id, idempotent: false as const, invoiceId, paymentOrderId: locked.id };
         });
+
+        if (result.invoiceId && !result.idempotent) {
+          try {
+            const allocSvc = createPaymentAllocationService(db);
+            const [inv] = await db.select().from(invoices).where(eq(invoices.id, result.invoiceId)).limit(1);
+            if (inv) {
+              await allocSvc.allocateGatewayPayment({
+                tenantId: inv.tenantId,
+                invoiceId: result.invoiceId,
+                amount: order.amountRupees,
+                paymentOrderId: result.paymentOrderId,
+                incomeRecordId: result.incomeId,
+                provider: "razorpay",
+                externalPaymentId: razorpayPaymentId,
+              });
+            }
+          } catch (allocErr) {
+            logger.warn("Invoice allocation after verify failed (income posted OK)", { err: String(allocErr) });
+          }
+        }
 
         return res.json({ ok: true, incomeId: result.incomeId, idempotent: result.idempotent });
       } catch (e: unknown) {

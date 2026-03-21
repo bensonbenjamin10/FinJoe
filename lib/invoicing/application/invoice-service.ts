@@ -1,0 +1,285 @@
+import { eq, and, desc, sql, gte, lte } from "drizzle-orm";
+import {
+  billingCustomers,
+  invoices,
+  invoiceLines,
+  incomeCategories,
+  costCenters,
+  paymentAllocations,
+} from "../../../shared/schema.js";
+import type { CreateCustomerInput, CreateInvoiceInput, InvoiceStatus } from "../ports/types.js";
+import { FlatTaxCalculation, type TaxCalculationPort } from "../ports/tax-calculation-port.js";
+
+export type InvoicingDb = any;
+
+const taxCalc: TaxCalculationPort = new FlatTaxCalculation();
+
+function nextInvoiceNumber(tenantSlug: string): string {
+  const ts = Date.now().toString(36).toUpperCase();
+  return `INV-${ts}`;
+}
+
+export function createInvoiceService(db: InvoicingDb) {
+  return {
+    async listCustomers(tenantId: string, opts?: { search?: string }) {
+      const conditions = [eq(billingCustomers.tenantId, tenantId), eq(billingCustomers.isActive, true)];
+      if (opts?.search) {
+        conditions.push(sql`lower(${billingCustomers.name}) like ${"%" + opts.search.toLowerCase() + "%"}`);
+      }
+      return db
+        .select()
+        .from(billingCustomers)
+        .where(and(...conditions))
+        .orderBy(billingCustomers.name);
+    },
+
+    async getCustomer(tenantId: string, id: string) {
+      const [row] = await db
+        .select()
+        .from(billingCustomers)
+        .where(and(eq(billingCustomers.id, id), eq(billingCustomers.tenantId, tenantId)))
+        .limit(1);
+      return row ?? null;
+    },
+
+    async createCustomer(input: CreateCustomerInput) {
+      const [created] = await db
+        .insert(billingCustomers)
+        .values({
+          tenantId: input.tenantId,
+          name: input.name,
+          email: input.email ?? null,
+          phone: input.phone ?? null,
+          address: input.address ?? null,
+        })
+        .returning();
+      return created;
+    },
+
+    async updateCustomer(tenantId: string, id: string, updates: Partial<CreateCustomerInput>) {
+      const vals: Record<string, unknown> = { updatedAt: new Date() };
+      if (updates.name !== undefined) vals.name = updates.name;
+      if (updates.email !== undefined) vals.email = updates.email;
+      if (updates.phone !== undefined) vals.phone = updates.phone;
+      if (updates.address !== undefined) vals.address = updates.address;
+      const [updated] = await db
+        .update(billingCustomers)
+        .set(vals)
+        .where(and(eq(billingCustomers.id, id), eq(billingCustomers.tenantId, tenantId)))
+        .returning();
+      return updated ?? null;
+    },
+
+    async createInvoice(input: CreateInvoiceInput) {
+      if (!input.lines.length) throw new Error("At least one line item required");
+
+      const { subtotal, taxAmount, total, lineTotals } = taxCalc.calculate(input.lines);
+      const invoiceNumber = nextInvoiceNumber(input.tenantId);
+      const ccId = input.costCenterId && input.costCenterId !== "__corporate__" ? input.costCenterId : null;
+
+      const [inv] = await db
+        .insert(invoices)
+        .values({
+          tenantId: input.tenantId,
+          customerId: input.customerId,
+          invoiceNumber,
+          status: "draft" as InvoiceStatus,
+          issueDate: input.issueDate ? new Date(input.issueDate) : null,
+          dueDate: input.dueDate ? new Date(input.dueDate) : null,
+          subtotal,
+          taxAmount,
+          total,
+          amountPaid: 0,
+          notes: input.notes ?? null,
+          costCenterId: ccId,
+          incomeCategoryId: input.incomeCategoryId ?? null,
+        })
+        .returning();
+
+      const lineValues = input.lines.map((l, i) => ({
+        invoiceId: inv.id,
+        description: l.description,
+        quantity: l.quantity,
+        unitAmount: l.unitAmount,
+        taxRate: l.taxRate ?? 0,
+        lineTotal: lineTotals[i],
+        incomeCategoryId: l.incomeCategoryId ?? null,
+        displayOrder: l.displayOrder ?? i,
+      }));
+      await db.insert(invoiceLines).values(lineValues);
+
+      return inv;
+    },
+
+    async getInvoice(tenantId: string, id: string) {
+      const [inv] = await db
+        .select()
+        .from(invoices)
+        .where(and(eq(invoices.id, id), eq(invoices.tenantId, tenantId)))
+        .limit(1);
+      if (!inv) return null;
+
+      const lines = await db
+        .select()
+        .from(invoiceLines)
+        .where(eq(invoiceLines.invoiceId, id))
+        .orderBy(invoiceLines.displayOrder);
+
+      const allocs = await db
+        .select()
+        .from(paymentAllocations)
+        .where(eq(paymentAllocations.invoiceId, id))
+        .orderBy(desc(paymentAllocations.createdAt));
+
+      const [cust] = await db
+        .select({ name: billingCustomers.name, email: billingCustomers.email, phone: billingCustomers.phone })
+        .from(billingCustomers)
+        .where(eq(billingCustomers.id, inv.customerId))
+        .limit(1);
+
+      return { ...inv, lines, allocations: allocs, customer: cust ?? null };
+    },
+
+    async listInvoices(tenantId: string, opts?: {
+      status?: string;
+      customerId?: string;
+      startDate?: string;
+      endDate?: string;
+      limit?: number;
+      offset?: number;
+    }) {
+      const conditions = [eq(invoices.tenantId, tenantId)];
+      if (opts?.status && opts.status !== "all") conditions.push(eq(invoices.status, opts.status));
+      if (opts?.customerId) conditions.push(eq(invoices.customerId, opts.customerId));
+      if (opts?.startDate) conditions.push(gte(invoices.issueDate, new Date(opts.startDate)));
+      if (opts?.endDate) conditions.push(lte(invoices.issueDate, new Date(opts.endDate)));
+
+      const lim = Math.min(opts?.limit ?? 100, 200);
+      const off = opts?.offset ?? 0;
+
+      const [countRow] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(invoices)
+        .where(and(...conditions));
+
+      const rows = await db
+        .select({
+          id: invoices.id,
+          invoiceNumber: invoices.invoiceNumber,
+          status: invoices.status,
+          issueDate: invoices.issueDate,
+          dueDate: invoices.dueDate,
+          total: invoices.total,
+          amountPaid: invoices.amountPaid,
+          customerId: invoices.customerId,
+          customerName: billingCustomers.name,
+          createdAt: invoices.createdAt,
+        })
+        .from(invoices)
+        .leftJoin(billingCustomers, eq(invoices.customerId, billingCustomers.id))
+        .where(and(...conditions))
+        .orderBy(desc(invoices.createdAt))
+        .limit(lim)
+        .offset(off);
+
+      return { rows, total: countRow?.count ?? 0 };
+    },
+
+    async getKpis(tenantId: string) {
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+
+      const [outstanding] = await db
+        .select({ total: sql<number>`coalesce(sum(${invoices.total} - ${invoices.amountPaid}), 0)::int`, count: sql<number>`count(*)::int` })
+        .from(invoices)
+        .where(and(eq(invoices.tenantId, tenantId), sql`${invoices.status} IN ('issued', 'partially_paid')`));
+
+      const [overdue] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(invoices)
+        .where(and(
+          eq(invoices.tenantId, tenantId),
+          sql`${invoices.status} IN ('issued', 'partially_paid')`,
+          sql`${invoices.dueDate} < now()`,
+        ));
+
+      const [collected] = await db
+        .select({ total: sql<number>`coalesce(sum(${paymentAllocations.amount}), 0)::int` })
+        .from(paymentAllocations)
+        .where(and(eq(paymentAllocations.tenantId, tenantId), gte(paymentAllocations.createdAt, new Date(monthStart))));
+
+      return {
+        outstandingAmount: outstanding?.total ?? 0,
+        outstandingCount: outstanding?.count ?? 0,
+        overdueCount: overdue?.count ?? 0,
+        collectedThisMonth: collected?.total ?? 0,
+      };
+    },
+
+    async issueInvoice(tenantId: string, id: string, userId?: string) {
+      const [inv] = await db
+        .select()
+        .from(invoices)
+        .where(and(eq(invoices.id, id), eq(invoices.tenantId, tenantId)))
+        .limit(1);
+      if (!inv) return { error: "Invoice not found" };
+      if (inv.status !== "draft") return { error: `Cannot issue invoice in status "${inv.status}"` };
+      if (inv.total <= 0) return { error: "Invoice total must be greater than zero" };
+
+      const [updated] = await db
+        .update(invoices)
+        .set({
+          status: "issued" as InvoiceStatus,
+          issueDate: inv.issueDate ?? new Date(),
+          issuedById: userId ?? null,
+          issuedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(invoices.id, id))
+        .returning();
+      return { invoice: updated };
+    },
+
+    async voidInvoice(tenantId: string, id: string, userId?: string) {
+      const [inv] = await db
+        .select()
+        .from(invoices)
+        .where(and(eq(invoices.id, id), eq(invoices.tenantId, tenantId)))
+        .limit(1);
+      if (!inv) return { error: "Invoice not found" };
+      if (inv.status === "void") return { error: "Invoice is already void" };
+      if (inv.amountPaid > 0) return { error: "Cannot void an invoice with payments. Reverse payments first." };
+
+      const [updated] = await db
+        .update(invoices)
+        .set({
+          status: "void" as InvoiceStatus,
+          voidedById: userId ?? null,
+          voidedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(invoices.id, id))
+        .returning();
+      return { invoice: updated };
+    },
+
+    async updateInvoicePaidAmount(invoiceId: string) {
+      const [sum] = await db
+        .select({ total: sql<number>`coalesce(sum(${paymentAllocations.amount}), 0)::int` })
+        .from(paymentAllocations)
+        .where(eq(paymentAllocations.invoiceId, invoiceId));
+      const paid = sum?.total ?? 0;
+
+      const [inv] = await db.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
+      if (!inv) return;
+
+      let newStatus: InvoiceStatus = inv.status as InvoiceStatus;
+      if (inv.status !== "void" && inv.status !== "draft") {
+        if (paid >= inv.total) newStatus = "paid";
+        else if (paid > 0) newStatus = "partially_paid";
+        else newStatus = "issued";
+      }
+      await db.update(invoices).set({ amountPaid: paid, status: newStatus, updatedAt: new Date() }).where(eq(invoices.id, invoiceId));
+    },
+  };
+}

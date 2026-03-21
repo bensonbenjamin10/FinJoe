@@ -450,6 +450,90 @@ export const paymentOrders = pgTable("payment_orders", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// Billing customers (tenant-scoped directory for invoicing)
+export const billingCustomers = pgTable("billing_customers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
+  name: text("name").notNull(),
+  email: text("email"),
+  phone: text("phone"),
+  address: text("address"),
+  contactId: varchar("contact_id").references(() => finJoeContacts.id),
+  userId: varchar("user_id").references(() => users.id),
+  isActive: boolean("is_active").notNull().default(true),
+  ext: jsonb("ext").$type<Record<string, unknown>>().default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Invoices (tenant-scoped AR documents)
+export const invoices = pgTable("invoices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
+  customerId: varchar("customer_id")
+    .notNull()
+    .references(() => billingCustomers.id),
+  invoiceNumber: text("invoice_number").notNull(),
+  status: text("status").notNull().default("draft"),
+  issueDate: timestamp("issue_date"),
+  dueDate: timestamp("due_date"),
+  subtotal: integer("subtotal").notNull().default(0),
+  taxAmount: integer("tax_amount").notNull().default(0),
+  total: integer("total").notNull().default(0),
+  amountPaid: integer("amount_paid").notNull().default(0),
+  currency: text("currency").notNull().default("INR"),
+  notes: text("notes"),
+  costCenterId: varchar("cost_center_id").references(() => costCenters.id),
+  incomeCategoryId: varchar("income_category_id").references(() => incomeCategories.id),
+  ext: jsonb("ext").$type<Record<string, unknown>>().default({}),
+  issuedById: varchar("issued_by_id").references(() => users.id),
+  issuedAt: timestamp("issued_at"),
+  voidedById: varchar("voided_by_id").references(() => users.id),
+  voidedAt: timestamp("voided_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Invoice line items
+export const invoiceLines = pgTable("invoice_lines", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  invoiceId: varchar("invoice_id")
+    .notNull()
+    .references(() => invoices.id, { onDelete: "cascade" }),
+  description: text("description").notNull(),
+  quantity: integer("quantity").notNull().default(1),
+  unitAmount: integer("unit_amount").notNull(),
+  taxRate: integer("tax_rate").notNull().default(0),
+  lineTotal: integer("line_total").notNull(),
+  incomeCategoryId: varchar("income_category_id").references(() => incomeCategories.id),
+  displayOrder: integer("display_order").notNull().default(0),
+  ext: jsonb("ext").$type<Record<string, unknown>>().default({}),
+});
+
+// Payment allocations (link captures to invoices; derive "paid" from sum)
+export const paymentAllocations = pgTable("payment_allocations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
+  invoiceId: varchar("invoice_id")
+    .notNull()
+    .references(() => invoices.id),
+  amount: integer("amount").notNull(),
+  paymentOrderId: varchar("payment_order_id").references(() => paymentOrders.id),
+  incomeRecordId: varchar("income_record_id").references(() => incomeRecords.id),
+  provider: text("provider"),
+  externalPaymentId: text("external_payment_id"),
+  method: text("method"),
+  reference: text("reference"),
+  paymentDate: timestamp("payment_date"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Platform settings - single row, account-level defaults (super admin only)
 export const platformSettings = pgTable("platform_settings", {
   id: varchar("id").primaryKey().default("default"),
@@ -570,6 +654,31 @@ export const bankTransactionsRelations = relations(bankTransactions, ({ one }) =
   matchedExpense: one(expenses, { fields: [bankTransactions.matchedExpenseId], references: [expenses.id] }),
 }));
 
+export const billingCustomersRelations = relations(billingCustomers, ({ one, many }) => ({
+  tenant: one(tenants, { fields: [billingCustomers.tenantId], references: [tenants.id] }),
+  invoices: many(invoices),
+}));
+
+export const invoicesRelations = relations(invoices, ({ one, many }) => ({
+  tenant: one(tenants, { fields: [invoices.tenantId], references: [tenants.id] }),
+  customer: one(billingCustomers, { fields: [invoices.customerId], references: [billingCustomers.id] }),
+  costCenter: one(costCenters, { fields: [invoices.costCenterId], references: [costCenters.id] }),
+  issuedBy: one(users, { fields: [invoices.issuedById], references: [users.id] }),
+  lines: many(invoiceLines),
+  allocations: many(paymentAllocations),
+}));
+
+export const invoiceLinesRelations = relations(invoiceLines, ({ one }) => ({
+  invoice: one(invoices, { fields: [invoiceLines.invoiceId], references: [invoices.id] }),
+  incomeCategory: one(incomeCategories, { fields: [invoiceLines.incomeCategoryId], references: [incomeCategories.id] }),
+}));
+
+export const paymentAllocationsRelations = relations(paymentAllocations, ({ one }) => ({
+  tenant: one(tenants, { fields: [paymentAllocations.tenantId], references: [tenants.id] }),
+  invoice: one(invoices, { fields: [paymentAllocations.invoiceId], references: [invoices.id] }),
+  incomeRecord: one(incomeRecords, { fields: [paymentAllocations.incomeRecordId], references: [incomeRecords.id] }),
+}));
+
 // Types
 export type Tenant = typeof tenants.$inferSelect;
 export type InsertTenant = typeof tenants.$inferInsert;
@@ -627,6 +736,22 @@ export type InsertPaymentOrder = typeof paymentOrders.$inferInsert;
 
 export type BankTransaction = typeof bankTransactions.$inferSelect;
 export type InsertBankTransaction = typeof bankTransactions.$inferInsert;
+
+export type BillingCustomer = typeof billingCustomers.$inferSelect;
+export type InsertBillingCustomer = typeof billingCustomers.$inferInsert;
+export type Invoice = typeof invoices.$inferSelect;
+export type InsertInvoice = typeof invoices.$inferInsert;
+export type InvoiceLine = typeof invoiceLines.$inferSelect;
+export type InsertInvoiceLine = typeof invoiceLines.$inferInsert;
+export type PaymentAllocation = typeof paymentAllocations.$inferSelect;
+export type InsertPaymentAllocation = typeof paymentAllocations.$inferInsert;
+
+export type InvoiceWithDetails = Invoice & {
+  customerName?: string | null;
+  costCenterName?: string | null;
+  categoryName?: string | null;
+  lines?: InvoiceLine[];
+};
 
 export type IncomeWithDetails = IncomeRecord & {
   costCenterName?: string | null;
