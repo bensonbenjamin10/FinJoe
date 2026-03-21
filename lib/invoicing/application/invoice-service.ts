@@ -6,17 +6,28 @@ import {
   incomeCategories,
   costCenters,
   paymentAllocations,
+  tenants,
 } from "../../../shared/schema.js";
 import type { CreateCustomerInput, CreateInvoiceInput, InvoiceStatus } from "../ports/types.js";
-import { FlatTaxCalculation, type TaxCalculationPort } from "../ports/tax-calculation-port.js";
+import type { TaxCalculationPort } from "../ports/tax-calculation-port.js";
+import { getTaxEngine } from "../ports/tax-regime-registry.js";
 
 export type InvoicingDb = any;
-
-const taxCalc: TaxCalculationPort = new FlatTaxCalculation();
 
 function nextInvoiceNumber(tenantSlug: string): string {
   const ts = Date.now().toString(36).toUpperCase();
   return `INV-${ts}`;
+}
+
+async function resolveTaxCalc(db: InvoicingDb, tenantId: string): Promise<TaxCalculationPort> {
+  const [t] = await db
+    .select({ taxRegime: tenants.taxRegime, taxRegimeConfig: tenants.taxRegimeConfig })
+    .from(tenants)
+    .where(eq(tenants.id, tenantId))
+    .limit(1);
+  const regime = t?.taxRegime ?? "flat_percent";
+  const config = (t?.taxRegimeConfig as Record<string, unknown>) ?? {};
+  return getTaxEngine(regime, config);
 }
 
 export function createInvoiceService(db: InvoicingDb) {
@@ -73,6 +84,7 @@ export function createInvoiceService(db: InvoicingDb) {
     async createInvoice(input: CreateInvoiceInput) {
       if (!input.lines.length) throw new Error("At least one line item required");
 
+      const taxCalc = await resolveTaxCalc(db, input.tenantId);
       const { subtotal, taxAmount, total, lineTotals } = taxCalc.calculate(input.lines);
       const invoiceNumber = nextInvoiceNumber(input.tenantId);
       const ccId = input.costCenterId && input.costCenterId !== "__corporate__" ? input.costCenterId : null;
@@ -109,6 +121,62 @@ export function createInvoiceService(db: InvoicingDb) {
       await db.insert(invoiceLines).values(lineValues);
 
       return inv;
+    },
+
+    async updateDraftInvoice(tenantId: string, id: string, input: {
+      customerId?: string;
+      issueDate?: string;
+      dueDate?: string;
+      notes?: string | null;
+      costCenterId?: string | null;
+      incomeCategoryId?: string | null;
+      lines?: CreateInvoiceInput["lines"];
+    }) {
+      const [inv] = await db
+        .select()
+        .from(invoices)
+        .where(and(eq(invoices.id, id), eq(invoices.tenantId, tenantId)))
+        .limit(1);
+      if (!inv) return { error: "Invoice not found" };
+      if (inv.status !== "draft") return { error: "Only draft invoices can be edited" };
+
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (input.customerId !== undefined) updates.customerId = input.customerId;
+      if (input.issueDate !== undefined) updates.issueDate = input.issueDate ? new Date(input.issueDate) : null;
+      if (input.dueDate !== undefined) updates.dueDate = input.dueDate ? new Date(input.dueDate) : null;
+      if (input.notes !== undefined) updates.notes = input.notes ?? null;
+      if (input.costCenterId !== undefined) {
+        updates.costCenterId = input.costCenterId && input.costCenterId !== "__corporate__" ? input.costCenterId : null;
+      }
+      if (input.incomeCategoryId !== undefined) updates.incomeCategoryId = input.incomeCategoryId ?? null;
+
+      if (input.lines && input.lines.length > 0) {
+        const taxCalc = await resolveTaxCalc(db, tenantId);
+        const { subtotal, taxAmount, total, lineTotals } = taxCalc.calculate(input.lines);
+        updates.subtotal = subtotal;
+        updates.taxAmount = taxAmount;
+        updates.total = total;
+
+        await db.delete(invoiceLines).where(eq(invoiceLines.invoiceId, id));
+        const lineValues = input.lines.map((l, i) => ({
+          invoiceId: id,
+          description: l.description,
+          quantity: l.quantity,
+          unitAmount: l.unitAmount,
+          taxRate: l.taxRate ?? 0,
+          lineTotal: lineTotals[i],
+          incomeCategoryId: l.incomeCategoryId ?? null,
+          displayOrder: l.displayOrder ?? i,
+        }));
+        await db.insert(invoiceLines).values(lineValues);
+      }
+
+      const [updated] = await db
+        .update(invoices)
+        .set(updates)
+        .where(eq(invoices.id, id))
+        .returning();
+      return { invoice: updated };
     },
 
     async getInvoice(tenantId: string, id: string) {

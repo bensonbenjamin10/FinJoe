@@ -1,9 +1,15 @@
 import type { Express } from "express";
+import { eq, and } from "drizzle-orm";
 import { db } from "./db.js";
 import { logger } from "./logger.js";
 import { requireAdmin, getTenantId } from "./auth.js";
 import { createInvoiceService } from "../lib/invoicing/application/invoice-service.js";
 import { createPaymentAllocationService } from "../lib/invoicing/application/payment-allocation-service.js";
+import { invoices, billingCustomers, incomeCategories, paymentOrders } from "../shared/schema.js";
+import {
+  razorpayConfigured,
+  razorpayCreateOrder,
+} from "./razorpay-api.js";
 
 export function registerInvoicingRoutes(app: Express) {
   const invoiceSvc = createInvoiceService(db);
@@ -139,6 +145,33 @@ export function registerInvoicingRoutes(app: Express) {
     }
   });
 
+  app.patch("/api/admin/invoicing/invoices/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      const tid = tenantId ?? req.body?.tenantId;
+      if (user.role !== "super_admin" && !tid) return res.status(403).json({ error: "Tenant context required" });
+      if (!tid) return res.status(400).json({ error: "tenantId required" });
+      const { customerId, issueDate, dueDate, notes, costCenterId, incomeCategoryId, lines } = req.body;
+      if (lines !== undefined) {
+        if (!Array.isArray(lines) || lines.length === 0) return res.status(400).json({ error: "At least one line item required" });
+        for (const l of lines) {
+          if (!l.description?.trim()) return res.status(400).json({ error: "Line description required" });
+          if (typeof l.unitAmount !== "number" || l.unitAmount <= 0) return res.status(400).json({ error: "Line unit amount must be positive" });
+          if (typeof l.quantity !== "number" || l.quantity <= 0) return res.status(400).json({ error: "Line quantity must be positive" });
+        }
+      }
+      const result = await invoiceSvc.updateDraftInvoice(tid, req.params.id, {
+        customerId, issueDate, dueDate, notes, costCenterId, incomeCategoryId, lines,
+      });
+      if ("error" in result) return res.status(409).json({ error: result.error });
+      res.json(result.invoice);
+    } catch (e) {
+      logger.error("Update draft invoice error", { err: String(e) });
+      res.status(500).json({ error: e instanceof Error ? e.message : "Failed to update invoice" });
+    }
+  });
+
   app.post("/api/admin/invoicing/invoices/:id/issue", requireAdmin, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
@@ -195,6 +228,112 @@ export function registerInvoicingRoutes(app: Express) {
     } catch (e) {
       logger.error("Record payment error", { err: String(e) });
       res.status(500).json({ error: "Failed to record payment" });
+    }
+  });
+
+  // ── Public pay endpoints (no auth required) ──
+
+  app.get("/api/invoices/:id/pay-info", async (req, res) => {
+    try {
+      const [inv] = await db
+        .select({
+          id: invoices.id,
+          invoiceNumber: invoices.invoiceNumber,
+          status: invoices.status,
+          total: invoices.total,
+          amountPaid: invoices.amountPaid,
+          currency: invoices.currency,
+          dueDate: invoices.dueDate,
+          tenantId: invoices.tenantId,
+          customerId: invoices.customerId,
+        })
+        .from(invoices)
+        .where(eq(invoices.id, req.params.id))
+        .limit(1);
+      if (!inv) return res.status(404).json({ error: "Invoice not found" });
+      if (inv.status === "draft" || inv.status === "void") {
+        return res.status(400).json({ error: "This invoice is not payable" });
+      }
+      const remaining = inv.total - inv.amountPaid;
+      if (remaining <= 0) {
+        return res.status(400).json({ error: "This invoice is already fully paid" });
+      }
+      const [cust] = await db
+        .select({ name: billingCustomers.name })
+        .from(billingCustomers)
+        .where(eq(billingCustomers.id, inv.customerId))
+        .limit(1);
+      res.json({
+        invoiceNumber: inv.invoiceNumber,
+        total: inv.total,
+        amountPaid: inv.amountPaid,
+        remaining,
+        currency: inv.currency,
+        dueDate: inv.dueDate,
+        customerName: cust?.name ?? null,
+        gatewayConfigured: razorpayConfigured(),
+      });
+    } catch (e) {
+      logger.error("Pay info error", { err: String(e) });
+      res.status(500).json({ error: "Failed to load invoice" });
+    }
+  });
+
+  app.post("/api/invoices/:id/create-order", async (req, res) => {
+    try {
+      if (!razorpayConfigured()) {
+        return res.status(503).json({ error: "Payment gateway is not configured" });
+      }
+      const [inv] = await db
+        .select()
+        .from(invoices)
+        .where(eq(invoices.id, req.params.id))
+        .limit(1);
+      if (!inv) return res.status(404).json({ error: "Invoice not found" });
+      if (inv.status === "draft" || inv.status === "void") {
+        return res.status(400).json({ error: "This invoice is not payable" });
+      }
+      const remaining = inv.total - inv.amountPaid;
+      if (remaining <= 0) {
+        return res.status(400).json({ error: "This invoice is already fully paid" });
+      }
+
+      const catId = inv.incomeCategoryId ?? await (async () => {
+        const rows = await db
+          .select({ id: incomeCategories.id })
+          .from(incomeCategories)
+          .where(and(eq(incomeCategories.tenantId, inv.tenantId), eq(incomeCategories.isActive, true)))
+          .limit(1);
+        return rows[0]?.id ?? null;
+      })();
+      if (!catId) {
+        return res.status(400).json({ error: "No income category configured for this tenant" });
+      }
+
+      const receipt = `inv_${inv.id.slice(0, 8)}_${Date.now().toString(36)}`.slice(0, 40);
+      const { id: razorpayOrderId } = await razorpayCreateOrder({
+        amountPaise: remaining * 100,
+        receipt,
+        notes: { tenantId: inv.tenantId, invoiceId: inv.id, invoiceNumber: inv.invoiceNumber },
+      });
+
+      const ccId = inv.costCenterId && inv.costCenterId !== "__corporate__" ? inv.costCenterId : null;
+      await db.insert(paymentOrders).values({
+        tenantId: inv.tenantId,
+        amountRupees: remaining,
+        currency: inv.currency,
+        razorpayOrderId,
+        status: "created",
+        paymentType: "invoice_payment",
+        incomeCategoryId: catId,
+        costCenterId: ccId,
+        metadata: { invoiceId: inv.id, invoiceNumber: inv.invoiceNumber },
+      });
+
+      res.status(201).json({ orderId: razorpayOrderId });
+    } catch (e) {
+      logger.error("Invoice create-order error", { err: String(e) });
+      res.status(500).json({ error: "Failed to create payment order" });
     }
   });
 }

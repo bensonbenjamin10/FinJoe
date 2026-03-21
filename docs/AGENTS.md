@@ -66,6 +66,11 @@ npm run db:query -- "SELECT id, name FROM tenants"
 - `expenses` – Expense records
 - `income_records` – Income records
 - `users` – Auth users
+- `billing_customers` – Tenant-scoped customer directory for invoicing
+- `invoices` – AR-lite sales documents (draft → issued → partially_paid → paid → void)
+- `invoice_lines` – Line items per invoice (description, qty, unit_amount, tax_rate, line_total)
+- `payment_allocations` – Links payments to invoices; `invoices.amount_paid` derives from sum
+- `payment_orders` – Razorpay checkout orders linking verify → income_records
 
 ---
 

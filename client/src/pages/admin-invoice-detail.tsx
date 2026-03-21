@@ -311,7 +311,7 @@ export default function AdminInvoiceDetail() {
   });
 
   const copyPayLink = async () => {
-    const url = `${window.location.origin}/pay/${id}`;
+    const url = `${window.location.origin}/pay/${invoice?.id ?? id}`;
     try {
       await navigator.clipboard.writeText(url);
       toast({ title: "Pay link copied", description: url });

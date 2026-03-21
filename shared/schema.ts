@@ -26,6 +26,8 @@ export const tenants = pgTable("tenants", {
   address: text("address"),
   contactEmail: text("contact_email"),
   isActive: boolean("is_active").notNull().default(true),
+  taxRegime: text("tax_regime").notNull().default("flat_percent"),
+  taxRegimeConfig: jsonb("tax_regime_config").$type<Record<string, unknown>>().default({}),
   createdById: varchar("created_by_id"),
   updatedById: varchar("updated_by_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

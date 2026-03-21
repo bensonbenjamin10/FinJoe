@@ -66,6 +66,23 @@ export function createPaymentAllocationService(db: InvoicingDb) {
       provider: string;
       externalPaymentId: string;
     }) {
+      if (params.provider && params.externalPaymentId) {
+        const [existing] = await db
+          .select({ id: paymentAllocations.id })
+          .from(paymentAllocations)
+          .where(
+            and(
+              eq(paymentAllocations.provider, params.provider),
+              eq(paymentAllocations.externalPaymentId, params.externalPaymentId),
+            ),
+          )
+          .limit(1);
+        if (existing) {
+          await invoiceSvc.updateInvoicePaidAmount(params.invoiceId);
+          return existing;
+        }
+      }
+
       const [alloc] = await db.insert(paymentAllocations).values({
         tenantId: params.tenantId,
         invoiceId: params.invoiceId,

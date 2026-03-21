@@ -23,6 +23,9 @@ import AdminInvoiceNew from "@/pages/admin-invoice-new";
 import AdminInvoicing from "@/pages/admin-invoicing";
 import AdminInvoiceDetail from "@/pages/admin-invoice-detail";
 import AdminInvoicingCustomers from "@/pages/admin-invoicing-customers";
+import InvoicePay from "@/pages/invoice-pay";
+import PaymentCheckout from "@/pages/payment-checkout";
+import PaymentSuccess from "@/pages/payment-success";
 import { AdminShell } from "@/components/layout/AdminShell";
 import { ProtectedRoute } from "@/components/protected-route";
 
@@ -118,13 +121,6 @@ function Router() {
             </AdminShell>
           </ProtectedRoute>
         </Route>
-        <Route path="/admin/invoicing/invoices/:id">
-          <ProtectedRoute>
-            <AdminShell>
-              <AdminInvoiceDetail />
-            </AdminShell>
-          </ProtectedRoute>
-        </Route>
         <Route path="/admin/invoicing/new">
           <ProtectedRoute>
             <AdminShell>
@@ -139,6 +135,13 @@ function Router() {
             </AdminShell>
           </ProtectedRoute>
         </Route>
+        <Route path="/admin/invoicing/:id">
+          <ProtectedRoute>
+            <AdminShell>
+              <AdminInvoiceDetail />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
         <Route path="/admin/invoicing">
           <ProtectedRoute>
             <AdminShell>
@@ -146,6 +149,9 @@ function Router() {
             </AdminShell>
           </ProtectedRoute>
         </Route>
+        <Route path="/pay/:invoiceId" component={InvoicePay} />
+        <Route path="/payment-checkout" component={PaymentCheckout} />
+        <Route path="/payment-success" component={PaymentSuccess} />
         <Route path="/admin">
           <Redirect to="/admin/dashboard" />
         </Route>

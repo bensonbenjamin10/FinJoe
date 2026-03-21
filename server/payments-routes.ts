@@ -217,8 +217,12 @@ export function registerPaymentRoutes(app: Express) {
           if (!locked) {
             throw new Error("Order missing");
           }
+          const lockedInvoiceId = typeof locked.metadata === "object" && locked.metadata && "invoiceId" in locked.metadata
+            ? String((locked.metadata as Record<string, unknown>).invoiceId)
+            : null;
+
           if (locked.status === "paid" && locked.incomeRecordId) {
-            return { incomeId: locked.incomeRecordId, idempotent: true as const };
+            return { incomeId: locked.incomeRecordId, idempotent: true as const, invoiceId: lockedInvoiceId, paymentOrderId: locked.id };
           }
 
           const [dup] = await tx
@@ -231,7 +235,7 @@ export function registerPaymentRoutes(app: Express) {
               .update(paymentOrders)
               .set({ status: "paid", incomeRecordId: dup.id, updatedAt: new Date() })
               .where(eq(paymentOrders.id, locked.id));
-            return { incomeId: dup.id, idempotent: true as const };
+            return { incomeId: dup.id, idempotent: true as const, invoiceId: lockedInvoiceId, paymentOrderId: locked.id };
           }
 
           const finJoeData = createFinJoeData(tx, locked.tenantId);
@@ -254,13 +258,10 @@ export function registerPaymentRoutes(app: Express) {
             .set({ status: "paid", incomeRecordId: created.id, updatedAt: new Date() })
             .where(eq(paymentOrders.id, locked.id));
 
-          const invoiceId = typeof locked.metadata === "object" && locked.metadata && "invoiceId" in locked.metadata
-            ? String((locked.metadata as Record<string, unknown>).invoiceId)
-            : null;
-          return { incomeId: created.id, idempotent: false as const, invoiceId, paymentOrderId: locked.id };
+          return { incomeId: created.id, idempotent: false as const, invoiceId: lockedInvoiceId, paymentOrderId: locked.id };
         });
 
-        if (result.invoiceId && !result.idempotent) {
+        if (result.invoiceId) {
           try {
             const allocSvc = createPaymentAllocationService(db);
             const [inv] = await db.select().from(invoices).where(eq(invoices.id, result.invoiceId)).limit(1);
@@ -269,7 +270,7 @@ export function registerPaymentRoutes(app: Express) {
                 tenantId: inv.tenantId,
                 invoiceId: result.invoiceId,
                 amount: order.amountRupees,
-                paymentOrderId: result.paymentOrderId,
+                paymentOrderId: result.paymentOrderId ?? order.id,
                 incomeRecordId: result.incomeId,
                 provider: "razorpay",
                 externalPaymentId: razorpayPaymentId,
