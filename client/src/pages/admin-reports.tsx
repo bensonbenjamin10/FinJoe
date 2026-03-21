@@ -697,7 +697,7 @@ function ExpenseView({ report, onCellClick, numberFormat, drilldownIdx, onDrilld
     const row = (label: string, values: number[], type: MISRow["type"], opts?: Partial<MISRow>): MISRow => ({ id: `exp-${idx++}`, label, values, fyTotal: values.reduce((a, b) => a + b, 0), type, ...opts });
 
     for (const item of selected.items) {
-      r.push(row(item.label, item.values, "data", { categorySlug: item.slug, transactionType: "expense" }));
+      r.push(row(item.label, item.values, "data", { categorySlug: selected.slug, transactionType: "expense" }));
     }
     r.push(row(selected.total.label, selected.total.values, "total"));
     return r;
