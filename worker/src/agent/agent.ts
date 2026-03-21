@@ -19,6 +19,7 @@ import {
   agentTurn,
   agentTurnWithFunctionResponse,
   extractExpenseOrExpensesFromImage,
+  transcribeAudio,
   parseAmount,
   type ExtractedExpense,
   type ConversationTurn,
@@ -154,7 +155,27 @@ export async function processWithAgent(
     ct === "text/csv" || ct === "application/csv" || ct?.includes("csv");
   const isImageOrPdf = (ct: string | null) =>
     ct?.startsWith("image/") || ct === "application/pdf";
+  const isAudio = (ct: string | null) =>
+    ct?.startsWith("audio/") ?? false;
   const hasMedia = media.some((m) => isCsv(m.contentType) || isImageOrPdf(m.contentType));
+  const hasAudio = media.some((m) => isAudio(m.contentType));
+
+  let audioTranscript: string | null = null;
+
+  if (hasAudio) {
+    const firstAudio = media.find((m) => isAudio(m.contentType));
+    const audioBuffer = firstAudio?.data ?? (firstAudio?.storagePath ? await getMedia(firstAudio.storagePath) : null);
+    if (audioBuffer) {
+      logger.info("Transcribing audio message", { ...ctx, contentType: firstAudio!.contentType, sizeBytes: audioBuffer.length });
+      const base64 = audioBuffer.toString("base64");
+      audioTranscript = await transcribeAudio(base64, firstAudio!.contentType, traceId);
+      if (audioTranscript) {
+        logger.info("Audio transcription succeeded", { ...ctx, transcriptLength: audioTranscript.length });
+      } else {
+        logger.info("Audio transcription returned empty", { ...ctx });
+      }
+    }
+  }
 
   let extractedFromImage: ExtractedExpense | undefined;
   let extractedBulkFromImage: Array<{ amount: number; description?: string; vendorName?: string; campus?: string }> | undefined;
@@ -179,10 +200,11 @@ export async function processWithAgent(
     } else if (firstImageBuffer) {
       logger.info("Extracting expense from media", { ...ctx, contentType: firstImage!.contentType });
       const base64 = firstImageBuffer.toString("base64");
+      const imageTextContext = [messageBody, audioTranscript].filter(Boolean).join(" ") || undefined;
       const extractionResult = await extractExpenseOrExpensesFromImage(
         base64,
         firstImage!.contentType,
-        messageBody,
+        imageTextContext,
         traceId,
         systemContext
       );
@@ -206,7 +228,16 @@ export async function processWithAgent(
   }
 
   const history = await getConversationHistory(conversationId, messageId);
-  let effectiveUserMessage = (body || (hasMedia ? "[Image or file attached - please process the expense data]" : "")).trim();
+  let effectiveUserMessage = body;
+  if (audioTranscript) {
+    effectiveUserMessage = effectiveUserMessage
+      ? `${effectiveUserMessage}\n[Voice message transcription: "${audioTranscript}"]`
+      : audioTranscript;
+  }
+  if (!effectiveUserMessage && hasAudio && !audioTranscript) {
+    effectiveUserMessage = "[Voice message received but could not be transcribed. Please ask the user to type their message or try again.]";
+  }
+  effectiveUserMessage = (effectiveUserMessage || (hasMedia ? "[Image or file attached - please process the expense data]" : "")).trim();
   if ((convContext as { contextExpired?: boolean }).contextExpired) {
     effectiveUserMessage = `[SYSTEM NOTE: The user's previous in-progress expense/request has expired due to inactivity (over 24 hours). Let them know their previous data was cleared and they'll need to start fresh if they were mid-flow.]\n${effectiveUserMessage}`;
   }

@@ -1361,7 +1361,7 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.query?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { campusId, costCenterId, categoryId, startDate, endDate, limit: limitParam, offset: offsetParam } = req.query;
+      const { campusId, costCenterId, categoryId, startDate, endDate, noDate, limit: limitParam, offset: offsetParam } = req.query;
       const ccId = (costCenterId ?? campusId) as string | undefined;
       const conditions = [eq(incomeRecords.tenantId, tid)];
       if (ccId && ccId !== "all") {
@@ -1369,8 +1369,12 @@ export async function registerRoutes(app: Express) {
         else conditions.push(eq(incomeRecords.costCenterId, ccId));
       }
       if (categoryId && categoryId !== "all") conditions.push(eq(incomeRecords.categoryId, categoryId as string));
-      if (startDate && typeof startDate === "string") conditions.push(sql`${incomeRecords.incomeDate} >= ${startDate}::date`);
-      if (endDate && typeof endDate === "string") conditions.push(sql`${incomeRecords.incomeDate} <= ${endDate}::date`);
+      if (noDate === "1" || noDate === "true") {
+        conditions.push(sql`${incomeRecords.incomeDate} IS NULL`);
+      } else {
+        if (startDate && typeof startDate === "string") conditions.push(sql`${incomeRecords.incomeDate} >= ${startDate}::date`);
+        if (endDate && typeof endDate === "string") conditions.push(sql`${incomeRecords.incomeDate} <= ${endDate}::date`);
+      }
 
       const whereClause = and(...conditions);
       const limit = Math.min(Math.max(1, parseInt(String(limitParam ?? LIST_PAGE_SIZE), 10) || LIST_PAGE_SIZE), LIST_PAGE_SIZE_MAX);
@@ -1404,7 +1408,7 @@ export async function registerRoutes(app: Express) {
         .leftJoin(incomeCategories, eq(incomeRecords.categoryId, incomeCategories.id))
         .leftJoin(recorderTable, eq(incomeRecords.recordedById, recorderTable.id))
         .where(whereClause)
-        .orderBy(desc(incomeRecords.incomeDate), desc(incomeRecords.createdAt))
+        .orderBy(sql`${incomeRecords.incomeDate} DESC NULLS LAST`, desc(incomeRecords.createdAt))
         .limit(limit)
         .offset(offset);
 
@@ -1467,7 +1471,7 @@ export async function registerRoutes(app: Express) {
       if (ccId !== undefined) updates.costCenterId = ccId;
       if (categoryId !== undefined) updates.categoryId = categoryId;
       if (amount !== undefined) updates.amount = Math.round(Number(amount));
-      if (incomeDate !== undefined) updates.incomeDate = new Date(incomeDate);
+      if (incomeDate !== undefined) updates.incomeDate = incomeDate === null || incomeDate === "" ? null : new Date(incomeDate);
       if (particulars !== undefined) updates.particulars = particulars;
       if (incomeType !== undefined) updates.incomeType = incomeType;
       const whereClause = and(eq(incomeRecords.id, req.params.id), eq(incomeRecords.tenantId, tid));
@@ -3252,7 +3256,7 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.query?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { campusId, costCenterId, status, categoryId, source, startDate, endDate, limit: limitParam, offset: offsetParam } = req.query;
+      const { campusId, costCenterId, status, categoryId, source, startDate, endDate, noDate, limit: limitParam, offset: offsetParam } = req.query;
       const conditions = [eq(expenses.tenantId, tid)];
       const ccId = (costCenterId ?? campusId) as string | undefined;
       if (ccId && ccId !== "all") {
@@ -3265,8 +3269,12 @@ export async function registerRoutes(app: Express) {
       if (status && status !== "all") conditions.push(eq(expenses.status, status as string));
       if (categoryId && categoryId !== "all") conditions.push(eq(expenses.categoryId, categoryId as string));
       if (source && source !== "all") conditions.push(eq(expenses.source, source as string));
-      if (startDate && typeof startDate === "string") conditions.push(sql`${expenses.expenseDate} >= ${startDate}::date`);
-      if (endDate && typeof endDate === "string") conditions.push(sql`${expenses.expenseDate} <= ${endDate}::date`);
+      if (noDate === "1" || noDate === "true") {
+        conditions.push(sql`${expenses.expenseDate} IS NULL`);
+      } else {
+        if (startDate && typeof startDate === "string") conditions.push(sql`${expenses.expenseDate} >= ${startDate}::date`);
+        if (endDate && typeof endDate === "string") conditions.push(sql`${expenses.expenseDate} <= ${endDate}::date`);
+      }
 
       const whereClause = and(...conditions);
       const limit = Math.min(Math.max(1, parseInt(String(limitParam ?? LIST_PAGE_SIZE), 10) || LIST_PAGE_SIZE), LIST_PAGE_SIZE_MAX);
@@ -3311,7 +3319,7 @@ export async function registerRoutes(app: Express) {
         .leftJoin(submitterTable, eq(expenses.submittedById, submitterTable.id))
         .leftJoin(approverTable, eq(expenses.approvedById, approverTable.id))
         .where(whereClause)
-        .orderBy(desc(expenses.expenseDate), desc(expenses.createdAt))
+        .orderBy(sql`${expenses.expenseDate} DESC NULLS LAST`, desc(expenses.createdAt))
         .limit(limit)
         .offset(offset);
 
@@ -3552,7 +3560,7 @@ export async function registerRoutes(app: Express) {
       if (ccId !== undefined) updates.costCenterId = ccId;
       if (categoryId !== undefined) updates.categoryId = categoryId;
       if (amount !== undefined) updates.amount = Math.round(Number(amount));
-      if (expenseDate !== undefined) updates.expenseDate = new Date(expenseDate);
+      if (expenseDate !== undefined) updates.expenseDate = expenseDate === null || expenseDate === "" ? null : new Date(expenseDate);
       if (description !== undefined) updates.description = description;
       if (invoiceNumber !== undefined) updates.invoiceNumber = invoiceNumber;
       if (invoiceDate !== undefined) updates.invoiceDate = invoiceDate ? new Date(invoiceDate) : null;

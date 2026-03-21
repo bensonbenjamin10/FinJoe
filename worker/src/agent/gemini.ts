@@ -74,6 +74,10 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 - If validation fails after a tool call, explain what went wrong and what to fix.
 - Duplicate expense risk: if user might be re-submitting the same invoice, you can mention checking for duplicates—but still process if they confirm.
 
+=== VOICE MESSAGES ===
+- Users may send voice messages (audio). When a voice transcription is provided, treat it exactly like typed text. Process it normally—extract expense data, answer questions, or execute actions as requested.
+- If transcription failed, politely ask the user to type their message or try sending a clearer voice note.
+
 === COMMUNICATION ===
 - Ask for multiple missing fields when natural; one at a time when simpler or when the user seems confused.
 - Acknowledge delays (e.g. "Processing the image...") so the user knows you're working.
@@ -1184,3 +1188,48 @@ ${textContext ? `Additional context from user: "${textContext}"` : ""}`;
   }
 }
 
+/** Transcribe an audio message (voice note) using Gemini's native multimodal audio support. */
+export async function transcribeAudio(
+  audioBase64: string,
+  mimeType: string,
+  traceId?: string
+): Promise<string | null> {
+  const gemini = getGemini();
+  if (!gemini) return null;
+
+  const prompt =
+    "Transcribe this audio message exactly as spoken. Return only the transcription text with no commentary, labels, or formatting. If the audio is silent or unintelligible, return an empty string.";
+
+  const doTranscribe = async (model: string): Promise<string | null> => {
+    const response = await gemini.models.generateContent({
+      model,
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: prompt },
+            { inlineData: { mimeType: mimeType || "audio/ogg", data: audioBase64 } },
+          ],
+        },
+      ],
+      config: { httpOptions: { timeout: 120_000 } },
+    });
+    const text = ((response as { text?: string })?.text ?? "").trim();
+    logger.info("Audio transcription result", { traceId, length: text.length, preview: text.slice(0, 120) });
+    return text || null;
+  };
+
+  try {
+    return await doTranscribe(MODEL_ID);
+  } catch (err) {
+    logger.error("Audio transcription error", { traceId, ...serializeError(err) });
+    if (MODEL_ID !== FALLBACK_MODEL) {
+      try {
+        return await doTranscribe(FALLBACK_MODEL);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}

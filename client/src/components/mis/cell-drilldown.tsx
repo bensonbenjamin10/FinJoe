@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertCircle } from "lucide-react";
 import { format } from "date-fns";
+import { formatIsoDate } from "@/lib/format-date";
 
 interface CellDrilldownProps {
   open: boolean;
@@ -121,7 +122,7 @@ export function CellDrilldown({
                 {transactions.map((txn) => (
                   <TableRow key={txn.id}>
                     <TableCell className="whitespace-nowrap text-xs">
-                      {format(new Date(txn.date), "dd MMM yyyy")}
+                      {formatIsoDate(txn.date, "dd MMM yyyy")}
                     </TableCell>
                     <TableCell className="max-w-[200px] truncate text-xs">
                       {txn.description || txn.category}

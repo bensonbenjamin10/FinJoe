@@ -18,6 +18,12 @@ function getExtFromContentType(contentType: string): string {
     "image/gif": "gif",
     "image/webp": "webp",
     "application/pdf": "pdf",
+    "audio/ogg": "ogg",
+    "audio/mpeg": "mp3",
+    "audio/mp4": "m4a",
+    "audio/wav": "wav",
+    "audio/amr": "amr",
+    "audio/aac": "aac",
   };
   return map[contentType?.toLowerCase()?.split(";")[0]?.trim() ?? ""] || "bin";
 }

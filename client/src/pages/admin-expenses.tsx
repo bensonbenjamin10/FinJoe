@@ -52,6 +52,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { format } from "date-fns";
+import { formatIsoDate, parseIsoToDate } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -1013,7 +1014,7 @@ function PettyCashTab({
                               onChange={() => toggleSelect(e.id)}
                             />
                           </TableCell>
-                          <TableCell>{format(new Date(e.expenseDate), "dd MMM yyyy")}</TableCell>
+                          <TableCell>{formatIsoDate(e.expenseDate, "dd MMM yyyy")}</TableCell>
                           <TableCell>{e.description || e.particulars || "—"}</TableCell>
                           <TableCell>₹ {e.amount.toLocaleString("en-IN")}</TableCell>
                         </TableRow>
@@ -1088,6 +1089,7 @@ export default function AdminExpenses() {
     source: "all",
     startDate: "",
     endDate: "",
+    noDate: false,
   });
   const [createForm, setCreateForm] = useState({
     campusId: "__corporate__",
@@ -1125,8 +1127,12 @@ export default function AdminExpenses() {
     if (filters.status && filters.status !== "all") params.append("status", filters.status);
     if (filters.categoryId && filters.categoryId !== "all") params.append("categoryId", filters.categoryId);
     if (filters.source && filters.source !== "all") params.append("source", filters.source);
-    if (filters.startDate) params.append("startDate", filters.startDate);
-    if (filters.endDate) params.append("endDate", filters.endDate);
+    if (filters.noDate) {
+      params.append("noDate", "1");
+    } else {
+      if (filters.startDate) params.append("startDate", filters.startDate);
+      if (filters.endDate) params.append("endDate", filters.endDate);
+    }
     params.append("limit", String(LIST_PAGE_SIZE));
     params.append("offset", String(offset));
     return params.toString();
@@ -1602,18 +1608,30 @@ export default function AdminExpenses() {
                       <SelectItem value="bank_import">Bank Import</SelectItem>
                     </SelectContent>
                   </Select>
-                  <Input
-                    type="date"
-                    value={filters.startDate}
-                    onChange={(e) => setFilters((f) => ({ ...f, startDate: e.target.value }))}
-                    className="w-[150px]"
-                  />
-                  <Input
-                    type="date"
-                    value={filters.endDate}
-                    onChange={(e) => setFilters((f) => ({ ...f, endDate: e.target.value }))}
-                    className="w-[150px]"
-                  />
+                  <label className="flex items-center gap-1.5 text-sm whitespace-nowrap cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={filters.noDate}
+                      onChange={(e) => setFilters((f) => ({ ...f, noDate: e.target.checked, startDate: "", endDate: "" }))}
+                    />
+                    Missing date
+                  </label>
+                  {!filters.noDate && (
+                    <>
+                      <Input
+                        type="date"
+                        value={filters.startDate}
+                        onChange={(e) => setFilters((f) => ({ ...f, startDate: e.target.value }))}
+                        className="w-[150px]"
+                      />
+                      <Input
+                        type="date"
+                        value={filters.endDate}
+                        onChange={(e) => setFilters((f) => ({ ...f, endDate: e.target.value }))}
+                        className="w-[150px]"
+                      />
+                    </>
+                  )}
                 </div>
 
                 {isLoading ? (
@@ -1638,7 +1656,7 @@ export default function AdminExpenses() {
                     <TableBody>
                       {expenses.map((exp) => (
                         <TableRow key={exp.id}>
-                          <TableCell>{format(new Date(exp.expenseDate), "dd MMM yyyy")}</TableCell>
+                          <TableCell>{formatIsoDate(exp.expenseDate, "dd MMM yyyy")}</TableCell>
                           <TableCell className="max-w-[200px]">
                             <div className="flex flex-col gap-0.5 truncate">
                               <div className="flex items-center gap-2 truncate">
@@ -2329,7 +2347,7 @@ export default function AdminExpenses() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <span className="text-muted-foreground">Date</span>
-                  <p className="font-medium">{format(new Date(viewExpenseDialog.expenseDate), "dd MMM yyyy")}</p>
+                  <p className="font-medium">{formatIsoDate(viewExpenseDialog.expenseDate, "dd MMM yyyy")}</p>
                 </div>
                 <div>
                   <span className="text-muted-foreground">Amount</span>
@@ -2530,7 +2548,7 @@ function EditExpenseForm({
   const [campusId, setCampusId] = useState(expense.campusId ?? "__corporate__");
   const [categoryId, setCategoryId] = useState(expense.categoryId);
   const [amount, setAmount] = useState(String(expense.amount));
-  const [expenseDate, setExpenseDate] = useState(new Date(expense.expenseDate));
+  const [expenseDate, setExpenseDate] = useState(parseIsoToDate(expense.expenseDate) ?? new Date());
   const [description, setDescription] = useState(expense.description ?? "");
   const [invoiceNumber, setInvoiceNumber] = useState((expense as any).invoiceNumber ?? "");
   const [invoiceDate, setInvoiceDate] = useState((expense as any).invoiceDate ? format(new Date((expense as any).invoiceDate), "yyyy-MM-dd") : "");

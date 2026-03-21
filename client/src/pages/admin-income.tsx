@@ -40,6 +40,7 @@ import {
   ArrowLeft,
 } from "lucide-react";
 import { format } from "date-fns";
+import { formatIsoDate } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -71,6 +72,7 @@ export default function AdminIncome() {
     categoryId: "all",
     startDate: "",
     endDate: "",
+    noDate: false,
   });
   const [createForm, setCreateForm] = useState({
     campusId: "__corporate__",
@@ -96,7 +98,7 @@ export default function AdminIncome() {
         amount: String(editIncomeDialog.amount),
         particulars: editIncomeDialog.particulars || "",
         incomeType: editIncomeDialog.incomeType,
-        incomeDate: format(new Date(editIncomeDialog.incomeDate), "yyyy-MM-dd"),
+        incomeDate: formatIsoDate(editIncomeDialog.incomeDate, "yyyy-MM-dd", ""),
       });
     }
   }, [editIncomeDialog]);
@@ -111,8 +113,12 @@ export default function AdminIncome() {
     const campusVal = filters.campusId && filters.campusId !== "all" ? filters.campusId : null;
     if (campusVal) params.append("campusId", campusVal === "corporate" || campusVal === "__corporate__" ? "__corporate__" : campusVal);
     if (filters.categoryId && filters.categoryId !== "all") params.append("categoryId", filters.categoryId);
-    if (filters.startDate) params.append("startDate", filters.startDate);
-    if (filters.endDate) params.append("endDate", filters.endDate);
+    if (filters.noDate) {
+      params.append("noDate", "1");
+    } else {
+      if (filters.startDate) params.append("startDate", filters.startDate);
+      if (filters.endDate) params.append("endDate", filters.endDate);
+    }
     params.append("limit", String(LIST_PAGE_SIZE));
     params.append("offset", String(offset));
     return params.toString();
@@ -461,18 +467,30 @@ export default function AdminIncome() {
                       ))}
                     </SelectContent>
                   </Select>
-                  <Input
-                    type="date"
-                    value={filters.startDate}
-                    onChange={(e) => setFilters((f) => ({ ...f, startDate: e.target.value }))}
-                    className="w-[150px]"
-                  />
-                  <Input
-                    type="date"
-                    value={filters.endDate}
-                    onChange={(e) => setFilters((f) => ({ ...f, endDate: e.target.value }))}
-                    className="w-[150px]"
-                  />
+                  <label className="flex items-center gap-1.5 text-sm whitespace-nowrap cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={filters.noDate}
+                      onChange={(e) => setFilters((f) => ({ ...f, noDate: e.target.checked, startDate: "", endDate: "" }))}
+                    />
+                    Missing date
+                  </label>
+                  {!filters.noDate && (
+                    <>
+                      <Input
+                        type="date"
+                        value={filters.startDate}
+                        onChange={(e) => setFilters((f) => ({ ...f, startDate: e.target.value }))}
+                        className="w-[150px]"
+                      />
+                      <Input
+                        type="date"
+                        value={filters.endDate}
+                        onChange={(e) => setFilters((f) => ({ ...f, endDate: e.target.value }))}
+                        className="w-[150px]"
+                      />
+                    </>
+                  )}
                 </div>
 
                 <p className="text-sm text-muted-foreground">
@@ -500,7 +518,7 @@ export default function AdminIncome() {
                     <TableBody>
                       {incomeList.map((inc) => (
                         <TableRow key={inc.id}>
-                          <TableCell>{format(new Date(inc.incomeDate), "dd MMM yyyy")}</TableCell>
+                          <TableCell>{formatIsoDate(inc.incomeDate, "dd MMM yyyy")}</TableCell>
                           <TableCell className="max-w-[220px]">
                             <div className="flex flex-col gap-0.5 truncate">
                               <span className="truncate" title={inc.particulars || undefined}>
@@ -859,7 +877,7 @@ export default function AdminIncome() {
           </DialogHeader>
           {viewIncomeDialog && (
             <div className="space-y-2 text-sm">
-              <p><span className="font-medium">Date:</span> {format(new Date(viewIncomeDialog.incomeDate), "PPP")}</p>
+              <p><span className="font-medium">Date:</span> {formatIsoDate(viewIncomeDialog.incomeDate, "PPP")}</p>
               <p><span className="font-medium">Amount:</span> ₹ {viewIncomeDialog.amount.toLocaleString("en-IN")}</p>
               <p><span className="font-medium">Category:</span> {viewIncomeDialog.category?.name || "-"}</p>
               <p><span className="font-medium">Type:</span> {incomeTypeLabel(viewIncomeDialog.incomeType)}</p>
@@ -892,7 +910,7 @@ export default function AdminIncome() {
                     amount: Math.round(parseFloat(editForm.amount)),
                     particulars: editForm.particulars || undefined,
                     incomeType: editForm.incomeType,
-                    incomeDate: editForm.incomeDate,
+                    incomeDate: editForm.incomeDate || null,
                   },
                 });
               }}

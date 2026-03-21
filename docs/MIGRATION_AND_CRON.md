@@ -1,5 +1,40 @@
 # Migration & Cron Setup
 
+## Database Migrations (drizzle-kit)
+
+FinJoe uses **drizzle-kit** to manage schema migrations. The schema source of truth is `shared/schema.ts`.
+
+### Workflow
+
+1. Edit `shared/schema.ts` (add/change columns, tables, relations)
+2. Run `npm run db:generate` — auto-generates a SQL migration file in `drizzle/`
+3. Review the generated SQL in `drizzle/`
+4. Run `npm run db:migrate` — applies only **new** migrations (tracked in `__drizzle_migrations`)
+5. Commit both the schema change and the generated migration file
+
+### Commands
+
+| Command | Purpose |
+|---------|---------|
+| `npm run db:generate` | Diff `shared/schema.ts` against the last snapshot and generate a new SQL migration |
+| `npm run db:migrate` | Apply pending migrations (only runs files not yet tracked) |
+| `npm run db:studio` | Open Drizzle Studio (visual DB browser at `https://local.drizzle.studio`) |
+| `npm run db:pull` | Introspect the live DB into a snapshot (useful for debugging schema drift) |
+
+### Key files
+
+- `drizzle.config.ts` — drizzle-kit configuration (schema path, output dir, DB credentials)
+- `drizzle/` — generated migration SQL files and metadata (`meta/_journal.json`, snapshots)
+- `scripts/run-migrations.mjs` — migration runner using `drizzle-orm/node-postgres/migrator`
+- `migrations-legacy/` — archived hand-written SQL migrations (001–034), kept for reference only
+
+### Notes
+
+- The `session` table (used by `connect-pg-simple`) and the `embedding vector(768)` column on `expenses` (pgvector) exist in the DB but are not modeled in `shared/schema.ts`. They are managed outside Drizzle via raw SQL and remain untouched by drizzle-kit.
+- The baseline migration (`drizzle/0000_chunky_reaper.sql`) is a no-op — it represents the initial schema that was already applied before drizzle-kit was adopted.
+
+---
+
 ## Railway Postgres Migration (Neon → Railway)
 
 To migrate from Neon to Railway Postgres (resolves Railway→Neon connectivity issues):
@@ -54,15 +89,9 @@ docker run --rm -v "${MountSource}:/backup" -e "RESTORE_URL=$env:RAILWAY_DATABAS
    ```
    Note: Plain format uses INSERTs instead of COPY; for large datasets this is slower but avoids the protocol error.
 
-## Session Store Migration
+## Session Store
 
-The session store migration (`019_session_store.sql`) creates the `session` table for PostgreSQL-backed sessions. Run when `DATABASE_URL` is reachable:
-
-```bash
-npm run db:migrate
-```
-
-If the migration fails with "relation already exists", the table was created by `connect-pg-simple`'s `createTableIfMissing`—no action needed.
+The `session` table is managed by `connect-pg-simple` (with `createTableIfMissing`). It is not part of the Drizzle schema and is not affected by `db:generate` or `db:migrate`. The original SQL is preserved in `migrations-legacy/019_session_store.sql` for reference.
 
 ## Cron Jobs
 

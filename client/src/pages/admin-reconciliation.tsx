@@ -59,7 +59,7 @@ type BankTransaction = {
 type UnmatchedExpense = {
   id: string;
   amount: number;
-  expenseDate: string;
+  expenseDate: string | null;
   description: string | null;
   vendorName: string | null;
   status: string;
@@ -71,7 +71,7 @@ type UnmatchedExpense = {
 type UnmatchedIncome = {
   id: string;
   amount: number;
-  incomeDate: string;
+  incomeDate: string | null;
   particulars: string | null;
   source: string;
   categoryName: string | null;
@@ -299,7 +299,8 @@ export default function AdminReconciliation() {
   }
 
   const fmt = (n: number) => `₹ ${n.toLocaleString("en-IN")}`;
-  const fmtDate = (d: string) => {
+  const fmtDate = (d: string | null | undefined) => {
+    if (!d) return "No date";
     try { return format(new Date(d), "dd MMM yyyy"); } catch { return d; }
   };
 
