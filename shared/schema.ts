@@ -462,6 +462,7 @@ export const billingCustomers = pgTable("billing_customers", {
   email: text("email"),
   phone: text("phone"),
   address: text("address"),
+  gstin: text("gstin"),
   contactId: varchar("contact_id").references(() => finJoeContacts.id),
   userId: varchar("user_id").references(() => users.id),
   isActive: boolean("is_active").notNull().default(true),

@@ -6,6 +6,7 @@ export interface CreateCustomerInput {
   email?: string | null;
   phone?: string | null;
   address?: string | null;
+  gstin?: string | null;
 }
 
 export interface CreateInvoiceInput {
@@ -24,6 +25,7 @@ export interface CreateInvoiceLineInput {
   quantity: number;
   unitAmount: number;
   taxRate?: number;
+  hsnCode?: string | null;
   incomeCategoryId?: string | null;
   displayOrder?: number;
 }
@@ -40,11 +42,25 @@ export interface RecordPaymentInput {
   externalPaymentId?: string | null;
 }
 
+export interface TaxBreakdownLine {
+  code: string;
+  label: string;
+  rate: number;
+  amount: number;
+}
+
 export interface TaxResult {
   subtotal: number;
   taxAmount: number;
   total: number;
   lineTotals: number[];
+  taxBreakdown?: TaxBreakdownLine[];
+  lineTaxBreakdowns?: TaxBreakdownLine[][];
+}
+
+export interface TaxCalculationContext {
+  supplierStateCode?: string;
+  customerStateCode?: string;
 }
 
 export interface PaymentCaptureResult {

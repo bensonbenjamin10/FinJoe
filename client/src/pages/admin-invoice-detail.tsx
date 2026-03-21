@@ -53,8 +53,10 @@ import {
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
+import { QRCodeSVG } from "qrcode.react";
 import {
   Ban,
   Calendar,
@@ -64,11 +66,19 @@ import {
   Loader2,
   Mail,
   Phone,
+  QrCode,
   Send,
   User,
 } from "lucide-react";
 
 type InvoiceStatus = "draft" | "issued" | "partially_paid" | "paid" | "void";
+
+type TaxBreakdownLine = {
+  code: string;
+  label: string;
+  rate: number;
+  amount: number;
+};
 
 type InvoiceLine = {
   id: string;
@@ -78,6 +88,7 @@ type InvoiceLine = {
   taxRate: number;
   lineTotal: number;
   displayOrder: number;
+  ext?: { hsnCode?: string; taxBreakdown?: TaxBreakdownLine[] };
 };
 
 type Allocation = {
@@ -109,7 +120,8 @@ type InvoiceDetail = {
   voidedAt: string | null;
   createdAt: string;
   updatedAt: string;
-  customer: { name: string; email: string | null; phone: string | null } | null;
+  ext?: { taxBreakdown?: TaxBreakdownLine[]; supplierGstin?: string; customerGstin?: string };
+  customer: { name: string; email: string | null; phone: string | null; gstin: string | null } | null;
   lines: InvoiceLine[];
   allocations: Allocation[];
 };
@@ -324,6 +336,14 @@ export default function AdminInvoiceDetail() {
     }
   };
 
+  const sendEmailMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", `/api/admin/invoicing/invoices/${id}/send`, tenantPayload);
+    },
+    onSuccess: () => toast({ title: "Invoice sent", description: `Email sent to ${invoice?.customer?.email}` }),
+    onError: (e: Error) => toast({ title: "Could not send", description: e.message, variant: "destructive" }),
+  });
+
   const sortedLines = useMemo(() => {
     if (!invoice?.lines) return [];
     return [...invoice.lines].sort((a, b) => a.displayOrder - b.displayOrder);
@@ -470,6 +490,42 @@ export default function AdminInvoiceDetail() {
                 <Copy className="mr-2 h-4 w-4" />
                 Copy Pay Link
               </Button>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" size="icon" aria-label="Show QR code">
+                    <QrCode className="h-4 w-4" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-4" align="end">
+                  <div className="flex flex-col items-center gap-2">
+                    <QRCodeSVG value={`${window.location.origin}/pay/${invoice?.id ?? id}`} size={160} />
+                    <p className="text-xs text-muted-foreground">Scan to pay</p>
+                  </div>
+                </PopoverContent>
+              </Popover>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  const url = `/api/admin/invoicing/invoices/${id}/preview${qs}`;
+                  window.open(url, "_blank");
+                }}
+              >
+                Print / Preview
+              </Button>
+              {invoice.customer?.email && invoice.status !== "draft" && (
+                <Button
+                  variant="outline"
+                  onClick={() => sendEmailMutation.mutate()}
+                  disabled={sendEmailMutation.isPending}
+                >
+                  {sendEmailMutation.isPending ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Mail className="mr-2 h-4 w-4" />
+                  )}
+                  Send to Customer
+                </Button>
+              )}
               <Button
                 onClick={() => setRecordPaymentOpen(true)}
                 disabled={!canRecordPayment || recordPaymentMutation.isPending}
@@ -510,6 +566,11 @@ export default function AdminInvoiceDetail() {
                         {invoice.customer.phone}
                       </p>
                     )}
+                    {(invoice.customer.gstin || invoice.ext?.customerGstin) && (
+                      <p className="text-xs text-muted-foreground">
+                        GSTIN: <span className="font-mono">{invoice.customer.gstin || invoice.ext?.customerGstin}</span>
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">No customer on file</p>
@@ -529,6 +590,11 @@ export default function AdminInvoiceDetail() {
                     {formatDisplayDate(invoice.dueDate)}
                   </p>
                 </div>
+                {invoice.ext?.supplierGstin && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Supplier GSTIN: <span className="font-mono">{invoice.ext.supplierGstin}</span>
+                  </p>
+                )}
               </div>
             </div>
 
@@ -544,6 +610,7 @@ export default function AdminInvoiceDetail() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Description</TableHead>
+                    <TableHead>HSN/SAC</TableHead>
                     <TableHead className="text-right">Qty</TableHead>
                     <TableHead className="text-right">Unit price</TableHead>
                     <TableHead className="text-right">Tax %</TableHead>
@@ -554,6 +621,7 @@ export default function AdminInvoiceDetail() {
                   {sortedLines.map((line) => (
                     <TableRow key={line.id}>
                       <TableCell className="font-medium">{line.description}</TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">{line.ext?.hsnCode ?? "—"}</TableCell>
                       <TableCell className="text-right">{line.quantity}</TableCell>
                       <TableCell className="text-right tabular-nums">{formatInr(line.unitAmount)}</TableCell>
                       <TableCell className="text-right tabular-nums">{line.taxRate}%</TableCell>
@@ -571,10 +639,19 @@ export default function AdminInvoiceDetail() {
                 <span className="text-muted-foreground">Subtotal</span>
                 <span className="tabular-nums">{formatInr(invoice.subtotal)}</span>
               </div>
-              <div className="flex w-full max-w-xs justify-between">
-                <span className="text-muted-foreground">Tax</span>
-                <span className="tabular-nums">{formatInr(invoice.taxAmount)}</span>
-              </div>
+              {invoice.ext?.taxBreakdown?.length ? (
+                invoice.ext.taxBreakdown.map((tb, i) => (
+                  <div key={i} className="flex w-full max-w-xs justify-between">
+                    <span className="text-muted-foreground">{tb.label}</span>
+                    <span className="tabular-nums">{formatInr(tb.amount)}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="flex w-full max-w-xs justify-between">
+                  <span className="text-muted-foreground">Tax</span>
+                  <span className="tabular-nums">{formatInr(invoice.taxAmount)}</span>
+                </div>
+              )}
               <div className="flex w-full max-w-xs justify-between text-base font-semibold">
                 <span>Total</span>
                 <span className="tabular-nums">{formatInr(invoice.total)}</span>

@@ -5,6 +5,8 @@ import { logger } from "./logger.js";
 import { requireAdmin, getTenantId } from "./auth.js";
 import { createInvoiceService } from "../lib/invoicing/application/invoice-service.js";
 import { createPaymentAllocationService } from "../lib/invoicing/application/payment-allocation-service.js";
+import { createAgingReportService } from "../lib/invoicing/application/aging-report-service.js";
+import { HtmlInvoiceDocument } from "../lib/invoicing/infra/html-invoice-document.js";
 import { invoices, billingCustomers, incomeCategories, paymentOrders } from "../shared/schema.js";
 import {
   razorpayConfigured,
@@ -14,6 +16,7 @@ import {
 export function registerInvoicingRoutes(app: Express) {
   const invoiceSvc = createInvoiceService(db);
   const allocSvc = createPaymentAllocationService(db);
+  const agingSvc = createAgingReportService(db);
 
   // ── Customers ──
 
@@ -40,9 +43,9 @@ export function registerInvoicingRoutes(app: Express) {
       const tid = tenantId ?? req.body?.tenantId;
       if (user.role !== "super_admin" && !tid) return res.status(403).json({ error: "Tenant context required" });
       if (!tid) return res.status(400).json({ error: "tenantId required" });
-      const { name, email, phone, address } = req.body;
+      const { name, email, phone, address, gstin } = req.body;
       if (!name?.trim()) return res.status(400).json({ error: "Customer name is required" });
-      const created = await invoiceSvc.createCustomer({ tenantId: tid, name: name.trim(), email, phone, address });
+      const created = await invoiceSvc.createCustomer({ tenantId: tid, name: name.trim(), email, phone, address, gstin });
       res.status(201).json(created);
     } catch (e) {
       logger.error("Create customer error", { err: String(e) });
@@ -80,6 +83,21 @@ export function registerInvoicingRoutes(app: Express) {
     } catch (e) {
       logger.error("KPIs error", { err: String(e) });
       res.status(500).json({ error: "Failed to fetch KPIs" });
+    }
+  });
+
+  app.get("/api/admin/invoicing/aging", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? (req.query?.tenantId as string);
+      if (!tid) return res.status(400).json({ error: "tenantId required" });
+      const buckets = await agingSvc.getAging(tid);
+      res.json(buckets);
+    } catch (e) {
+      logger.error("Aging report error", { err: String(e) });
+      res.status(500).json({ error: "Failed to fetch aging report" });
     }
   });
 
@@ -228,6 +246,59 @@ export function registerInvoicingRoutes(app: Express) {
     } catch (e) {
       logger.error("Record payment error", { err: String(e) });
       res.status(500).json({ error: "Failed to record payment" });
+    }
+  });
+
+  // ── Invoice document preview ──
+
+  const docPort = new HtmlInvoiceDocument(db);
+
+  app.get("/api/admin/invoicing/invoices/:id/preview", requireAdmin, async (req, res) => {
+    try {
+      const html = await docPort.generateHtml(req.params.id);
+      res.type("html").send(html);
+    } catch (e) {
+      logger.error("Invoice preview error", { err: String(e) });
+      res.status(500).json({ error: "Failed to generate preview" });
+    }
+  });
+
+  app.post("/api/admin/invoicing/invoices/:id/send", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      const tid = tenantId ?? req.body?.tenantId;
+      if (user.role !== "super_admin" && !tid) return res.status(403).json({ error: "Tenant context required" });
+      if (!tid) return res.status(400).json({ error: "tenantId required" });
+
+      const inv = await invoiceSvc.getInvoice(tid, req.params.id);
+      if (!inv) return res.status(404).json({ error: "Invoice not found" });
+      if (!inv.customer?.email) return res.status(400).json({ error: "Customer has no email address" });
+
+      const html = await docPort.generateHtml(inv.id);
+      const payUrl = `${req.protocol}://${req.get("host")}/pay/${inv.id}`;
+      const emailHtml = html.replace("</body>", `<div style="text-align:center;margin:32px 0;"><a href="${payUrl}" style="display:inline-block;padding:12px 32px;background:#0066FF;color:white;text-decoration:none;border-radius:6px;font-weight:600;">Pay Now</a></div></body>`);
+
+      const apiKey = process.env.RESEND_API_KEY;
+      if (!apiKey) return res.status(503).json({ error: "Email not configured (RESEND_API_KEY missing)" });
+
+      const { Resend } = await import("resend");
+      const resend = new Resend(apiKey);
+      const from = process.env.RESEND_FROM || "FinJoe <onboarding@resend.dev>";
+      const { error: sendErr } = await resend.emails.send({
+        from,
+        to: [inv.customer.email],
+        subject: `Invoice ${inv.invoiceNumber}`,
+        html: emailHtml,
+      });
+      if (sendErr) {
+        logger.error("Invoice email send error", { err: (sendErr as any).message });
+        return res.status(502).json({ error: "Failed to send email" });
+      }
+      res.json({ ok: true, to: inv.customer.email });
+    } catch (e) {
+      logger.error("Invoice send error", { err: String(e) });
+      res.status(500).json({ error: "Failed to send invoice" });
     }
   });
 

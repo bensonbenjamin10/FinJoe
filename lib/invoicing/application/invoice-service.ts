@@ -8,9 +8,14 @@ import {
   paymentAllocations,
   tenants,
 } from "../../../shared/schema.js";
-import type { CreateCustomerInput, CreateInvoiceInput, InvoiceStatus } from "../ports/types.js";
+import type { CreateCustomerInput, CreateInvoiceInput, InvoiceStatus, TaxCalculationContext } from "../ports/types.js";
 import type { TaxCalculationPort } from "../ports/tax-calculation-port.js";
 import { getTaxEngine } from "../ports/tax-regime-registry.js";
+
+function gstinToStateCode(gstin: string | null | undefined): string | undefined {
+  if (!gstin || gstin.length < 2) return undefined;
+  return gstin.slice(0, 2);
+}
 
 export type InvoicingDb = any;
 
@@ -62,6 +67,7 @@ export function createInvoiceService(db: InvoicingDb) {
           email: input.email ?? null,
           phone: input.phone ?? null,
           address: input.address ?? null,
+          gstin: input.gstin ?? null,
         })
         .returning();
       return created;
@@ -73,6 +79,7 @@ export function createInvoiceService(db: InvoicingDb) {
       if (updates.email !== undefined) vals.email = updates.email;
       if (updates.phone !== undefined) vals.phone = updates.phone;
       if (updates.address !== undefined) vals.address = updates.address;
+      if (updates.gstin !== undefined) vals.gstin = updates.gstin;
       const [updated] = await db
         .update(billingCustomers)
         .set(vals)
@@ -85,9 +92,37 @@ export function createInvoiceService(db: InvoicingDb) {
       if (!input.lines.length) throw new Error("At least one line item required");
 
       const taxCalc = await resolveTaxCalc(db, input.tenantId);
-      const { subtotal, taxAmount, total, lineTotals } = taxCalc.calculate(input.lines);
+
+      const [cust] = await db
+        .select({ gstin: billingCustomers.gstin })
+        .from(billingCustomers)
+        .where(eq(billingCustomers.id, input.customerId))
+        .limit(1);
+
+      const [tenant] = await db
+        .select({ taxRegime: tenants.taxRegime, taxRegimeConfig: tenants.taxRegimeConfig })
+        .from(tenants)
+        .where(eq(tenants.id, input.tenantId))
+        .limit(1);
+
+      const supplierGstin = typeof tenant?.taxRegimeConfig === "object" && tenant.taxRegimeConfig
+        ? String((tenant.taxRegimeConfig as Record<string, unknown>).supplierGstin ?? "")
+        : "";
+
+      const taxContext: TaxCalculationContext = {
+        supplierStateCode: gstinToStateCode(supplierGstin) ?? (typeof tenant?.taxRegimeConfig === "object" && tenant.taxRegimeConfig ? String((tenant.taxRegimeConfig as Record<string, unknown>).supplierStateCode ?? "") : undefined),
+        customerStateCode: gstinToStateCode(cust?.gstin),
+      };
+
+      const result = taxCalc.calculate(input.lines, taxContext);
+      const { subtotal, taxAmount, total, lineTotals, taxBreakdown, lineTaxBreakdowns } = result;
       const invoiceNumber = nextInvoiceNumber(input.tenantId);
       const ccId = input.costCenterId && input.costCenterId !== "__corporate__" ? input.costCenterId : null;
+
+      const ext: Record<string, unknown> = {};
+      if (taxBreakdown?.length) ext.taxBreakdown = taxBreakdown;
+      if (supplierGstin) ext.supplierGstin = supplierGstin;
+      if (cust?.gstin) ext.customerGstin = cust.gstin;
 
       const [inv] = await db
         .insert(invoices)
@@ -105,19 +140,26 @@ export function createInvoiceService(db: InvoicingDb) {
           notes: input.notes ?? null,
           costCenterId: ccId,
           incomeCategoryId: input.incomeCategoryId ?? null,
+          ext,
         })
         .returning();
 
-      const lineValues = input.lines.map((l, i) => ({
-        invoiceId: inv.id,
-        description: l.description,
-        quantity: l.quantity,
-        unitAmount: l.unitAmount,
-        taxRate: l.taxRate ?? 0,
-        lineTotal: lineTotals[i],
-        incomeCategoryId: l.incomeCategoryId ?? null,
-        displayOrder: l.displayOrder ?? i,
-      }));
+      const lineValues = input.lines.map((l, i) => {
+        const lineExt: Record<string, unknown> = {};
+        if (l.hsnCode) lineExt.hsnCode = l.hsnCode;
+        if (lineTaxBreakdowns?.[i]?.length) lineExt.taxBreakdown = lineTaxBreakdowns[i];
+        return {
+          invoiceId: inv.id,
+          description: l.description,
+          quantity: l.quantity,
+          unitAmount: l.unitAmount,
+          taxRate: l.taxRate ?? 0,
+          lineTotal: lineTotals[i],
+          incomeCategoryId: l.incomeCategoryId ?? null,
+          displayOrder: l.displayOrder ?? i,
+          ext: Object.keys(lineExt).length ? lineExt : {},
+        };
+      });
       await db.insert(invoiceLines).values(lineValues);
 
       return inv;
@@ -152,22 +194,53 @@ export function createInvoiceService(db: InvoicingDb) {
 
       if (input.lines && input.lines.length > 0) {
         const taxCalc = await resolveTaxCalc(db, tenantId);
-        const { subtotal, taxAmount, total, lineTotals } = taxCalc.calculate(input.lines);
-        updates.subtotal = subtotal;
-        updates.taxAmount = taxAmount;
-        updates.total = total;
+        const customerId = input.customerId ?? inv.customerId;
+        const [cust] = await db
+          .select({ gstin: billingCustomers.gstin })
+          .from(billingCustomers)
+          .where(eq(billingCustomers.id, customerId))
+          .limit(1);
+        const [tenant] = await db
+          .select({ taxRegimeConfig: tenants.taxRegimeConfig })
+          .from(tenants)
+          .where(eq(tenants.id, tenantId))
+          .limit(1);
+        const supplierGstin = typeof tenant?.taxRegimeConfig === "object" && tenant.taxRegimeConfig
+          ? String((tenant.taxRegimeConfig as Record<string, unknown>).supplierGstin ?? "")
+          : "";
+        const taxContext: TaxCalculationContext = {
+          supplierStateCode: gstinToStateCode(supplierGstin) ?? (typeof tenant?.taxRegimeConfig === "object" && tenant.taxRegimeConfig ? String((tenant.taxRegimeConfig as Record<string, unknown>).supplierStateCode ?? "") : undefined),
+          customerStateCode: gstinToStateCode(cust?.gstin),
+        };
+
+        const result = taxCalc.calculate(input.lines, taxContext);
+        updates.subtotal = result.subtotal;
+        updates.taxAmount = result.taxAmount;
+        updates.total = result.total;
+
+        const ext: Record<string, unknown> = {};
+        if (result.taxBreakdown?.length) ext.taxBreakdown = result.taxBreakdown;
+        if (supplierGstin) ext.supplierGstin = supplierGstin;
+        if (cust?.gstin) ext.customerGstin = cust.gstin;
+        updates.ext = ext;
 
         await db.delete(invoiceLines).where(eq(invoiceLines.invoiceId, id));
-        const lineValues = input.lines.map((l, i) => ({
-          invoiceId: id,
-          description: l.description,
-          quantity: l.quantity,
-          unitAmount: l.unitAmount,
-          taxRate: l.taxRate ?? 0,
-          lineTotal: lineTotals[i],
-          incomeCategoryId: l.incomeCategoryId ?? null,
-          displayOrder: l.displayOrder ?? i,
-        }));
+        const lineValues = input.lines.map((l, i) => {
+          const lineExt: Record<string, unknown> = {};
+          if (l.hsnCode) lineExt.hsnCode = l.hsnCode;
+          if (result.lineTaxBreakdowns?.[i]?.length) lineExt.taxBreakdown = result.lineTaxBreakdowns[i];
+          return {
+            invoiceId: id,
+            description: l.description,
+            quantity: l.quantity,
+            unitAmount: l.unitAmount,
+            taxRate: l.taxRate ?? 0,
+            lineTotal: result.lineTotals[i],
+            incomeCategoryId: l.incomeCategoryId ?? null,
+            displayOrder: l.displayOrder ?? i,
+            ext: Object.keys(lineExt).length ? lineExt : {},
+          };
+        });
         await db.insert(invoiceLines).values(lineValues);
       }
 
@@ -200,7 +273,7 @@ export function createInvoiceService(db: InvoicingDb) {
         .orderBy(desc(paymentAllocations.createdAt));
 
       const [cust] = await db
-        .select({ name: billingCustomers.name, email: billingCustomers.email, phone: billingCustomers.phone })
+        .select({ name: billingCustomers.name, email: billingCustomers.email, phone: billingCustomers.phone, gstin: billingCustomers.gstin })
         .from(billingCustomers)
         .where(eq(billingCustomers.id, inv.customerId))
         .limit(1);

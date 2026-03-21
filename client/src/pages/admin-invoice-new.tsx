@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useLocation, useSearchParams } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { format, addDays } from "date-fns";
-import { Check, ChevronsUpDown, Loader2, Plus, UserPlus, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Loader2, Plus, UserPlus, X } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -55,7 +55,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 
-type Customer = { id: string; name: string; email: string | null; phone: string | null };
+type Customer = { id: string; name: string; email: string | null; phone: string | null; gstin: string | null };
 type IncomeCategoryRow = { id: string; name: string };
 
 type LineRow = {
@@ -64,6 +64,7 @@ type LineRow = {
   quantity: string;
   unitAmount: string;
   taxRate: string;
+  hsnCode: string;
 };
 
 function newLine(): LineRow {
@@ -73,6 +74,7 @@ function newLine(): LineRow {
     quantity: "1",
     unitAmount: "",
     taxRate: "0",
+    hsnCode: "",
   };
 }
 
@@ -185,7 +187,7 @@ export default function AdminInvoiceNew() {
       if (!customerId) throw new Error("Select a customer");
       if (lines.length < 1) throw new Error("Add at least one line item");
 
-      const payloadLines: { description: string; quantity: number; unitAmount: number; taxRate?: number }[] = [];
+      const payloadLines: { description: string; quantity: number; unitAmount: number; taxRate?: number; hsnCode?: string }[] = [];
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const desc = line.description.trim();
@@ -201,6 +203,7 @@ export default function AdminInvoiceNew() {
           quantity,
           unitAmount,
           taxRate: taxRate > 0 ? taxRate : undefined,
+          hsnCode: line.hsnCode.trim() || undefined,
         });
       }
 
@@ -240,6 +243,24 @@ export default function AdminInvoiceNew() {
   const addLine = () => setLines((prev) => [...prev, newLine()]);
   const removeLine = (key: string) => {
     setLines((prev) => (prev.length <= 1 ? prev : prev.filter((l) => l.key !== key)));
+  };
+  const moveLineUp = (key: string) => {
+    setLines((prev) => {
+      const idx = prev.findIndex((l) => l.key === key);
+      if (idx <= 0) return prev;
+      const next = [...prev];
+      [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+      return next;
+    });
+  };
+  const moveLineDown = (key: string) => {
+    setLines((prev) => {
+      const idx = prev.findIndex((l) => l.key === key);
+      if (idx < 0 || idx >= prev.length - 1) return prev;
+      const next = [...prev];
+      [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+      return next;
+    });
   };
 
   const submitAddCustomer = () => {
@@ -389,6 +410,12 @@ export default function AdminInvoiceNew() {
                 </Button>
               </div>
 
+              {selectedCustomer?.gstin && (
+                <p className="text-xs text-muted-foreground">
+                  GSTIN: <span className="font-mono">{selectedCustomer.gstin}</span>
+                </p>
+              )}
+
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="issue-date">Issue date</Label>
@@ -452,11 +479,12 @@ export default function AdminInvoiceNew() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="min-w-[200px]">Description</TableHead>
+                    <TableHead className="w-[100px]">HSN/SAC</TableHead>
                     <TableHead className="w-[90px]">Qty</TableHead>
                     <TableHead className="w-[120px]">Unit price</TableHead>
                     <TableHead className="w-[100px]">Tax %</TableHead>
                     <TableHead className="w-[120px] text-right">Line total</TableHead>
-                    <TableHead className="w-[56px]" />
+                    <TableHead className="w-[100px]" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -469,6 +497,14 @@ export default function AdminInvoiceNew() {
                             placeholder={`Item ${idx + 1}`}
                             value={line.description}
                             onChange={(e) => updateLine(line.key, { description: e.target.value })}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Input
+                            placeholder="HSN"
+                            value={line.hsnCode}
+                            onChange={(e) => updateLine(line.key, { hsnCode: e.target.value })}
+                            maxLength={8}
                           />
                         </TableCell>
                         <TableCell>
@@ -502,17 +538,41 @@ export default function AdminInvoiceNew() {
                           {formatInr(lineTotal)}
                         </TableCell>
                         <TableCell>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="text-muted-foreground hover:text-destructive"
-                            disabled={lines.length <= 1}
-                            onClick={() => removeLine(line.key)}
-                            aria-label="Remove line"
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
+                          <div className="flex items-center gap-0.5">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-muted-foreground"
+                              disabled={idx === 0}
+                              onClick={() => moveLineUp(line.key)}
+                              aria-label="Move up"
+                            >
+                              <ArrowUp className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-muted-foreground"
+                              disabled={idx === lines.length - 1}
+                              onClick={() => moveLineDown(line.key)}
+                              aria-label="Move down"
+                            >
+                              <ArrowDown className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                              disabled={lines.length <= 1}
+                              onClick={() => removeLine(line.key)}
+                              aria-label="Remove line"
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     );

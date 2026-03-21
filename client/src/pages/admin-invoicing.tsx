@@ -113,6 +113,16 @@ export default function AdminInvoicing() {
     enabled: !!tenantId,
   });
 
+  const { data: agingBuckets } = useQuery<{ label: string; count: number; amount: number }[]>({
+    queryKey: ["/api/admin/invoicing/aging", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/invoicing/aging${tenantQuery}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load aging");
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+
   const { data: invoiceData, isLoading: invoicesLoading } = useQuery<InvoicesResponse>({
     queryKey: ["/api/admin/invoicing/invoices", tenantId],
     queryFn: async () => {
@@ -220,6 +230,25 @@ export default function AdminInvoicing() {
           </>
         )}
       </div>
+
+      {agingBuckets && agingBuckets.some((b) => b.count > 0) && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Aging</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 sm:grid-cols-5">
+              {agingBuckets.map((b) => (
+                <div key={b.label} className="rounded-lg border p-3 text-center">
+                  <p className="text-xs font-medium text-muted-foreground">{b.label}</p>
+                  <p className="text-lg font-semibold tabular-nums">{formatInr(b.amount)}</p>
+                  <p className="text-xs text-muted-foreground">{b.count} invoice(s)</p>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

@@ -10,9 +10,8 @@ import {
   getRazorpayKeyId,
   razorpayConfigured,
   razorpayCreateOrder,
-  razorpayFetchPayment,
-  verifyRazorpaySignature,
 } from "./razorpay-api.js";
+import { RazorpayCaptureAdapter } from "../lib/invoicing/infra/razorpay-capture-adapter.js";
 
 function requireLogin(req: Request, res: Response, next: NextFunction) {
   if (!req.isAuthenticated()) {
@@ -162,8 +161,18 @@ export function registerPaymentRoutes(app: Express) {
         return res.status(400).json({ error: "razorpayPaymentId, razorpayOrderId, and razorpaySignature required" });
       }
 
-      if (!verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature)) {
-        return res.status(400).json({ error: "Invalid payment signature" });
+      const captureAdapter = new RazorpayCaptureAdapter();
+      let capture;
+      try {
+        capture = await captureAdapter.verifyAndNormalize({
+          orderId: razorpayOrderId,
+          paymentId: razorpayPaymentId,
+          signature: razorpaySignature,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Payment verification failed";
+        logger.warn("Razorpay capture failed", { err: msg });
+        return res.status(400).json({ error: msg });
       }
 
       const [existingIncome] = await db
@@ -184,25 +193,9 @@ export function registerPaymentRoutes(app: Express) {
         return res.json({ ok: true, incomeId: order.incomeRecordId, idempotent: true });
       }
 
-      let payment;
-      try {
-        payment = await razorpayFetchPayment(razorpayPaymentId);
-      } catch (e) {
-        logger.error("razorpay fetch payment", { err: String(e) });
-        return res.status(502).json({ error: "Could not confirm payment with Razorpay" });
-      }
-
-      if (payment.status !== "authorized" && payment.status !== "captured") {
-        return res.status(400).json({ error: `Payment not successful (status: ${payment.status})` });
-      }
-
-      if (payment.order_id && payment.order_id !== razorpayOrderId) {
-        return res.status(400).json({ error: "Payment does not match order" });
-      }
-
       const expectedPaise = order.amountRupees * 100;
-      if (!Number.isFinite(payment.amount) || payment.amount !== expectedPaise) {
-        logger.warn("Razorpay amount mismatch", { expectedPaise, got: payment.amount, orderId: razorpayOrderId });
+      if (!Number.isFinite(capture.amount) || capture.amount !== expectedPaise) {
+        logger.warn("Razorpay amount mismatch", { expectedPaise, got: capture.amount, orderId: razorpayOrderId });
         return res.status(400).json({ error: "Payment amount does not match order" });
       }
 

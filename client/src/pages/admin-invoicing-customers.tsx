@@ -44,6 +44,7 @@ type InvoicingCustomer = {
   email: string | null;
   phone: string | null;
   address: string | null;
+  gstin: string | null;
   isActive: boolean;
   createdAt: string;
 };
@@ -87,9 +88,9 @@ export default function AdminInvoicingCustomers() {
 
   const [addOpen, setAddOpen] = useState(false);
   const [editCustomer, setEditCustomer] = useState<InvoicingCustomer | null>(null);
-  const [form, setForm] = useState({ name: "", email: "", phone: "", address: "" });
+  const [form, setForm] = useState({ name: "", email: "", phone: "", address: "", gstin: "" });
 
-  const resetForm = () => setForm({ name: "", email: "", phone: "", address: "" });
+  const resetForm = () => setForm({ name: "", email: "", phone: "", address: "", gstin: "" });
 
   const openAdd = () => {
     resetForm();
@@ -103,6 +104,7 @@ export default function AdminInvoicingCustomers() {
       email: c.email ?? "",
       phone: c.phone ?? "",
       address: c.address ?? "",
+      gstin: c.gstin ?? "",
     });
   };
 
@@ -133,6 +135,8 @@ export default function AdminInvoicingCustomers() {
       if (email) body.email = email;
       if (phone) body.phone = phone;
       if (address) body.address = address;
+      const gstin = form.gstin.trim();
+      if (gstin) body.gstin = gstin;
       const res = await apiRequest("POST", CUSTOMERS_QUERY_ROOT, body);
       return res.json();
     },
@@ -153,6 +157,7 @@ export default function AdminInvoicingCustomers() {
         email: form.email.trim(),
         phone: form.phone.trim(),
         address: form.address.trim(),
+        gstin: form.gstin.trim() || null,
       });
       return res.json();
     },
@@ -266,6 +271,7 @@ export default function AdminInvoicingCustomers() {
                     <TableHead className="px-6 py-4">Name</TableHead>
                     <TableHead className="px-6 py-4">Email</TableHead>
                     <TableHead className="px-6 py-4">Phone</TableHead>
+                    <TableHead className="px-6 py-4">GSTIN</TableHead>
                     <TableHead className="px-6 py-4">Created</TableHead>
                     <TableHead className="w-[100px] px-6 py-4 text-right">Actions</TableHead>
                   </TableRow>
@@ -279,6 +285,9 @@ export default function AdminInvoicingCustomers() {
                       </TableCell>
                       <TableCell className="px-6 py-4 text-muted-foreground">
                         {c.phone ?? "—"}
+                      </TableCell>
+                      <TableCell className="px-6 py-4 font-mono text-xs text-muted-foreground">
+                        {c.gstin ?? "—"}
                       </TableCell>
                       <TableCell className="px-6 py-4 text-muted-foreground">
                         {(() => {
@@ -359,6 +368,16 @@ export default function AdminInvoicingCustomers() {
                 rows={3}
               />
             </div>
+            <div className="grid gap-2">
+              <Label htmlFor="add-gstin">GSTIN (optional)</Label>
+              <Input
+                id="add-gstin"
+                value={form.gstin}
+                onChange={(e) => setForm((f) => ({ ...f, gstin: e.target.value }))}
+                placeholder="15-character GSTIN"
+                maxLength={15}
+              />
+            </div>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setAddOpen(false)}>
@@ -418,6 +437,16 @@ export default function AdminInvoicingCustomers() {
                 onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
                 placeholder="Billing address"
                 rows={3}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="edit-gstin">GSTIN (optional)</Label>
+              <Input
+                id="edit-gstin"
+                value={form.gstin}
+                onChange={(e) => setForm((f) => ({ ...f, gstin: e.target.value }))}
+                placeholder="15-character GSTIN"
+                maxLength={15}
               />
             </div>
           </div>
