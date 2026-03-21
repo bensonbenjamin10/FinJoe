@@ -9,15 +9,19 @@ import {
 interface FYSelectorProps {
   value: string;
   onChange: (fy: string) => void;
+  fyStartMonth?: number;
 }
 
 const FY_PATTERN = /^\d{4}-\d{2}$/;
 
-function generateFYOptions(currentValue?: string): { value: string; label: string }[] {
+const ALL_MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function generateFYOptions(currentValue?: string, fyStartMonth = 4): { value: string; label: string }[] {
   const now = new Date();
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth();
-  const currentFYStart = currentMonth >= 3 ? currentYear : currentYear - 1;
+  const startIdx = fyStartMonth - 1;
+  const currentFYStart = currentMonth >= startIdx ? currentYear : currentYear - 1;
   const options: { value: string; label: string }[] = [];
   for (let y = currentFYStart; y >= currentFYStart - 4; y--) {
     const shortEnd = String(y + 1).slice(-2);
@@ -44,9 +48,9 @@ function generateFYOptions(currentValue?: string): { value: string; label: strin
   return options;
 }
 
-export function FYSelector({ value, onChange }: FYSelectorProps) {
-  const safeValue = FY_PATTERN.test(value) ? value : getCurrentFY();
-  const options = generateFYOptions(safeValue);
+export function FYSelector({ value, onChange, fyStartMonth = 4 }: FYSelectorProps) {
+  const safeValue = FY_PATTERN.test(value) ? value : getCurrentFY(fyStartMonth);
+  const options = generateFYOptions(safeValue, fyStartMonth);
 
   return (
     <Select value={safeValue} onValueChange={onChange}>
@@ -64,20 +68,37 @@ export function FYSelector({ value, onChange }: FYSelectorProps) {
   );
 }
 
-export function getCurrentFY(): string {
+export function getCurrentFY(fyStartMonth = 4): string {
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth();
-  const fyStart = month >= 3 ? year : year - 1;
+  const startIdx = fyStartMonth - 1;
+  const fyStart = month >= startIdx ? year : year - 1;
   return `${fyStart}-${String(fyStart + 1).slice(-2)}`;
 }
 
-export function isCurrentFY(fy: string): boolean {
-  return fy === getCurrentFY();
+export function isCurrentFY(fy: string, fyStartMonth = 4): boolean {
+  return fy === getCurrentFY(fyStartMonth);
 }
 
-export function getCurrentFYMonthIndex(): number {
+export function getCurrentFYMonthIndex(fyStartMonth = 4): number {
   const now = new Date();
-  const m = now.getMonth(); // 0-based
-  return m >= 3 ? m - 3 : m + 9;
+  const m = now.getMonth();
+  const startIdx = fyStartMonth - 1;
+  return m >= startIdx ? m - startIdx : m + (12 - startIdx);
+}
+
+export function getFYMonthLabels(fyStartMonth = 4): string[] {
+  const labels: string[] = [];
+  const startIdx = fyStartMonth - 1;
+  for (let i = 0; i < 12; i++) {
+    labels.push(ALL_MONTH_LABELS[(startIdx + i) % 12]);
+  }
+  return labels;
+}
+
+export function getFYRangeLabel(fyStartMonth = 4): string {
+  const startIdx = fyStartMonth - 1;
+  const endIdx = (startIdx + 11) % 12;
+  return `${ALL_MONTH_LABELS[startIdx]}–${ALL_MONTH_LABELS[endIdx]}`;
 }

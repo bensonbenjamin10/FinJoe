@@ -87,7 +87,7 @@ export default function AdminIncome() {
   const [editIncomeDialog, setEditIncomeDialog] = useState<IncomeWithDetails | null>(null);
   const [editForm, setEditForm] = useState({ amount: "", particulars: "", incomeType: "other", incomeDate: "" });
   const [viewIncomeDialog, setViewIncomeDialog] = useState<IncomeWithDetails | null>(null);
-  const [categoryForm, setCategoryForm] = useState({ name: "", slug: "", incomeType: "other" as string, displayOrder: 0 });
+  const [categoryForm, setCategoryForm] = useState({ name: "", slug: "", incomeType: "other" as string, displayOrder: 0, misClassification: "revenue" as string, revenueGroup: "" as string, misDisplayLabel: "" as string });
   const [incomeTypeDialog, setIncomeTypeDialog] = useState<{ mode: "add" | "edit"; type?: IncomeType } | null>(null);
   const [deleteIncomeTypeDialog, setDeleteIncomeTypeDialog] = useState<IncomeType | null>(null);
   const [incomeTypeForm, setIncomeTypeForm] = useState({ slug: "", label: "", displayOrder: 0 });
@@ -260,7 +260,7 @@ export default function AdminIncome() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/income-categories"] });
       setCategoryDialog(null);
-      setCategoryForm({ name: "", slug: "", incomeType: "other", displayOrder: 0 });
+      setCategoryForm({ name: "", slug: "", incomeType: "other", displayOrder: 0, misClassification: "revenue", revenueGroup: "", misDisplayLabel: "" });
       toast({ title: "Category created" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -732,7 +732,7 @@ export default function AdminIncome() {
                               size="sm"
                               onClick={() => {
                                 setCategoryDialog({ mode: "edit", category: c });
-                                setCategoryForm({ name: c.name, slug: c.slug, incomeType: c.incomeType, displayOrder: c.displayOrder });
+                                setCategoryForm({ name: c.name, slug: c.slug, incomeType: c.incomeType, displayOrder: c.displayOrder, misClassification: (c as any).misClassification ?? "revenue", revenueGroup: (c as any).revenueGroup ?? "", misDisplayLabel: (c as any).misDisplayLabel ?? "" });
                               }}
                             >
                               <Pencil className="h-4 w-4" />
@@ -1025,6 +1025,27 @@ export default function AdminIncome() {
                       ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>MIS Classification</Label>
+                <Select value={categoryForm.misClassification} onValueChange={(v) => setCategoryForm((f) => ({ ...f, misClassification: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="revenue">Revenue</SelectItem>
+                    <SelectItem value="other_income">Other Income</SelectItem>
+                    <SelectItem value="excluded">Excluded</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Revenue Group</Label>
+                <Input value={categoryForm.revenueGroup} onChange={(e) => setCategoryForm((f) => ({ ...f, revenueGroup: e.target.value }))} placeholder="e.g. offline, medico" />
+              </div>
+            </div>
+            <div>
+              <Label>MIS Display Label <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Input value={categoryForm.misDisplayLabel} onChange={(e) => setCategoryForm((f) => ({ ...f, misDisplayLabel: e.target.value }))} placeholder="Leave blank to use Name" />
             </div>
             <div>
               <Label>Display Order</Label>

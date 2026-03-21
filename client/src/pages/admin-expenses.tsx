@@ -2685,7 +2685,7 @@ function CategoryForm({
   isPending,
 }: {
   category?: ExpenseCategory;
-  onSave: (data: { name: string; slug: string; cashflowLabel: string; displayOrder?: number; isActive?: boolean }) => void;
+  onSave: (data: Record<string, unknown>) => void;
   onCancel: () => void;
   isPending: boolean;
 }) {
@@ -2694,16 +2694,24 @@ function CategoryForm({
   const [cashflowLabel, setCashflowLabel] = useState(category?.cashflowLabel ?? "");
   const [displayOrder, setDisplayOrder] = useState(String(category?.displayOrder ?? 0));
   const [isActive, setIsActive] = useState(category?.isActive ?? true);
+  const [cashflowSection, setCashflowSection] = useState((category as any)?.cashflowSection ?? "operating_outflow");
+  const [pnlSection, setPnlSection] = useState((category as any)?.pnlSection ?? "indirect");
+  const [drilldownMode, setDrilldownMode] = useState((category as any)?.drilldownMode ?? "none");
+  const [misDisplayLabel, setMisDisplayLabel] = useState((category as any)?.misDisplayLabel ?? "");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !slug.trim() || !cashflowLabel.trim()) return;
+    if (!name.trim() || !slug.trim()) return;
     onSave({
       name: name.trim(),
       slug: slug.trim().toLowerCase().replace(/\s+/g, "_"),
-      cashflowLabel: cashflowLabel.trim(),
+      cashflowLabel: cashflowLabel.trim() || name.trim(),
       displayOrder: parseInt(displayOrder, 10) || 0,
       isActive,
+      cashflowSection,
+      pnlSection,
+      drilldownMode,
+      misDisplayLabel: misDisplayLabel.trim() || null,
     });
   };
 
@@ -2722,9 +2730,44 @@ function CategoryForm({
           disabled={!!category}
         />
       </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label>Cashflow Section</Label>
+          <Select value={cashflowSection} onValueChange={setCashflowSection}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="operating_outflow">Operating Outflow</SelectItem>
+              <SelectItem value="investing">Investing</SelectItem>
+              <SelectItem value="none">None</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label>P&L Section</Label>
+          <Select value={pnlSection} onValueChange={setPnlSection}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="direct">Direct</SelectItem>
+              <SelectItem value="indirect">Indirect</SelectItem>
+              <SelectItem value="excluded">Excluded</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
       <div>
-        <Label>Cashflow Label *</Label>
-        <Input value={cashflowLabel} onChange={(e) => setCashflowLabel(e.target.value)} placeholder="MIS export label" />
+        <Label>Drilldown Mode</Label>
+        <Select value={drilldownMode} onValueChange={setDrilldownMode}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">None</SelectItem>
+            <SelectItem value="by_center">By Cost Center</SelectItem>
+            <SelectItem value="by_subcategory">By Subcategory</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div>
+        <Label>MIS Display Label <span className="text-muted-foreground text-xs">(optional override)</span></Label>
+        <Input value={misDisplayLabel} onChange={(e) => setMisDisplayLabel(e.target.value)} placeholder="Leave blank to use Name" />
       </div>
       <div>
         <Label>Display Order</Label>

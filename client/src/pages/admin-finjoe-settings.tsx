@@ -56,6 +56,7 @@ type FinJoeSettings = {
   requireConfirmationBeforePost?: boolean;
   requireAuditFieldsAboveAmount?: number | null;
   askOptionalFields?: boolean;
+  fyStartMonth?: number;
 };
 
 type WhatsAppProvider = {
@@ -521,6 +522,35 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
             {updateSettingsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
             Save Cost Center Settings
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="p-6">
+          <CardTitle className="font-display">Fiscal Year</CardTitle>
+          <CardDescription className="text-base">
+            Choose which month starts your fiscal year. This affects MIS reports, FY labels, and month ordering.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4 p-6 pt-0">
+          <div className="grid gap-2">
+            <Label>FY Start Month</Label>
+            <Select
+              value={String(settings?.fyStartMonth ?? 4)}
+              onValueChange={(v) => {
+                updateSettingsMutation.mutate({ fyStartMonth: parseInt(v, 10) });
+              }}
+            >
+              <SelectTrigger className="w-[200px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {["January","February","March","April","May","June","July","August","September","October","November","December"].map((m, i) => (
+                  <SelectItem key={i+1} value={String(i+1)}>{m}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </CardContent>
       </Card>
 

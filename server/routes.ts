@@ -838,6 +838,7 @@ export async function registerRoutes(app: Express) {
         requireConfirmationBeforePost: row.requireConfirmationBeforePost ?? false,
         requireAuditFieldsAboveAmount: row.requireAuditFieldsAboveAmount ?? null,
         askOptionalFields: row.askOptionalFields ?? false,
+        fyStartMonth: row.fyStartMonth ?? 4,
       });
     } catch (e) {
       logger.error("FinJoe settings get error", { requestId: req.requestId, err: String(e) });
@@ -852,7 +853,7 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.body?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { expenseApprovalTemplateSid, expenseApprovedTemplateSid, expenseRejectedTemplateSid, reEngagementTemplateSid, notificationEmails, resendFromEmail, smsFrom, costCenterLabel, costCenterType, requireConfirmationBeforePost, requireAuditFieldsAboveAmount, askOptionalFields } = req.body;
+      const { expenseApprovalTemplateSid, expenseApprovedTemplateSid, expenseRejectedTemplateSid, reEngagementTemplateSid, notificationEmails, resendFromEmail, smsFrom, costCenterLabel, costCenterType, requireConfirmationBeforePost, requireAuditFieldsAboveAmount, askOptionalFields, fyStartMonth } = req.body;
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (expenseApprovalTemplateSid !== undefined) updates.expenseApprovalTemplateSid = expenseApprovalTemplateSid || null;
       if (expenseApprovedTemplateSid !== undefined) updates.expenseApprovedTemplateSid = expenseApprovedTemplateSid || null;
@@ -866,6 +867,10 @@ export async function registerRoutes(app: Express) {
       if (requireConfirmationBeforePost !== undefined) updates.requireConfirmationBeforePost = !!requireConfirmationBeforePost;
       if (requireAuditFieldsAboveAmount !== undefined) updates.requireAuditFieldsAboveAmount = requireAuditFieldsAboveAmount == null || requireAuditFieldsAboveAmount === "" ? null : Math.max(0, parseInt(String(requireAuditFieldsAboveAmount), 10));
       if (askOptionalFields !== undefined) updates.askOptionalFields = !!askOptionalFields;
+      if (fyStartMonth !== undefined) {
+        const m = parseInt(String(fyStartMonth), 10);
+        if (m >= 1 && m <= 12) updates.fyStartMonth = m;
+      }
       const [existing] = await db.select().from(finjoeSettings).where(eq(finjoeSettings.tenantId, tid)).limit(1);
       let result;
       if (existing) {
@@ -1176,7 +1181,7 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.body?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { name, slug, incomeType, displayOrder } = req.body;
+      const { name, slug, incomeType, displayOrder, misClassification, revenueGroup, misDisplayLabel } = req.body;
       if (!name || !slug) return res.status(400).json({ error: "name and slug required" });
       const slugNorm = String(slug).toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
       const [created] = await db
@@ -1186,6 +1191,9 @@ export async function registerRoutes(app: Express) {
           name,
           slug: slugNorm || slug,
           incomeType: incomeType ?? "other",
+          misClassification: misClassification ?? "revenue",
+          revenueGroup: revenueGroup || null,
+          misDisplayLabel: misDisplayLabel || null,
           displayOrder: displayOrder ?? 0,
           isActive: true,
           createdById: user?.id || null,
@@ -1205,11 +1213,14 @@ export async function registerRoutes(app: Express) {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
       const tid = tenantId ?? req.body?.tenantId;
-      const { name, slug, incomeType, displayOrder, isActive } = req.body;
+      const { name, slug, incomeType, displayOrder, isActive, misClassification, revenueGroup, misDisplayLabel } = req.body;
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (name !== undefined) updates.name = name;
       if (slug !== undefined) updates.slug = String(slug).toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "") || slug;
       if (incomeType !== undefined) updates.incomeType = incomeType;
+      if (misClassification !== undefined) updates.misClassification = misClassification;
+      if (revenueGroup !== undefined) updates.revenueGroup = revenueGroup || null;
+      if (misDisplayLabel !== undefined) updates.misDisplayLabel = misDisplayLabel || null;
       if (displayOrder !== undefined) updates.displayOrder = displayOrder;
       if (isActive !== undefined) updates.isActive = isActive;
       updates.updatedById = user?.id || null;
@@ -2245,10 +2256,11 @@ export async function registerRoutes(app: Express) {
 
       // Profit and Loss
       const plRows: (string | number)[][] = [headerRow];
-      plRows.push(lineToRow(data.pnl.revenueOffline));
-      plRows.push(lineToRow(data.pnl.revenueMedico));
+      for (const rg of data.pnl.revenueGroups) plRows.push(lineToRow(rg));
       plRows.push(lineToRow(data.pnl.totalRevenue));
       plRows.push([""]);
+      plRows.push(["Direct Expenses", ...new Array(months.length + 1).fill("")]);
+      for (const item of data.pnl.directExpenses) plRows.push(lineToRow(item));
       plRows.push(lineToRow(data.pnl.totalDirectExpenses));
       plRows.push(lineToRow(data.pnl.grossProfit));
       plRows.push(["Gross Profit (%)", ...data.pnl.grossProfitPct, ""]);
@@ -2265,7 +2277,7 @@ export async function registerRoutes(app: Express) {
       plSheet["!cols"] = [{ wch: 45 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
       XLSX.utils.book_append_sheet(wb, plSheet, "Profit and Loss");
 
-      // Direct Expenses
+      // Direct Expenses detail
       const deRows: (string | number)[][] = [headerRow];
       for (const item of data.pnl.directExpenses) deRows.push(lineToRow(item));
       deRows.push(lineToRow(data.pnl.totalDirectExpenses));
@@ -2273,61 +2285,26 @@ export async function registerRoutes(app: Express) {
       deSheet["!cols"] = [{ wch: 45 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
       XLSX.utils.book_append_sheet(wb, deSheet, "Direct Expenses");
 
-      // Revenue (Offline) by center
-      const roRows: (string | number)[][] = [headerRow];
-      for (const item of data.drilldowns.revenueByCenter) roRows.push(lineToRow(item));
-      roRows.push(lineToRow(data.drilldowns.totalRevenueByCenter));
-      const roSheet = XLSX.utils.aoa_to_sheet(roRows);
-      roSheet["!cols"] = [{ wch: 30 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
-      XLSX.utils.book_append_sheet(wb, roSheet, "Revenue (Offline)");
+      // Revenue by Centre
+      if (data.drilldowns.revenueByCenter.length > 0) {
+        const roRows: (string | number)[][] = [headerRow];
+        for (const item of data.drilldowns.revenueByCenter) roRows.push(lineToRow(item));
+        roRows.push(lineToRow(data.drilldowns.totalRevenueByCenter));
+        const roSheet = XLSX.utils.aoa_to_sheet(roRows);
+        roSheet["!cols"] = [{ wch: 30 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
+        XLSX.utils.book_append_sheet(wb, roSheet, "Revenue by Centre");
+      }
 
-      // Other Indirect Expenses
-      const oiRows: (string | number)[][] = [headerRow];
-      for (const item of data.drilldowns.otherIndirect) oiRows.push(lineToRow(item));
-      oiRows.push(lineToRow(data.drilldowns.totalOtherIndirect));
-      const oiSheet = XLSX.utils.aoa_to_sheet(oiRows);
-      oiSheet["!cols"] = [{ wch: 45 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
-      XLSX.utils.book_append_sheet(wb, oiSheet, "Other Indirect expenses");
-
-      // Payroll Expenses
-      const prRows: (string | number)[][] = [headerRow];
-      for (const item of data.drilldowns.payrollBreakdown) prRows.push(lineToRow(item));
-      prRows.push(lineToRow(data.drilldowns.totalPayroll));
-      const prSheet = XLSX.utils.aoa_to_sheet(prRows);
-      prSheet["!cols"] = [{ wch: 35 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
-      XLSX.utils.book_append_sheet(wb, prSheet, "Payroll Expenses");
-
-      // Electricity Charges
-      const ecRows: (string | number)[][] = [headerRow];
-      for (const item of data.drilldowns.electricityByCenter) ecRows.push(lineToRow(item));
-      ecRows.push(lineToRow(data.drilldowns.totalElectricity));
-      const ecSheet = XLSX.utils.aoa_to_sheet(ecRows);
-      ecSheet["!cols"] = [{ wch: 25 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
-      XLSX.utils.book_append_sheet(wb, ecSheet, "Electricity Charges");
-
-      // Marketing Expenses
-      const meRows: (string | number)[][] = [headerRow];
-      for (const item of data.drilldowns.marketingByType) meRows.push(lineToRow(item));
-      meRows.push(lineToRow(data.drilldowns.totalMarketing));
-      const meSheet = XLSX.utils.aoa_to_sheet(meRows);
-      meSheet["!cols"] = [{ wch: 30 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
-      XLSX.utils.book_append_sheet(wb, meSheet, "Marketing Expenses");
-
-      // Food Expenses
-      const feRows: (string | number)[][] = [headerRow];
-      for (const item of data.drilldowns.foodByCenter) feRows.push(lineToRow(item));
-      feRows.push(lineToRow(data.drilldowns.totalFood));
-      const feSheet = XLSX.utils.aoa_to_sheet(feRows);
-      feSheet["!cols"] = [{ wch: 25 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
-      XLSX.utils.book_append_sheet(wb, feSheet, "Food Expenses");
-
-      // Capital Expenditure
-      const ceRows: (string | number)[][] = [headerRow];
-      for (const item of data.drilldowns.capexByType) ceRows.push(lineToRow(item));
-      ceRows.push(lineToRow(data.drilldowns.totalCapex));
-      const ceSheet = XLSX.utils.aoa_to_sheet(ceRows);
-      ceSheet["!cols"] = [{ wch: 35 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
-      XLSX.utils.book_append_sheet(wb, ceSheet, "Capital Expenditure");
+      // Dynamic drilldown sheets
+      for (const section of data.drilldowns.sections) {
+        const sheetName = section.label.slice(0, 31);
+        const sRows: (string | number)[][] = [headerRow];
+        for (const item of section.items) sRows.push(lineToRow(item));
+        sRows.push(lineToRow(section.total));
+        const sSheet = XLSX.utils.aoa_to_sheet(sRows);
+        sSheet["!cols"] = [{ wch: 40 }, ...months.map(() => ({ wch: 15 })), { wch: 18 }];
+        XLSX.utils.book_append_sheet(wb, sSheet, sheetName);
+      }
 
       const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -2388,8 +2365,8 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.body?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { name, slug, cashflowLabel, displayOrder } = req.body;
-      if (!name || !slug || !cashflowLabel) return res.status(400).json({ error: "name, slug, and cashflowLabel required" });
+      const { name, slug, cashflowLabel, displayOrder, cashflowSection, pnlSection, drilldownMode, misDisplayLabel } = req.body;
+      if (!name || !slug) return res.status(400).json({ error: "name and slug required" });
       const slugNorm = String(slug).toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
       const [created] = await db
         .insert(expenseCategories)
@@ -2398,6 +2375,10 @@ export async function registerRoutes(app: Express) {
           name,
           slug: slugNorm || slug,
           cashflowLabel: cashflowLabel || name,
+          cashflowSection: cashflowSection ?? "operating_outflow",
+          pnlSection: pnlSection ?? "indirect",
+          drilldownMode: drilldownMode ?? "none",
+          misDisplayLabel: misDisplayLabel || null,
           displayOrder: displayOrder ?? 0,
           isActive: true,
           createdById: user?.id || null,
@@ -2417,11 +2398,15 @@ export async function registerRoutes(app: Express) {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
       const tid = tenantId ?? req.body?.tenantId;
-      const { name, slug, cashflowLabel, displayOrder, isActive } = req.body;
+      const { name, slug, cashflowLabel, displayOrder, isActive, cashflowSection, pnlSection, drilldownMode, misDisplayLabel } = req.body;
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (name !== undefined) updates.name = name;
       if (slug !== undefined) updates.slug = String(slug).toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "") || slug;
       if (cashflowLabel !== undefined) updates.cashflowLabel = cashflowLabel;
+      if (cashflowSection !== undefined) updates.cashflowSection = cashflowSection;
+      if (pnlSection !== undefined) updates.pnlSection = pnlSection;
+      if (drilldownMode !== undefined) updates.drilldownMode = drilldownMode;
+      if (misDisplayLabel !== undefined) updates.misDisplayLabel = misDisplayLabel || null;
       if (displayOrder !== undefined) updates.displayOrder = displayOrder;
       if (isActive !== undefined) updates.isActive = isActive;
       updates.updatedById = user?.id || null;

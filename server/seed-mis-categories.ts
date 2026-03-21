@@ -1,6 +1,10 @@
 /**
  * Reusable MIS category seeding for any tenant.
  * Called automatically on tenant creation and available as a standalone endpoint.
+ *
+ * Each category now includes MIS classification metadata (cashflowSection,
+ * pnlSection, drilldownMode) so the MIS engine reads config from the DB
+ * instead of hardcoded slug arrays.
  */
 
 import { eq, and } from "drizzle-orm";
@@ -11,33 +15,33 @@ import { logger } from "./logger.js";
 // ── Data Definitions ──
 
 const MIS_EXPENSE_CATEGORIES = [
-  { name: "Rent Expenses", slug: "rent_expenses", cashflowLabel: "Rent Expenses", displayOrder: 10 },
-  { name: "Faculty Payments (Including Medico)", slug: "faculty_payments", cashflowLabel: "Faculty Payments (Including Medico)", displayOrder: 11 },
-  { name: "Operating Expenses (Opex)", slug: "operating_expenses", cashflowLabel: "Operating Expenses (Opex)", displayOrder: 12 },
-  { name: "Employee Benefit Expenses (Salary)", slug: "employee_benefit_expenses", cashflowLabel: "Employee Benefit Expenses (Salary expenses)", displayOrder: 13 },
-  { name: "Advertising Expenses", slug: "advertising_expenses", cashflowLabel: "Advertising Expenses", displayOrder: 14 },
-  { name: "Food Expenses (Mess Bill)", slug: "food_expenses_mess_bill", cashflowLabel: "Food Expenses (Mess Bill)", displayOrder: 15 },
-  { name: "Commission Charges", slug: "commission_charges", cashflowLabel: "Commission Charges", displayOrder: 16 },
-  { name: "Security Deposit Refund (SD Refund)", slug: "security_deposit_refund", cashflowLabel: "Security Deposit Refund (SD Refund)", displayOrder: 17 },
-  { name: "Electricity Charges", slug: "electricity_charges", cashflowLabel: "Electricity Charges", displayOrder: 18 },
-  { name: "Bank Charges", slug: "bank_charges", cashflowLabel: "Bank Charges", displayOrder: 19 },
-  { name: "Income Tax & GST Payment", slug: "income_tax_gst_payment", cashflowLabel: "Income Tax & GST Payment", displayOrder: 20 },
-  { name: "Legal Fee", slug: "legal_fee", cashflowLabel: "Legal Fee", displayOrder: 21 },
-  { name: "TDS Payment", slug: "tds_payment", cashflowLabel: "TDS Payment", displayOrder: 22 },
-  { name: "Capital Expenditures (Capex)", slug: "capital_expenditures", cashflowLabel: "Capital Expenditures (Capex)", displayOrder: 23 },
-  { name: "Rent Deposit Paid", slug: "rent_deposit_paid", cashflowLabel: "Rent Deposit Paid", displayOrder: 24 },
-  { name: "Rent Deposit Refund", slug: "rent_deposit_refund", cashflowLabel: "Rent Deposit Refund", displayOrder: 25 },
+  { name: "Rent Expenses", slug: "rent_expenses", cashflowLabel: "Rent Expenses", displayOrder: 10, cashflowSection: "operating_outflow" as const, pnlSection: "direct" as const, drilldownMode: "none" as const },
+  { name: "Faculty Payments (Including Medico)", slug: "faculty_payments", cashflowLabel: "Faculty Payments (Including Medico)", displayOrder: 11, cashflowSection: "operating_outflow" as const, pnlSection: "direct" as const, drilldownMode: "none" as const },
+  { name: "Operating Expenses (Opex)", slug: "operating_expenses", cashflowLabel: "Operating Expenses (Opex)", displayOrder: 12, cashflowSection: "operating_outflow" as const, pnlSection: "indirect" as const, drilldownMode: "by_subcategory" as const },
+  { name: "Employee Benefit Expenses (Salary)", slug: "employee_benefit_expenses", cashflowLabel: "Employee Benefit Expenses (Salary expenses)", displayOrder: 13, cashflowSection: "operating_outflow" as const, pnlSection: "indirect" as const, drilldownMode: "by_subcategory" as const },
+  { name: "Advertising Expenses", slug: "advertising_expenses", cashflowLabel: "Advertising Expenses", displayOrder: 14, cashflowSection: "operating_outflow" as const, pnlSection: "indirect" as const, drilldownMode: "by_subcategory" as const },
+  { name: "Food Expenses (Mess Bill)", slug: "food_expenses_mess_bill", cashflowLabel: "Food Expenses (Mess Bill)", displayOrder: 15, cashflowSection: "operating_outflow" as const, pnlSection: "indirect" as const, drilldownMode: "by_center" as const },
+  { name: "Commission Charges", slug: "commission_charges", cashflowLabel: "Commission Charges", displayOrder: 16, cashflowSection: "operating_outflow" as const, pnlSection: "indirect" as const, drilldownMode: "none" as const },
+  { name: "Security Deposit Refund (SD Refund)", slug: "security_deposit_refund", cashflowLabel: "Security Deposit Refund (SD Refund)", displayOrder: 17, cashflowSection: "operating_outflow" as const, pnlSection: "indirect" as const, drilldownMode: "none" as const },
+  { name: "Electricity Charges", slug: "electricity_charges", cashflowLabel: "Electricity Charges", displayOrder: 18, cashflowSection: "operating_outflow" as const, pnlSection: "indirect" as const, drilldownMode: "by_center" as const },
+  { name: "Bank Charges", slug: "bank_charges", cashflowLabel: "Bank Charges", displayOrder: 19, cashflowSection: "operating_outflow" as const, pnlSection: "indirect" as const, drilldownMode: "none" as const },
+  { name: "Income Tax & GST Payment", slug: "income_tax_gst_payment", cashflowLabel: "Income Tax & GST Payment", displayOrder: 20, cashflowSection: "operating_outflow" as const, pnlSection: "indirect" as const, drilldownMode: "none" as const },
+  { name: "Legal Fee", slug: "legal_fee", cashflowLabel: "Legal Fee", displayOrder: 21, cashflowSection: "operating_outflow" as const, pnlSection: "indirect" as const, drilldownMode: "none" as const },
+  { name: "TDS Payment", slug: "tds_payment", cashflowLabel: "TDS Payment", displayOrder: 22, cashflowSection: "operating_outflow" as const, pnlSection: "indirect" as const, drilldownMode: "none" as const },
+  { name: "Capital Expenditures (Capex)", slug: "capital_expenditures", cashflowLabel: "Capital Expenditures (Capex)", displayOrder: 23, cashflowSection: "investing" as const, pnlSection: "excluded" as const, drilldownMode: "by_subcategory" as const },
+  { name: "Rent Deposit Paid", slug: "rent_deposit_paid", cashflowLabel: "Rent Deposit Paid", displayOrder: 24, cashflowSection: "investing" as const, pnlSection: "excluded" as const, drilldownMode: "none" as const },
+  { name: "Rent Deposit Refund", slug: "rent_deposit_refund", cashflowLabel: "Rent Deposit Refund", displayOrder: 25, cashflowSection: "investing" as const, pnlSection: "excluded" as const, drilldownMode: "none" as const },
 ];
 
 const MIS_INCOME_CATEGORIES = [
-  { name: "Academic Income (Including Crash Batch)", slug: "academic_income", incomeType: "academic", displayOrder: 10 },
-  { name: "Hostel Income (Including Electricity Charges)", slug: "hostel_income", incomeType: "hostel", displayOrder: 11 },
-  { name: "Medico-Revenue", slug: "medico_revenue", incomeType: "medico", displayOrder: 12 },
-  { name: "Security Deposit Collected", slug: "security_deposit_collected", incomeType: "deposit", displayOrder: 13 },
-  { name: "Revenue Sharing Income (TIPS)", slug: "revenue_sharing_tips", incomeType: "revenue_share", displayOrder: 14 },
-  { name: "Reading Room", slug: "reading_room", incomeType: "facility", displayOrder: 15 },
-  { name: "Study Material", slug: "study_material", incomeType: "academic", displayOrder: 16 },
-  { name: "Other Income", slug: "other_income", incomeType: "other", displayOrder: 17 },
+  { name: "Academic Income (Including Crash Batch)", slug: "academic_income", incomeType: "academic", displayOrder: 10, misClassification: "revenue" as const, revenueGroup: "offline" },
+  { name: "Hostel Income (Including Electricity Charges)", slug: "hostel_income", incomeType: "hostel", displayOrder: 11, misClassification: "revenue" as const, revenueGroup: "offline" },
+  { name: "Medico-Revenue", slug: "medico_revenue", incomeType: "medico", displayOrder: 12, misClassification: "revenue" as const, revenueGroup: "medico" },
+  { name: "Security Deposit Collected", slug: "security_deposit_collected", incomeType: "deposit", displayOrder: 13, misClassification: "revenue" as const, revenueGroup: "offline" },
+  { name: "Revenue Sharing Income (TIPS)", slug: "revenue_sharing_tips", incomeType: "revenue_share", displayOrder: 14, misClassification: "revenue" as const, revenueGroup: "offline" },
+  { name: "Reading Room", slug: "reading_room", incomeType: "facility", displayOrder: 15, misClassification: "revenue" as const, revenueGroup: "offline" },
+  { name: "Study Material", slug: "study_material", incomeType: "academic", displayOrder: 16, misClassification: "revenue" as const, revenueGroup: "offline" },
+  { name: "Other Income", slug: "other_income", incomeType: "other", displayOrder: 17, misClassification: "other_income" as const, revenueGroup: null },
 ];
 
 const MIS_SUB_CATEGORIES: Record<string, Array<{ name: string; slug: string; displayOrder: number }>> = {
@@ -109,7 +113,6 @@ export interface SeedResult {
 export async function seedMISCategoriesForTenant(tenantId: string): Promise<SeedResult> {
   const result: SeedResult = { expenses: 0, income: 0, subCategories: 0, incomeTypesSeeded: 0 };
 
-  // 1. Seed income types
   for (const it of DEFAULT_INCOME_TYPES) {
     try {
       await db.insert(incomeTypes).values({
@@ -120,11 +123,10 @@ export async function seedMISCategoriesForTenant(tenantId: string): Promise<Seed
       });
       result.incomeTypesSeeded++;
     } catch (e: any) {
-      if (e?.code !== "23505") throw e; // skip duplicates
+      if (e?.code !== "23505") throw e;
     }
   }
 
-  // 2. Seed expense categories
   for (const cat of MIS_EXPENSE_CATEGORIES) {
     const [existing] = await db
       .select({ id: expenseCategories.id })
@@ -138,13 +140,15 @@ export async function seedMISCategoriesForTenant(tenantId: string): Promise<Seed
       name: cat.name,
       slug: cat.slug,
       cashflowLabel: cat.cashflowLabel,
+      cashflowSection: cat.cashflowSection,
+      pnlSection: cat.pnlSection,
+      drilldownMode: cat.drilldownMode,
       displayOrder: cat.displayOrder,
       isActive: true,
     });
     result.expenses++;
   }
 
-  // 3. Seed income categories
   for (const cat of MIS_INCOME_CATEGORIES) {
     const [existing] = await db
       .select({ id: incomeCategories.id })
@@ -158,13 +162,14 @@ export async function seedMISCategoriesForTenant(tenantId: string): Promise<Seed
       name: cat.name,
       slug: cat.slug,
       incomeType: cat.incomeType,
+      misClassification: cat.misClassification,
+      revenueGroup: cat.revenueGroup,
       displayOrder: cat.displayOrder,
       isActive: true,
     });
     result.income++;
   }
 
-  // 4. Seed sub-categories under parent expense categories
   for (const [parentSlug, children] of Object.entries(MIS_SUB_CATEGORIES)) {
     const [parent] = await db
       .select({ id: expenseCategories.id })
@@ -189,6 +194,9 @@ export async function seedMISCategoriesForTenant(tenantId: string): Promise<Seed
         name: sub.name,
         slug: sub.slug,
         cashflowLabel: sub.name,
+        cashflowSection: "none",
+        pnlSection: "excluded",
+        drilldownMode: "none",
         parentId: parent.id,
         displayOrder: sub.displayOrder,
         isActive: true,

@@ -8,6 +8,13 @@
       "when": 1774086440944,
       "tag": "0000_chunky_reaper",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1774097990983,
+      "tag": "0001_brave_guardian",
+      "breakpoints": true
     }
   ]
 }

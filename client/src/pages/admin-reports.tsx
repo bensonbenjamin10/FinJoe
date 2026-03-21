@@ -41,12 +41,12 @@ import {
   Layers,
   ChevronRight,
 } from "lucide-react";
-import { FYSelector, getCurrentFY, isCurrentFY, getCurrentFYMonthIndex } from "@/components/mis/fy-selector";
+import { FYSelector, getCurrentFY, isCurrentFY, getCurrentFYMonthIndex, getFYRangeLabel } from "@/components/mis/fy-selector";
 import { StatSparkCard } from "@/components/mis/stat-spark-card";
 import { MISTable, type MISRow } from "@/components/mis/mis-table";
 import { CellDrilldown } from "@/components/mis/cell-drilldown";
 
-// ── Types matching backend ──
+// ── Types matching backend (dynamic) ──
 
 interface MISLineItem {
   label: string;
@@ -55,9 +55,18 @@ interface MISLineItem {
   fyTotal: number;
 }
 
+interface MISDrilldownSection {
+  slug: string;
+  label: string;
+  mode: "by_center" | "by_subcategory";
+  items: MISLineItem[];
+  total: MISLineItem;
+}
+
 interface MISReport {
   months: string[];
   fyLabel: string;
+  fyStartMonth: number;
   cashflow: {
     openingBalance: number[];
     inflows: MISLineItem[];
@@ -71,8 +80,7 @@ interface MISReport {
     closingBalance: number[];
   };
   pnl: {
-    revenueOffline: MISLineItem;
-    revenueMedico: MISLineItem;
+    revenueGroups: MISLineItem[];
     totalRevenue: MISLineItem;
     directExpenses: MISLineItem[];
     totalDirectExpenses: MISLineItem;
@@ -87,23 +95,11 @@ interface MISReport {
   drilldowns: {
     revenueByCenter: MISLineItem[];
     totalRevenueByCenter: MISLineItem;
-    electricityByCenter: MISLineItem[];
-    totalElectricity: MISLineItem;
-    foodByCenter: MISLineItem[];
-    totalFood: MISLineItem;
-    marketingByType: MISLineItem[];
-    totalMarketing: MISLineItem;
-    capexByType: MISLineItem[];
-    totalCapex: MISLineItem;
-    payrollBreakdown: MISLineItem[];
-    totalPayroll: MISLineItem;
-    otherIndirect: MISLineItem[];
-    totalOtherIndirect: MISLineItem;
+    sections: MISDrilldownSection[];
   };
 }
 
 type ViewMode = "overview" | "cashflow" | "pnl" | "revenue" | "expenses";
-type DrilldownType = "electricity" | "food" | "marketing" | "capex" | "payroll" | "other_indirect";
 
 const CHART_COLORS = [
   "hsl(174, 84%, 32%)",
@@ -151,7 +147,7 @@ export default function AdminReports() {
   }, [searchParams]);
 
   const [ytdMode, setYtdMode] = useState(true);
-  const [drilldownType, setDrilldownType] = useState<DrilldownType>("marketing");
+  const [drilldownIdx, setDrilldownIdx] = useState(0);
   const [numberFormat, setNumberFormat] = useState<"standard" | "indian">("standard");
 
   const [drilldownOpen, setDrilldownOpen] = useState(false);
@@ -183,6 +179,8 @@ export default function AdminReports() {
     },
     enabled: !isSuperAdmin || !!tenantId,
   });
+
+  const fyStartMonth = report?.fyStartMonth ?? 4;
 
   const handleFYChange = useCallback((newFy: string) => {
     setSearchParams((p) => {
@@ -247,16 +245,10 @@ export default function AdminReports() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           {view !== "overview" && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => handleViewChange("overview")}
-            >
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleViewChange("overview")}>
               <ArrowLeft className="h-4 w-4" />
             </Button>
           )}
@@ -270,8 +262,8 @@ export default function AdminReports() {
                 : "Monthly breakdown with drill-down capability"}
               {report && (
                 <span className="ml-1 text-xs text-muted-foreground/70">
-                  — {report.fyLabel} (Apr–Mar)
-                  {isCurrentFY(fy) && `, data through ${new Date().toLocaleDateString("en-IN", { month: "short", year: "2-digit" })}`}
+                  — {report.fyLabel} ({getFYRangeLabel(fyStartMonth)})
+                  {isCurrentFY(fy, fyStartMonth) && `, data through ${new Date().toLocaleDateString("en-IN", { month: "short", year: "2-digit" })}`}
                 </span>
               )}
             </p>
@@ -289,8 +281,8 @@ export default function AdminReports() {
               </SelectContent>
             </Select>
           )}
-          <FYSelector value={fy} onChange={handleFYChange} />
-          {isCurrentFY(fy) && (
+          <FYSelector value={fy} onChange={handleFYChange} fyStartMonth={fyStartMonth} />
+          {isCurrentFY(fy, fyStartMonth) && (
             <Button
               variant={ytdMode ? "default" : "outline"}
               size="sm"
@@ -309,29 +301,22 @@ export default function AdminReports() {
 
       {isLoading ? <LoadingSkeleton /> : report ? (
         <>
-          {view === "overview" && <OverviewView report={report} onNavigate={handleViewChange} fy={fy} />}
-          {view === "cashflow" && (
-            <CashflowView report={report} onCellClick={handleCellClick} numberFormat={numberFormat} />
-          )}
-          {view === "pnl" && (
-            <PnLView report={report} onCellClick={handleCellClick} numberFormat={numberFormat} />
-          )}
-          {view === "revenue" && (
-            <RevenueView report={report} onCellClick={handleCellClick} numberFormat={numberFormat} />
-          )}
+          {view === "overview" && <OverviewView report={report} onNavigate={handleViewChange} fy={fy} fyStartMonth={fyStartMonth} />}
+          {view === "cashflow" && <CashflowView report={report} onCellClick={handleCellClick} numberFormat={numberFormat} />}
+          {view === "pnl" && <PnLView report={report} onCellClick={handleCellClick} numberFormat={numberFormat} />}
+          {view === "revenue" && <RevenueView report={report} onCellClick={handleCellClick} numberFormat={numberFormat} />}
           {view === "expenses" && (
             <ExpenseView
               report={report}
               onCellClick={handleCellClick}
               numberFormat={numberFormat}
-              drilldownType={drilldownType}
-              onDrilldownTypeChange={setDrilldownType}
+              drilldownIdx={drilldownIdx}
+              onDrilldownIdxChange={setDrilldownIdx}
             />
           )}
         </>
       ) : null}
 
-      {/* Cell Drilldown Modal */}
       {drilldownInfo && (
         <CellDrilldown
           open={drilldownOpen}
@@ -371,7 +356,7 @@ function LoadingSkeleton() {
 
 // ── Overview View ──
 
-function OverviewView({ report, onNavigate, fy }: { report: MISReport; onNavigate: (v: ViewMode) => void; fy: string }) {
+function OverviewView({ report, onNavigate, fy, fyStartMonth }: { report: MISReport; onNavigate: (v: ViewMode) => void; fy: string; fyStartMonth: number }) {
   const { pnl, cashflow } = report;
 
   const totalRevenue = pnl.totalRevenue.fyTotal;
@@ -379,15 +364,13 @@ function OverviewView({ report, onNavigate, fy }: { report: MISReport; onNavigat
   const ebitda = pnl.ebitda.fyTotal;
   const closingCash = cashflow.closingBalance[cashflow.closingBalance.length - 1];
 
-  const currentMonthIdx = isCurrentFY(fy) ? getCurrentFYMonthIndex() : 11;
+  const currentMonthIdx = isCurrentFY(fy, fyStartMonth) ? getCurrentFYMonthIndex(fyStartMonth) : 11;
   const futureMonthLabel = currentMonthIdx < 11 ? report.months[currentMonthIdx] : null;
 
   const trendData = report.months.map((m, i) => ({
     month: m,
     revenue: pnl.totalRevenue.values[i],
     expenses: pnl.totalDirectExpenses.values[i] + pnl.totalIndirectExpenses.values[i],
-    netCashflow: cashflow.netCashFlow.values[i],
-    isFuture: i > currentMonthIdx,
   }));
 
   const expensePieData = useMemo(() => {
@@ -395,7 +378,6 @@ function OverviewView({ report, onNavigate, fy }: { report: MISReport; onNavigat
       .map((item) => ({ name: item.label, value: item.fyTotal }))
       .filter((d) => d.value > 0)
       .sort((a, b) => b.value - a.value);
-
     const total = sorted.reduce((s, d) => s + d.value, 0);
     const threshold = total * 0.03;
     const major: typeof sorted = [];
@@ -407,13 +389,10 @@ function OverviewView({ report, onNavigate, fy }: { report: MISReport; onNavigat
         otherTotal += d.value;
       }
     }
-    if (otherTotal > 0) {
-      major.push({ name: "Other", value: otherTotal });
-    }
+    if (otherTotal > 0) major.push({ name: "Other", value: otherTotal });
     return major.map((d, i) => ({ ...d, fill: CHART_COLORS[i % CHART_COLORS.length] }));
   }, [pnl.indirectExpenses]);
 
-  // Revenue by center for bar chart
   const revCenterData = report.drilldowns.revenueByCenter
     .slice(0, 8)
     .map((item) => ({
@@ -423,77 +402,21 @@ function OverviewView({ report, onNavigate, fy }: { report: MISReport; onNavigat
     }));
 
   const reportCards: { title: string; description: string; view: ViewMode; icon: typeof FileSpreadsheet; sparkData: number[]; color: string }[] = [
-    {
-      title: "Cashflow Statement",
-      description: "Operating, investing & financing activities",
-      view: "cashflow",
-      icon: Layers,
-      sparkData: cashflow.netCashFlow.values,
-      color: "hsl(174, 84%, 32%)",
-    },
-    {
-      title: "Profit & Loss",
-      description: "Revenue, expenses, gross margin & EBITDA",
-      view: "pnl",
-      icon: BarChart3,
-      sparkData: pnl.ebitda.values,
-      color: "hsl(38, 59%, 58%)",
-    },
-    {
-      title: "Revenue Analysis",
-      description: "Revenue breakdown by centre & stream",
-      view: "revenue",
-      icon: TrendingUp,
-      sparkData: pnl.totalRevenue.values,
-      color: "hsl(200, 70%, 50%)",
-    },
-    {
-      title: "Expense Analysis",
-      description: "Drill into marketing, food, electricity & more",
-      view: "expenses",
-      icon: PieChartIcon,
-      sparkData: pnl.totalIndirectExpenses.values,
-      color: "hsl(340, 75%, 48%)",
-    },
+    { title: "Cashflow Statement", description: "Operating, investing & financing activities", view: "cashflow", icon: Layers, sparkData: cashflow.netCashFlow.values, color: "hsl(174, 84%, 32%)" },
+    { title: "Profit & Loss", description: "Revenue, expenses, gross margin & EBITDA", view: "pnl", icon: BarChart3, sparkData: pnl.ebitda.values, color: "hsl(38, 59%, 58%)" },
+    { title: "Revenue Analysis", description: "Revenue breakdown by centre & stream", view: "revenue", icon: TrendingUp, sparkData: pnl.totalRevenue.values, color: "hsl(200, 70%, 50%)" },
+    { title: "Expense Analysis", description: "Drill into expense categories", view: "expenses", icon: PieChartIcon, sparkData: pnl.totalIndirectExpenses.values, color: "hsl(340, 75%, 48%)" },
   ];
 
   return (
     <div className="space-y-6">
-      {/* Hero Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatSparkCard
-          icon={TrendingUp}
-          label="Total Revenue"
-          value={formatCurrency(totalRevenue)}
-          sparkData={pnl.totalRevenue.values}
-          accentColor="hsl(174, 84%, 32%)"
-        />
-        <StatSparkCard
-          icon={Receipt}
-          label="Total Expenses"
-          value={formatCurrency(totalExpenses)}
-          sparkData={pnl.totalDirectExpenses.values.map((v, i) => v + pnl.totalIndirectExpenses.values[i])}
-          accentColor="hsl(340, 75%, 48%)"
-        />
-        <StatSparkCard
-          icon={ebitda >= 0 ? TrendingUp : TrendingDown}
-          label="EBITDA"
-          value={formatCurrency(ebitda)}
-          sparkData={pnl.ebitda.values}
-          trend={totalRevenue ? (ebitda / totalRevenue) * 100 : 0}
-          trendLabel="of revenue"
-          accentColor={ebitda >= 0 ? "hsl(142, 71%, 35%)" : "hsl(0, 72%, 51%)"}
-        />
-        <StatSparkCard
-          icon={Wallet}
-          label="Cash Position"
-          value={formatCurrency(closingCash)}
-          sparkData={cashflow.closingBalance}
-          accentColor="hsl(280, 65%, 45%)"
-        />
+        <StatSparkCard icon={TrendingUp} label="Total Revenue" value={formatCurrency(totalRevenue)} sparkData={pnl.totalRevenue.values} accentColor="hsl(174, 84%, 32%)" />
+        <StatSparkCard icon={Receipt} label="Total Expenses" value={formatCurrency(totalExpenses)} sparkData={pnl.totalDirectExpenses.values.map((v, i) => v + pnl.totalIndirectExpenses.values[i])} accentColor="hsl(340, 75%, 48%)" />
+        <StatSparkCard icon={ebitda >= 0 ? TrendingUp : TrendingDown} label="EBITDA" value={formatCurrency(ebitda)} sparkData={pnl.ebitda.values} trend={totalRevenue ? (ebitda / totalRevenue) * 100 : 0} trendLabel="of revenue" accentColor={ebitda >= 0 ? "hsl(142, 71%, 35%)" : "hsl(0, 72%, 51%)"} />
+        <StatSparkCard icon={Wallet} label="Cash Position" value={formatCurrency(closingCash)} sparkData={cashflow.closingBalance} accentColor="hsl(280, 65%, 45%)" />
       </div>
 
-      {/* Revenue vs Expenses Chart */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base font-semibold">Revenue vs Expenses</CardTitle>
@@ -513,55 +436,16 @@ function OverviewView({ report, onNavigate, fy }: { report: MISReport; onNavigat
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border/50" />
-                <XAxis
-                  dataKey="month"
-                  tick={{ fontSize: 11 }}
-                  className="text-muted-foreground"
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <YAxis
-                  tick={{ fontSize: 11 }}
-                  tickFormatter={(v) => formatLakh(v)}
-                  className="text-muted-foreground"
-                  axisLine={false}
-                  tickLine={false}
-                  width={60}
-                />
+                <XAxis dataKey="month" tick={{ fontSize: 11 }} className="text-muted-foreground" axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => formatLakh(v)} className="text-muted-foreground" axisLine={false} tickLine={false} width={60} />
                 <Tooltip
-                  formatter={(value: number, name: string) => [
-                    `₹${value.toLocaleString("en-IN")}`,
-                    name === "revenue" ? "Revenue" : "Expenses",
-                  ]}
-                  contentStyle={{
-                    backgroundColor: "hsl(var(--card))",
-                    border: "1px solid hsl(var(--border))",
-                    borderRadius: 8,
-                    fontSize: 12,
-                  }}
+                  formatter={(value: number, name: string) => [`₹${value.toLocaleString("en-IN")}`, name === "revenue" ? "Revenue" : "Expenses"]}
+                  contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
                 />
-                <Area
-                  type="monotone"
-                  dataKey="revenue"
-                  stroke="hsl(174, 84%, 32%)"
-                  fill="url(#revGrad)"
-                  strokeWidth={2}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="expenses"
-                  stroke="hsl(340, 75%, 48%)"
-                  fill="url(#expGrad)"
-                  strokeWidth={2}
-                />
+                <Area type="monotone" dataKey="revenue" stroke="hsl(174, 84%, 32%)" fill="url(#revGrad)" strokeWidth={2} />
+                <Area type="monotone" dataKey="expenses" stroke="hsl(340, 75%, 48%)" fill="url(#expGrad)" strokeWidth={2} />
                 {futureMonthLabel && (
-                  <ReferenceLine
-                    x={futureMonthLabel}
-                    stroke="hsl(var(--muted-foreground))"
-                    strokeDasharray="4 4"
-                    strokeOpacity={0.5}
-                    label={{ value: "Today", position: "top", fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                  />
+                  <ReferenceLine x={futureMonthLabel} stroke="hsl(var(--muted-foreground))" strokeDasharray="4 4" strokeOpacity={0.5} label={{ value: "Today", position: "top", fontSize: 10, fill: "hsl(var(--muted-foreground))" }} />
                 )}
               </AreaChart>
             </ResponsiveContainer>
@@ -569,69 +453,39 @@ function OverviewView({ report, onNavigate, fy }: { report: MISReport; onNavigat
         </CardContent>
       </Card>
 
-      {/* Report Navigation Cards + Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Report Cards */}
         <div className="space-y-3">
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider px-1">
-            Financial Statements
-          </h3>
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider px-1">Financial Statements</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {reportCards.map((card) => (
-              <Card
-                key={card.view}
-                className="group cursor-pointer hover:shadow-md hover:border-primary/30 transition-all duration-200"
-                onClick={() => onNavigate(card.view)}
-              >
+              <Card key={card.view} className="group cursor-pointer hover:shadow-md hover:border-primary/30 transition-all duration-200" onClick={() => onNavigate(card.view)}>
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between mb-3">
-                    <div
-                      className="h-9 w-9 rounded-lg flex items-center justify-center"
-                      style={{ backgroundColor: `color-mix(in srgb, ${card.color} 12%, transparent)` }}
-                    >
+                    <div className="h-9 w-9 rounded-lg flex items-center justify-center" style={{ backgroundColor: `color-mix(in srgb, ${card.color} 12%, transparent)` }}>
                       <card.icon className="h-4.5 w-4.5" style={{ color: card.color }} />
                     </div>
                     <ChevronRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-primary transition-colors" />
                   </div>
                   <div className="text-sm font-semibold text-foreground mb-0.5">{card.title}</div>
                   <div className="text-xs text-muted-foreground">{card.description}</div>
-                  <div className="mt-3">
-                    <MiniSparkSvg data={card.sparkData} color={card.color} />
-                  </div>
+                  <div className="mt-3"><MiniSparkSvg data={card.sparkData} color={card.color} /></div>
                 </CardContent>
               </Card>
             ))}
           </div>
         </div>
 
-        {/* Side charts */}
         <div className="space-y-3">
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider px-1">
-            Quick Insights
-          </h3>
-
-          {/* Expense Pie */}
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider px-1">Quick Insights</h3>
           {expensePieData.length > 0 && (
             <Card>
-              <CardHeader className="pb-1">
-                <CardTitle className="text-sm font-medium">Indirect Expenses Breakdown</CardTitle>
-              </CardHeader>
+              <CardHeader className="pb-1"><CardTitle className="text-sm font-medium">Indirect Expenses Breakdown</CardTitle></CardHeader>
               <CardContent className="pb-4">
                 <div className="h-[160px] flex items-center">
                   <ResponsiveContainer width="50%" height="100%">
                     <PieChart>
-                      <Pie
-                        data={expensePieData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={35}
-                        outerRadius={60}
-                        dataKey="value"
-                        stroke="none"
-                      >
-                        {expensePieData.map((_, i) => (
-                          <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                        ))}
+                      <Pie data={expensePieData} cx="50%" cy="50%" innerRadius={35} outerRadius={60} dataKey="value" stroke="none">
+                        {expensePieData.map((_, i) => (<Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />))}
                       </Pie>
                       <Tooltip formatter={(v: number) => formatCurrency(v)} />
                     </PieChart>
@@ -639,10 +493,7 @@ function OverviewView({ report, onNavigate, fy }: { report: MISReport; onNavigat
                   <div className="flex-1 space-y-1.5 pl-2 overflow-hidden">
                     {expensePieData.slice(0, 5).map((d, i) => (
                       <div key={i} className="flex items-center gap-2 text-xs">
-                        <div
-                          className="h-2.5 w-2.5 rounded-sm shrink-0"
-                          style={{ backgroundColor: d.fill }}
-                        />
+                        <div className="h-2.5 w-2.5 rounded-sm shrink-0" style={{ backgroundColor: d.fill }} />
                         <span className="truncate text-muted-foreground">{d.name}</span>
                         <span className="ml-auto font-medium tabular-nums">{formatLakh(d.value)}</span>
                       </div>
@@ -652,13 +503,9 @@ function OverviewView({ report, onNavigate, fy }: { report: MISReport; onNavigat
               </CardContent>
             </Card>
           )}
-
-          {/* Revenue by Center Bar */}
           {revCenterData.length > 0 && (
             <Card>
-              <CardHeader className="pb-1">
-                <CardTitle className="text-sm font-medium">Revenue by Centre</CardTitle>
-              </CardHeader>
+              <CardHeader className="pb-1"><CardTitle className="text-sm font-medium">Revenue by Centre</CardTitle></CardHeader>
               <CardContent className="pb-4">
                 <div className="h-[160px]">
                   <ResponsiveContainer width="100%" height="100%">
@@ -666,16 +513,7 @@ function OverviewView({ report, onNavigate, fy }: { report: MISReport; onNavigat
                       <CartesianGrid strokeDasharray="3 3" className="stroke-border/30" />
                       <XAxis dataKey="name" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fontSize: 10 }} tickFormatter={formatLakh} axisLine={false} tickLine={false} width={50} />
-                      <Tooltip
-                        formatter={(v: number) => [`₹${v.toLocaleString("en-IN")}`, "Revenue"]}
-                        labelFormatter={(_: string, payload: any[]) => payload?.[0]?.payload?.fullName ?? ""}
-                        contentStyle={{
-                          backgroundColor: "hsl(var(--card))",
-                          border: "1px solid hsl(var(--border))",
-                          borderRadius: 8,
-                          fontSize: 11,
-                        }}
-                      />
+                      <Tooltip formatter={(v: number) => [`₹${v.toLocaleString("en-IN")}`, "Revenue"]} labelFormatter={(_: string, payload: any[]) => payload?.[0]?.payload?.fullName ?? ""} contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 11 }} />
                       <Bar dataKey="value" fill="hsl(174, 84%, 32%)" radius={[4, 4, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
@@ -691,257 +529,133 @@ function OverviewView({ report, onNavigate, fy }: { report: MISReport; onNavigat
 
 function MiniSparkSvg({ data, color }: { data: number[]; color: string }) {
   if (!data.length) return null;
-  const h = 28;
-  const w = 120;
-  const max = Math.max(...data);
-  const min = Math.min(...data);
+  const h = 28, w = 120;
+  const max = Math.max(...data), min = Math.min(...data);
   const range = max - min || 1;
   const step = w / Math.max(data.length - 1, 1);
   const points = data.map((v, i) => `${i * step},${h - ((v - min) / range) * (h - 4) - 2}`);
+  const gradId = `minigrad-${color.replace(/[^a-z0-9]/gi, "")}`;
   return (
     <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none">
-      <defs>
-        <linearGradient id={`minigrad-${color.replace(/[^a-z0-9]/gi, "")}`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity={0.2} />
-          <stop offset="100%" stopColor={color} stopOpacity={0} />
-        </linearGradient>
-      </defs>
-      <polygon
-        points={`${points.join(" ")} ${w},${h} 0,${h}`}
-        fill={`url(#minigrad-${color.replace(/[^a-z0-9]/gi, "")})`}
-      />
-      <polyline
-        points={points.join(" ")}
-        fill="none"
-        stroke={color}
-        strokeWidth={1.5}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        vectorEffect="non-scaling-stroke"
-      />
+      <defs><linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity={0.2} /><stop offset="100%" stopColor={color} stopOpacity={0} /></linearGradient></defs>
+      <polygon points={`${points.join(" ")} ${w},${h} 0,${h}`} fill={`url(#${gradId})`} />
+      <polyline points={points.join(" ")} fill="none" stroke={color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
     </svg>
   );
 }
 
 // ── Cashflow View ──
 
-function CashflowView({
-  report,
-  onCellClick,
-  numberFormat,
-}: {
-  report: MISReport;
-  onCellClick: (row: MISRow, monthIdx: number) => void;
-  numberFormat: "standard" | "indian";
-}) {
+function CashflowView({ report, onCellClick, numberFormat }: { report: MISReport; onCellClick: (row: MISRow, monthIdx: number) => void; numberFormat: "standard" | "indian" }) {
   const { cashflow, months, fyLabel } = report;
-  const rows = useMemo<MISRow[]>(() => buildCashflowRows(cashflow), [cashflow]);
+  const rows = useMemo<MISRow[]>(() => {
+    const r: MISRow[] = [];
+    let idx = 0;
+    const row = (label: string, values: number[], type: MISRow["type"], opts?: Partial<MISRow>): MISRow => ({ id: `cf-${idx++}`, label, values, fyTotal: values.reduce((a, b) => a + b, 0), type, ...opts });
 
-  return (
-    <MISTable
-      months={months}
-      fyLabel={fyLabel}
-      rows={rows}
-      onCellClick={onCellClick}
-      numberFormat={numberFormat}
-    />
-  );
-}
+    r.push(row("Opening Balance", cashflow.openingBalance, "data"));
+    r.push({ id: `cf-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
+    r.push(row("Inflow", new Array(12).fill(0), "section", { section: "inflow" }));
+    for (const item of cashflow.inflows) {
+      r.push(row(item.label, item.values, "data", { section: "inflow", indent: 1, categorySlug: item.slug, transactionType: "income" }));
+    }
+    r.push(row(cashflow.totalIncome.label, cashflow.totalIncome.values, "total"));
+    r.push({ id: `cf-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
+    r.push(row("Outflow", new Array(12).fill(0), "section", { section: "outflow" }));
+    for (const item of cashflow.outflows) {
+      r.push(row(item.label, item.values, "data", { section: "outflow", indent: 1, categorySlug: item.slug, transactionType: "expense" }));
+    }
+    r.push(row(cashflow.totalOutflow.label, cashflow.totalOutflow.values, "total"));
+    r.push(row(cashflow.netOperating.label, cashflow.netOperating.values, "total"));
+    r.push({ id: `cf-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
+    r.push(row("Cash Flows from Investing Activities", new Array(12).fill(0), "section", { section: "investing" }));
+    for (const item of cashflow.investingActivities) {
+      r.push(row(item.label, item.values, "data", { section: "investing", indent: 1, categorySlug: item.slug, transactionType: "expense" }));
+    }
+    r.push(row(cashflow.netInvesting.label, cashflow.netInvesting.values, "total"));
+    r.push({ id: `cf-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
+    r.push(row(cashflow.netCashFlow.label, cashflow.netCashFlow.values, "total"));
+    r.push(row("Closing Balance", cashflow.closingBalance, "total"));
+    return r;
+  }, [cashflow]);
 
-function buildCashflowRows(cf: MISReport["cashflow"]): MISRow[] {
-  const rows: MISRow[] = [];
-  let idx = 0;
-  const row = (label: string, values: number[], type: MISRow["type"], opts?: Partial<MISRow>): MISRow => ({
-    id: `cf-${idx++}`,
-    label,
-    values,
-    fyTotal: values.reduce((a, b) => a + b, 0),
-    type,
-    ...opts,
-  });
-
-  rows.push(row("Opening Balance", cf.openingBalance, "data"));
-  rows.push({ id: `cf-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
-
-  rows.push(row("Inflow", new Array(12).fill(0), "section", { section: "inflow" }));
-  for (const item of cf.inflows) {
-    rows.push(row(item.label, item.values, "data", {
-      section: "inflow",
-      indent: 1,
-      categorySlug: slugFromLabel(item.label),
-      transactionType: "income",
-    }));
-  }
-  rows.push(row(cf.totalIncome.label, cf.totalIncome.values, "total"));
-
-  rows.push({ id: `cf-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
-  rows.push(row("Outflow", new Array(12).fill(0), "section", { section: "outflow" }));
-  for (const item of cf.outflows) {
-    rows.push(row(item.label, item.values, "data", {
-      section: "outflow",
-      indent: 1,
-      categorySlug: slugFromLabel(item.label),
-      transactionType: "expense",
-    }));
-  }
-  rows.push(row(cf.totalOutflow.label, cf.totalOutflow.values, "total"));
-  rows.push(row(cf.netOperating.label, cf.netOperating.values, "total"));
-
-  rows.push({ id: `cf-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
-  rows.push(row("Cash Flows from Investing Activities", new Array(12).fill(0), "section", { section: "investing" }));
-  for (const item of cf.investingActivities) {
-    rows.push(row(item.label, item.values, "data", {
-      section: "investing",
-      indent: 1,
-      categorySlug: slugFromLabel(item.label),
-      transactionType: "expense",
-    }));
-  }
-  rows.push(row(cf.netInvesting.label, cf.netInvesting.values, "total"));
-
-  rows.push({ id: `cf-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
-  rows.push(row(cf.netCashFlow.label, cf.netCashFlow.values, "total"));
-  rows.push(row("Closing Balance", cf.closingBalance, "total"));
-
-  return rows;
+  return <MISTable months={months} fyLabel={fyLabel} rows={rows} onCellClick={onCellClick} numberFormat={numberFormat} />;
 }
 
 // ── P&L View ──
 
-function PnLView({
-  report,
-  onCellClick,
-  numberFormat,
-}: {
-  report: MISReport;
-  onCellClick: (row: MISRow, monthIdx: number) => void;
-  numberFormat: "standard" | "indian";
-}) {
+function PnLView({ report, onCellClick, numberFormat }: { report: MISReport; onCellClick: (row: MISRow, monthIdx: number) => void; numberFormat: "standard" | "indian" }) {
   const { pnl, months, fyLabel } = report;
-  const rows = useMemo<MISRow[]>(() => buildPnLRows(pnl), [pnl]);
+  const rows = useMemo<MISRow[]>(() => {
+    const r: MISRow[] = [];
+    let idx = 0;
+    const row = (label: string, values: number[], type: MISRow["type"], opts?: Partial<MISRow>): MISRow => ({ id: `pnl-${idx++}`, label, values, fyTotal: values.reduce((a, b) => a + b, 0), type, ...opts });
 
-  return (
-    <MISTable
-      months={months}
-      fyLabel={fyLabel}
-      rows={rows}
-      onCellClick={onCellClick}
-      numberFormat={numberFormat}
-    />
-  );
-}
+    for (const rg of pnl.revenueGroups) {
+      r.push(row(rg.label, rg.values, "data", { transactionType: "income", categorySlug: rg.slug }));
+    }
+    r.push(row(pnl.totalRevenue.label, pnl.totalRevenue.values, "total"));
+    r.push({ id: `pnl-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
+    r.push(row("Direct Expenses", new Array(12).fill(0), "section", { section: "direct" }));
+    for (const item of pnl.directExpenses) {
+      r.push(row(item.label, item.values, "data", { section: "direct", indent: 1, categorySlug: item.slug, transactionType: "expense" }));
+    }
+    r.push(row(pnl.totalDirectExpenses.label, pnl.totalDirectExpenses.values, "total"));
+    r.push(row(pnl.grossProfit.label, pnl.grossProfit.values, "total"));
+    r.push(row("Gross Profit (%)", pnl.grossProfitPct, "percentage"));
+    r.push({ id: `pnl-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
+    r.push(row(pnl.otherIncome.label, pnl.otherIncome.values, "data", { transactionType: "income" }));
+    r.push({ id: `pnl-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
+    r.push(row("Indirect Expenses", new Array(12).fill(0), "section", { section: "indirect" }));
+    for (const item of pnl.indirectExpenses) {
+      r.push(row(item.label, item.values, "data", { section: "indirect", indent: 1, categorySlug: item.slug, transactionType: "expense" }));
+    }
+    r.push(row(pnl.totalIndirectExpenses.label, pnl.totalIndirectExpenses.values, "total"));
+    r.push({ id: `pnl-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
+    r.push(row(pnl.ebitda.label, pnl.ebitda.values, "total"));
+    r.push(row("EBITDA (%)", pnl.ebitdaPct, "percentage"));
+    return r;
+  }, [pnl]);
 
-function buildPnLRows(pnl: MISReport["pnl"]): MISRow[] {
-  const rows: MISRow[] = [];
-  let idx = 0;
-  const row = (label: string, values: number[], type: MISRow["type"], opts?: Partial<MISRow>): MISRow => ({
-    id: `pnl-${idx++}`,
-    label,
-    values,
-    fyTotal: values.reduce((a, b) => a + b, 0),
-    type,
-    ...opts,
-  });
-
-  rows.push(row(pnl.revenueOffline.label, pnl.revenueOffline.values, "data", { transactionType: "income" }));
-  rows.push(row(pnl.revenueMedico.label, pnl.revenueMedico.values, "data", { categorySlug: "medico_revenue", transactionType: "income" }));
-  rows.push(row(pnl.totalRevenue.label, pnl.totalRevenue.values, "total"));
-
-  rows.push({ id: `pnl-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
-  rows.push(row("Direct Expenses", new Array(12).fill(0), "section", { section: "direct" }));
-  for (const item of pnl.directExpenses) {
-    rows.push(row(item.label, item.values, "data", {
-      section: "direct",
-      indent: 1,
-      categorySlug: slugFromLabel(item.label),
-      transactionType: "expense",
-    }));
-  }
-  rows.push(row(pnl.totalDirectExpenses.label, pnl.totalDirectExpenses.values, "total"));
-  rows.push(row(pnl.grossProfit.label, pnl.grossProfit.values, "total"));
-  rows.push(row("Gross Profit (%)", pnl.grossProfitPct, "percentage"));
-
-  rows.push({ id: `pnl-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
-  rows.push(row(pnl.otherIncome.label, pnl.otherIncome.values, "data", { categorySlug: "other_income", transactionType: "income" }));
-
-  rows.push({ id: `pnl-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
-  rows.push(row("Indirect Expenses", new Array(12).fill(0), "section", { section: "indirect" }));
-  for (const item of pnl.indirectExpenses) {
-    rows.push(row(item.label, item.values, "data", {
-      section: "indirect",
-      indent: 1,
-      categorySlug: slugFromLabel(item.label),
-      transactionType: "expense",
-    }));
-  }
-  rows.push(row(pnl.totalIndirectExpenses.label, pnl.totalIndirectExpenses.values, "total"));
-
-  rows.push({ id: `pnl-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
-  rows.push(row(pnl.ebitda.label, pnl.ebitda.values, "total"));
-  rows.push(row("EBITDA (%)", pnl.ebitdaPct, "percentage"));
-
-  return rows;
+  return <MISTable months={months} fyLabel={fyLabel} rows={rows} onCellClick={onCellClick} numberFormat={numberFormat} />;
 }
 
 // ── Revenue View ──
 
-function RevenueView({
-  report,
-  onCellClick,
-  numberFormat,
-}: {
-  report: MISReport;
-  onCellClick: (row: MISRow, monthIdx: number) => void;
-  numberFormat: "standard" | "indian";
-}) {
-  const { drilldowns, months, fyLabel, pnl } = report;
+function RevenueView({ report, onCellClick, numberFormat }: { report: MISReport; onCellClick: (row: MISRow, monthIdx: number) => void; numberFormat: "standard" | "indian" }) {
+  const { drilldowns, months, pnl } = report;
 
   const rows = useMemo<MISRow[]>(() => {
     const r: MISRow[] = [];
     let idx = 0;
-    const row = (label: string, values: number[], type: MISRow["type"], opts?: Partial<MISRow>): MISRow => ({
-      id: `rev-${idx++}`,
-      label,
-      values,
-      fyTotal: values.reduce((a, b) => a + b, 0),
-      type,
-      ...opts,
-    });
+    const row = (label: string, values: number[], type: MISRow["type"], opts?: Partial<MISRow>): MISRow => ({ id: `rev-${idx++}`, label, values, fyTotal: values.reduce((a, b) => a + b, 0), type, ...opts });
 
-    // Revenue (Medico) at top
-    r.push(row(pnl.revenueMedico.label, pnl.revenueMedico.values, "data", { categorySlug: "medico_revenue", transactionType: "income" }));
-
+    for (const rg of pnl.revenueGroups) {
+      r.push(row(rg.label, rg.values, "data", { categorySlug: rg.slug, transactionType: "income" }));
+    }
     r.push({ id: `rev-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
-    r.push(row("Revenue by Centre (Offline)", new Array(12).fill(0), "section", { section: "rev-center" }));
+    r.push(row("Revenue by Centre", new Array(12).fill(0), "section", { section: "rev-center" }));
     for (const item of drilldowns.revenueByCenter) {
       r.push(row(item.label, item.values, "data", { section: "rev-center", indent: 1, transactionType: "income" }));
     }
     r.push(row(drilldowns.totalRevenueByCenter.label, drilldowns.totalRevenueByCenter.values, "total"));
-
     r.push({ id: `rev-${idx++}`, label: "", values: new Array(12).fill(0), type: "spacer" });
     r.push(row(pnl.totalRevenue.label, pnl.totalRevenue.values, "total"));
-
     return r;
   }, [drilldowns, pnl]);
 
-  // Stacked bar chart for revenue by center
   const centerNames = drilldowns.revenueByCenter.map((c) => c.label);
   const chartData = months.map((m, mi) => {
     const point: Record<string, string | number> = { month: m };
-    for (const c of drilldowns.revenueByCenter) {
-      point[c.label] = c.values[mi];
-    }
+    for (const c of drilldowns.revenueByCenter) point[c.label] = c.values[mi];
     return point;
   });
 
   return (
     <div className="space-y-6">
-      {/* Stacked Bar Chart */}
       {centerNames.length > 0 && (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Revenue by Centre (Monthly)</CardTitle>
-          </CardHeader>
+          <CardHeader className="pb-2"><CardTitle className="text-base">Revenue by Centre (Monthly)</CardTitle></CardHeader>
           <CardContent>
             <div className="h-[260px]">
               <ResponsiveContainer width="100%" height="100%">
@@ -949,130 +663,67 @@ function RevenueView({
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border/30" />
                   <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 10 }} tickFormatter={formatLakh} axisLine={false} tickLine={false} width={55} />
-                  <Tooltip
-                    formatter={(v: number) => `₹${v.toLocaleString("en-IN")}`}
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: 8,
-                      fontSize: 11,
-                    }}
-                  />
-                  {centerNames.map((name, i) => (
-                    <Bar
-                      key={name}
-                      dataKey={name}
-                      stackId="rev"
-                      fill={CHART_COLORS[i % CHART_COLORS.length]}
-                    />
-                  ))}
+                  <Tooltip formatter={(v: number) => `₹${v.toLocaleString("en-IN")}`} contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 11 }} />
+                  {centerNames.map((name, i) => (<Bar key={name} dataKey={name} stackId="rev" fill={CHART_COLORS[i % CHART_COLORS.length]} />))}
                 </BarChart>
               </ResponsiveContainer>
             </div>
           </CardContent>
         </Card>
       )}
-
-      {/* Table */}
-      <MISTable
-        months={months}
-        fyLabel={report.fyLabel}
-        rows={rows}
-        onCellClick={onCellClick}
-        numberFormat={numberFormat}
-      />
+      <MISTable months={months} fyLabel={report.fyLabel} rows={rows} onCellClick={onCellClick} numberFormat={numberFormat} />
     </div>
   );
 }
 
-// ── Expense View ──
+// ── Expense View (dynamic drilldown tabs from API) ──
 
-const DRILLDOWN_OPTIONS: { value: DrilldownType; label: string }[] = [
-  { value: "marketing", label: "Marketing" },
-  { value: "food", label: "Food" },
-  { value: "electricity", label: "Electricity" },
-  { value: "capex", label: "Capital Expenditure" },
-  { value: "payroll", label: "Payroll" },
-  { value: "other_indirect", label: "Other Indirect" },
-];
-
-function ExpenseView({
-  report,
-  onCellClick,
-  numberFormat,
-  drilldownType,
-  onDrilldownTypeChange,
-}: {
+function ExpenseView({ report, onCellClick, numberFormat, drilldownIdx, onDrilldownIdxChange }: {
   report: MISReport;
   onCellClick: (row: MISRow, monthIdx: number) => void;
   numberFormat: "standard" | "indian";
-  drilldownType: DrilldownType;
-  onDrilldownTypeChange: (t: DrilldownType) => void;
+  drilldownIdx: number;
+  onDrilldownIdxChange: (idx: number) => void;
 }) {
   const { drilldowns, months, fyLabel } = report;
-
-  const selected = useMemo(() => {
-    switch (drilldownType) {
-      case "marketing":
-        return { items: drilldowns.marketingByType, total: drilldowns.totalMarketing };
-      case "food":
-        return { items: drilldowns.foodByCenter, total: drilldowns.totalFood };
-      case "electricity":
-        return { items: drilldowns.electricityByCenter, total: drilldowns.totalElectricity };
-      case "capex":
-        return { items: drilldowns.capexByType, total: drilldowns.totalCapex };
-      case "payroll":
-        return { items: drilldowns.payrollBreakdown, total: drilldowns.totalPayroll };
-      case "other_indirect":
-        return { items: drilldowns.otherIndirect, total: drilldowns.totalOtherIndirect };
-    }
-  }, [drilldowns, drilldownType]);
+  const sections = drilldowns.sections;
+  const safeIdx = Math.min(drilldownIdx, Math.max(sections.length - 1, 0));
+  const selected = sections[safeIdx];
 
   const rows = useMemo<MISRow[]>(() => {
+    if (!selected) return [];
     const r: MISRow[] = [];
     let idx = 0;
-    const row = (label: string, values: number[], type: MISRow["type"], opts?: Partial<MISRow>): MISRow => ({
-      id: `exp-${idx++}`,
-      label,
-      values,
-      fyTotal: values.reduce((a, b) => a + b, 0),
-      type,
-      ...opts,
-    });
+    const row = (label: string, values: number[], type: MISRow["type"], opts?: Partial<MISRow>): MISRow => ({ id: `exp-${idx++}`, label, values, fyTotal: values.reduce((a, b) => a + b, 0), type, ...opts });
 
     for (const item of selected.items) {
-      r.push(row(item.label, item.values, "data", {
-        categorySlug: item.slug ?? slugFromLabel(item.label),
-        transactionType: "expense",
-      }));
+      r.push(row(item.label, item.values, "data", { categorySlug: item.slug, transactionType: "expense" }));
     }
     r.push(row(selected.total.label, selected.total.values, "total"));
-
     return r;
   }, [selected]);
 
-  // Bar chart of breakdown items
-  const barData = selected.items.map((item, i) => ({
+  const barData = selected?.items.map((item, i) => ({
     name: item.label.length > 18 ? item.label.slice(0, 18) + "..." : item.label,
     fullName: item.label,
     value: item.fyTotal,
     fill: CHART_COLORS[i % CHART_COLORS.length],
-  }));
+  })) ?? [];
+
+  if (sections.length === 0) {
+    return <div className="p-8 text-center text-muted-foreground">No expense drilldown categories configured. Set "Drilldown Mode" on expense categories to enable.</div>;
+  }
 
   return (
     <div className="space-y-4">
-      {/* Type Selector */}
-      <Tabs value={drilldownType} onValueChange={(v) => onDrilldownTypeChange(v as DrilldownType)}>
+      <Tabs value={String(safeIdx)} onValueChange={(v) => onDrilldownIdxChange(parseInt(v, 10))}>
         <TabsList className="h-9">
-          {DRILLDOWN_OPTIONS.map((opt) => (
-            <TabsTrigger key={opt.value} value={opt.value} className="text-xs px-3">
-              {opt.label}
-            </TabsTrigger>
+          {sections.map((s, i) => (
+            <TabsTrigger key={s.slug} value={String(i)} className="text-xs px-3">{s.label}</TabsTrigger>
           ))}
         </TabsList>
       </Tabs>
 
-      {/* Bar chart */}
       {barData.length > 0 && (
         <Card>
           <CardContent className="pt-5 pb-4">
@@ -1082,20 +733,9 @@ function ExpenseView({
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border/30" />
                   <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={formatLakh} axisLine={false} tickLine={false} />
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 10 }} width={120} axisLine={false} tickLine={false} />
-                  <Tooltip
-                    formatter={(v: number) => [`₹${v.toLocaleString("en-IN")}`, "Amount"]}
-                    labelFormatter={(_: string, payload: any[]) => payload?.[0]?.payload?.fullName ?? ""}
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: 8,
-                      fontSize: 11,
-                    }}
-                  />
+                  <Tooltip formatter={(v: number) => [`₹${v.toLocaleString("en-IN")}`, "Amount"]} labelFormatter={(_: string, payload: any[]) => payload?.[0]?.payload?.fullName ?? ""} contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 11 }} />
                   <Bar dataKey="value" radius={[0, 4, 4, 0]}>
-                    {barData.map((d, i) => (
-                      <Cell key={i} fill={d.fill} />
-                    ))}
+                    {barData.map((d, i) => (<Cell key={i} fill={d.fill} />))}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
@@ -1104,57 +744,7 @@ function ExpenseView({
         </Card>
       )}
 
-      {/* Table */}
-      <MISTable
-        months={months}
-        fyLabel={fyLabel}
-        rows={rows}
-        onCellClick={onCellClick}
-        numberFormat={numberFormat}
-      />
+      <MISTable months={months} fyLabel={fyLabel} rows={rows} onCellClick={onCellClick} numberFormat={numberFormat} />
     </div>
   );
-}
-
-// ── Helpers ──
-
-// Slug mapping for well-known cashflow/P&L line items
-const LABEL_TO_SLUG: Record<string, string> = {
-  "Medico-Revenue": "medico_revenue",
-  "Academic Income (Including Crash Batch)": "academic_income",
-  "Hostel Income (Including Electricity Charges)": "hostel_income",
-  "Security Deposit Collected": "security_deposit_collected",
-  "Revenue Sharing Income (TIPS)": "revenue_sharing_tips",
-  "Reading Room": "reading_room",
-  "Study Material": "study_material",
-  "Other Income": "other_income",
-  "Rent Expenses": "rent_expenses",
-  "Faculty Payments (Including Medico)": "faculty_payments",
-  "Operating Expenses (Opex)": "operating_expenses",
-  "Employee Benefit Expenses (Salary)": "employee_benefit_expenses",
-  "Advertising Expenses": "advertising_expenses",
-  "Food Expenses (Mess Bill)": "food_expenses_mess_bill",
-  "Commission Charges": "commission_charges",
-  "Security Deposit Refund (SD Refund)": "security_deposit_refund",
-  "Electricity Charges": "electricity_charges",
-  "Bank Charges": "bank_charges",
-  "Income Tax & GST Payment": "income_tax_gst_payment",
-  "Legal Fee": "legal_fee",
-  "TDS Payment": "tds_payment",
-  "Capital Expenditures (Capex)": "capital_expenditures",
-  "Rent Deposit Paid": "rent_deposit_paid",
-  "Rent Deposit Refund": "rent_deposit_refund",
-  "Payroll Expenses": "employee_benefit_expenses",
-  "Marketing Expenses": "advertising_expenses",
-  "Food Expenses": "food_expenses_mess_bill",
-  "Other Indirect Expenses": "operating_expenses",
-};
-
-function slugFromLabel(label: string): string {
-  if (LABEL_TO_SLUG[label]) return LABEL_TO_SLUG[label];
-  return label
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, "")
-    .replace(/\s+/g, "_")
-    .slice(0, 60);
 }

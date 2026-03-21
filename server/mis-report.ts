@@ -1,10 +1,13 @@
 /**
  * MIS Report aggregation engine.
  * Generates Cashflow Statement, P&L, and drill-down breakdowns
- * from existing expense/income data, matching the Excel MIS format.
+ * from existing expense/income data.
+ *
+ * All classification (cashflow section, P&L section, drilldown mode)
+ * is read from category metadata columns -- nothing is hardcoded.
  */
 
-import { eq, and, sql, gte, lte } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import {
   expenses,
@@ -12,12 +15,14 @@ import {
   incomeRecords,
   incomeCategories,
   costCenters,
+  finjoeSettings,
 } from "../shared/schema.js";
 
 // ── Types ──
 
 export interface MISLineItem {
   label: string;
+  slug?: string;
   values: number[];
   fyTotal: number;
 }
@@ -27,6 +32,14 @@ export interface MISDrilldownItem {
   slug: string;
   values: number[];
   fyTotal: number;
+}
+
+export interface MISDrilldownSection {
+  slug: string;
+  label: string;
+  mode: "by_center" | "by_subcategory";
+  items: MISDrilldownItem[];
+  total: MISLineItem;
 }
 
 export interface MISCashflow {
@@ -43,8 +56,7 @@ export interface MISCashflow {
 }
 
 export interface MISPnL {
-  revenueOffline: MISLineItem;
-  revenueMedico: MISLineItem;
+  revenueGroups: MISLineItem[];
   totalRevenue: MISLineItem;
   directExpenses: MISLineItem[];
   totalDirectExpenses: MISLineItem;
@@ -60,23 +72,13 @@ export interface MISPnL {
 export interface MISDrilldown {
   revenueByCenter: MISDrilldownItem[];
   totalRevenueByCenter: MISLineItem;
-  electricityByCenter: MISDrilldownItem[];
-  totalElectricity: MISLineItem;
-  foodByCenter: MISDrilldownItem[];
-  totalFood: MISLineItem;
-  marketingByType: MISDrilldownItem[];
-  totalMarketing: MISLineItem;
-  capexByType: MISDrilldownItem[];
-  totalCapex: MISLineItem;
-  payrollBreakdown: MISDrilldownItem[];
-  totalPayroll: MISLineItem;
-  otherIndirect: MISDrilldownItem[];
-  totalOtherIndirect: MISLineItem;
+  sections: MISDrilldownSection[];
 }
 
 export interface MISReport {
   months: string[];
   fyLabel: string;
+  fyStartMonth: number;
   cashflow: MISCashflow;
   pnl: MISPnL;
   drilldowns: MISDrilldown;
@@ -84,10 +86,9 @@ export interface MISReport {
 
 // ── Helpers ──
 
-const MONTH_LABELS = ["Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar"];
+const ALL_MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 function lastDayOfMonth(year: number, month: number): number {
-  // month is 0-based (0=Jan, 11=Dec)
   return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
 }
 
@@ -95,15 +96,16 @@ function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-function fyMonths(fyStartYear: number): { labels: string[]; startDates: string[]; endDates: string[] } {
+function fyMonths(fyStartYear: number, fyStartMonth: number): { labels: string[]; startDates: string[]; endDates: string[] } {
   const labels: string[] = [];
   const startDates: string[] = [];
   const endDates: string[] = [];
+  const startIdx = fyStartMonth - 1; // 0-based (3 for April)
   for (let i = 0; i < 12; i++) {
-    const month = (3 + i) % 12; // Apr=3, May=4, ..., Mar=2
-    const year = month >= 3 ? fyStartYear : fyStartYear + 1;
+    const month = (startIdx + i) % 12;
+    const year = month >= startIdx ? fyStartYear : fyStartYear + 1;
     const shortYear = String(year).slice(-2);
-    labels.push(`${MONTH_LABELS[i]}'${shortYear}`);
+    labels.push(`${ALL_MONTH_LABELS[month]}'${shortYear}`);
     startDates.push(`${year}-${pad2(month + 1)}-01`);
     const lastDay = lastDayOfMonth(year, month);
     endDates.push(`${year}-${pad2(month + 1)}-${pad2(lastDay)}`);
@@ -111,13 +113,14 @@ function fyMonths(fyStartYear: number): { labels: string[]; startDates: string[]
   return { labels, startDates, endDates };
 }
 
-function monthIndex(date: Date, fyStartYear: number): number {
+function monthIndex(date: Date, fyStartYear: number, fyStartMonth: number): number {
   const m = date.getUTCMonth();
   const y = date.getUTCFullYear();
-  if (m >= 3) {
-    return y === fyStartYear ? m - 3 : -1;
+  const startIdx = fyStartMonth - 1;
+  if (m >= startIdx) {
+    return y === fyStartYear ? m - startIdx : -1;
   } else {
-    return y === fyStartYear + 1 ? m + 9 : -1;
+    return y === fyStartYear + 1 ? m + (12 - startIdx) : -1;
   }
 }
 
@@ -129,8 +132,8 @@ function sumValues(vals: number[]): number {
   return vals.reduce((a, b) => a + b, 0);
 }
 
-function makeLine(label: string, values: number[]): MISLineItem {
-  return { label, values, fyTotal: sumValues(values) };
+function makeLine(label: string, values: number[], slug?: string): MISLineItem {
+  return { label, slug, values, fyTotal: sumValues(values) };
 }
 
 function subtractArrays(a: number[], b: number[]): number[] {
@@ -153,66 +156,90 @@ function pctArray(numerator: number[], denominator: number[]): number[] {
   return numerator.map((n, i) => (denominator[i] !== 0 ? Math.round((n / denominator[i]) * 100) / 100 : 0));
 }
 
-// ── Cashflow categories mapping ──
-// These slugs correspond to the seeded MIS expense categories
-const CASHFLOW_OUTFLOW_SLUGS = [
-  "rent_expenses",
-  "faculty_payments",
-  "operating_expenses",
-  "employee_benefit_expenses",
-  "advertising_expenses",
-  "food_expenses_mess_bill",
-  "commission_charges",
-  "security_deposit_refund",
-  "electricity_charges",
-  "bank_charges",
-  "income_tax_gst_payment",
-  "legal_fee",
-  "tds_payment",
-];
-
-const CASHFLOW_INVESTING_SLUGS = [
-  "capital_expenditures",
-  "rent_deposit_paid",
-  "rent_deposit_refund",
-];
-
-// P&L classification
-const DIRECT_EXPENSE_SLUGS = ["faculty_payments", "rent_expenses"];
-
-const INDIRECT_EXPENSE_MAP: Record<string, string> = {
-  employee_benefit_expenses: "Payroll Expenses",
-  electricity_charges: "Electricity Charges",
-  advertising_expenses: "Marketing Expenses",
-  food_expenses_mess_bill: "Food Expenses",
-};
-
-// Slugs that appear in "Other Indirect Expenses" on the P&L
-const OTHER_INDIRECT_SLUG = "operating_expenses";
-
 // ── Main function ──
 
 export async function getMISReport(tenantId: string, fy: string, throughDate?: string): Promise<MISReport> {
   const [startYearStr] = fy.split("-");
   const fyStartYear = parseInt(startYearStr, 10) + (parseInt(startYearStr, 10) < 100 ? 2000 : 0);
-  const { labels, startDates, endDates } = fyMonths(fyStartYear);
+
+  // Read tenant FY start month from settings (default: April = 4)
+  const [settingsRow] = await db
+    .select({ fyStartMonth: finjoeSettings.fyStartMonth })
+    .from(finjoeSettings)
+    .where(eq(finjoeSettings.tenantId, tenantId))
+    .limit(1);
+  const fyStartMonth = settingsRow?.fyStartMonth ?? 4;
+
+  const { labels, startDates, endDates } = fyMonths(fyStartYear, fyStartMonth);
   const fyStartDate = startDates[0];
   const fyEndDate = endDates[11];
-
   const effectiveEndDate = throughDate && throughDate <= fyEndDate ? throughDate : fyEndDate;
-
   const fyLabel = `FY ${fyStartYear}-${String(fyStartYear + 1).slice(-2)}`;
 
-  // Fetch all expenses in FY with their categories and cost centers
+  // ── Load all category metadata for this tenant ──
+
+  const allExpenseCats = await db
+    .select({
+      id: expenseCategories.id,
+      slug: expenseCategories.slug,
+      name: expenseCategories.name,
+      parentId: expenseCategories.parentId,
+      cashflowSection: expenseCategories.cashflowSection,
+      pnlSection: expenseCategories.pnlSection,
+      drilldownMode: expenseCategories.drilldownMode,
+      misDisplayLabel: expenseCategories.misDisplayLabel,
+      displayOrder: expenseCategories.displayOrder,
+    })
+    .from(expenseCategories)
+    .where(eq(expenseCategories.tenantId, tenantId));
+
+  const allIncomeCats = await db
+    .select({
+      id: incomeCategories.id,
+      slug: incomeCategories.slug,
+      name: incomeCategories.name,
+      misClassification: incomeCategories.misClassification,
+      revenueGroup: incomeCategories.revenueGroup,
+      misDisplayLabel: incomeCategories.misDisplayLabel,
+      displayOrder: incomeCategories.displayOrder,
+    })
+    .from(incomeCategories)
+    .where(eq(incomeCategories.tenantId, tenantId));
+
+  // Build lookup maps
+  const catSlugById = new Map<string, string>();
+  const parentSlugById = new Map<string, string>();
+  const topLevelExpCats = new Map<string, typeof allExpenseCats[0]>();
+
+  for (const c of allExpenseCats) {
+    catSlugById.set(c.id, c.slug);
+    if (!c.parentId) topLevelExpCats.set(c.slug, c);
+  }
+  for (const c of allExpenseCats) {
+    if (c.parentId && catSlugById.has(c.parentId)) {
+      parentSlugById.set(c.id, catSlugById.get(c.parentId)!);
+    }
+  }
+
+  function expLabel(slug: string): string {
+    const cat = topLevelExpCats.get(slug);
+    if (cat) return cat.misDisplayLabel ?? cat.name;
+    return slug.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  function incLabel(cat: typeof allIncomeCats[0]): string {
+    return cat.misDisplayLabel ?? cat.name;
+  }
+
+  // ── Fetch expense and income rows ──
+
   const expenseRows = await db
     .select({
       amount: expenses.amount,
       expenseDate: expenses.expenseDate,
       categorySlug: expenseCategories.slug,
       categoryName: expenseCategories.name,
-      cashflowLabel: expenseCategories.cashflowLabel,
       parentId: expenseCategories.parentId,
-      costCenterId: expenses.costCenterId,
       costCenterName: costCenters.name,
     })
     .from(expenses)
@@ -226,15 +253,12 @@ export async function getMISReport(tenantId: string, fy: string, throughDate?: s
       )
     );
 
-  // Fetch all income in FY with categories and cost centers
   const incomeRows = await db
     .select({
       amount: incomeRecords.amount,
       incomeDate: incomeRecords.incomeDate,
       categorySlug: incomeCategories.slug,
       categoryName: incomeCategories.name,
-      incomeType: incomeCategories.incomeType,
-      costCenterId: incomeRecords.costCenterId,
       costCenterName: costCenters.name,
     })
     .from(incomeRecords)
@@ -248,75 +272,48 @@ export async function getMISReport(tenantId: string, fy: string, throughDate?: s
       )
     );
 
-  // Fetch expense sub-categories (for drill-downs)
-  const subCategoryRows = await db
-    .select({
-      id: expenseCategories.id,
-      slug: expenseCategories.slug,
-      name: expenseCategories.name,
-      parentId: expenseCategories.parentId,
-    })
-    .from(expenseCategories)
-    .where(eq(expenseCategories.tenantId, tenantId));
-
-  const parentSlugById = new Map<string, string>();
-  const catSlugById = new Map<string, string>();
-  for (const sc of subCategoryRows) {
-    catSlugById.set(sc.id, sc.slug);
-  }
-  for (const sc of subCategoryRows) {
-    if (sc.parentId && catSlugById.has(sc.parentId)) {
-      parentSlugById.set(sc.id, catSlugById.get(sc.parentId)!);
-    }
-  }
-
   // ── Build monthly aggregations ──
 
-  // Income by category slug -> monthly values
+  // Income by category slug
   const incomeBySlug = new Map<string, number[]>();
   const incomeByCenterName = new Map<string, number[]>();
+  const incCatLookup = new Map(allIncomeCats.map((c) => [c.slug, c]));
 
   for (const row of incomeRows) {
     if (!row.incomeDate) continue;
     const d = new Date(row.incomeDate);
-    const mi = monthIndex(d, fyStartYear);
+    const mi = monthIndex(d, fyStartYear, fyStartMonth);
     if (mi < 0 || mi > 11) continue;
 
     const slug = row.categorySlug ?? "other_income";
     if (!incomeBySlug.has(slug)) incomeBySlug.set(slug, emptyValues());
     incomeBySlug.get(slug)![mi] += row.amount ?? 0;
 
-    // Revenue by center (for non-medico income)
-    if (slug !== "medico_revenue" && slug !== "other_income") {
+    const cat = incCatLookup.get(slug);
+    if (cat && cat.misClassification === "revenue") {
       const center = row.costCenterName ?? "Unallocated";
       if (!incomeByCenterName.has(center)) incomeByCenterName.set(center, emptyValues());
       incomeByCenterName.get(center)![mi] += row.amount ?? 0;
     }
   }
 
-  // Expenses by category slug -> monthly values
+  // Expenses by top-level slug
   const expenseBySlug = new Map<string, number[]>();
-  // For drill-downs: expenses by parent slug -> child name -> monthly values
   const expenseByParentChild = new Map<string, Map<string, number[]>>();
-  // Expenses by category slug + cost center name
   const expenseByCatCenter = new Map<string, Map<string, number[]>>();
 
   for (const row of expenseRows) {
     if (!row.expenseDate) continue;
     const d = new Date(row.expenseDate);
-    const mi = monthIndex(d, fyStartYear);
+    const mi = monthIndex(d, fyStartYear, fyStartMonth);
     if (mi < 0 || mi > 11) continue;
 
     const slug = row.categorySlug ?? "unknown";
     const amt = row.amount ?? 0;
 
-    // Aggregate to the parent if this is a sub-category
-    const effectiveSlug = row.parentId ? (parentSlugById.get(row.parentId) ?? slug) : slug;
-
-    // Top-level aggregation (use parent slug for roll-up)
-    let topSlug = effectiveSlug;
-    // Check if the slug itself has a parent
-    for (const sc of subCategoryRows) {
+    // Roll up to parent slug
+    let topSlug = slug;
+    for (const sc of allExpenseCats) {
       if (sc.slug === slug && sc.parentId) {
         const pSlug = catSlugById.get(sc.parentId);
         if (pSlug) topSlug = pSlug;
@@ -327,7 +324,6 @@ export async function getMISReport(tenantId: string, fy: string, throughDate?: s
     if (!expenseBySlug.has(topSlug)) expenseBySlug.set(topSlug, emptyValues());
     expenseBySlug.get(topSlug)![mi] += amt;
 
-    // Drill-down: by sub-category under parent
     if (topSlug !== slug) {
       if (!expenseByParentChild.has(topSlug)) expenseByParentChild.set(topSlug, new Map());
       const childMap = expenseByParentChild.get(topSlug)!;
@@ -336,7 +332,6 @@ export async function getMISReport(tenantId: string, fy: string, throughDate?: s
       childMap.get(childName)![mi] += amt;
     }
 
-    // By cost center for specific categories
     const centerName = row.costCenterName ?? "Unallocated";
     if (!expenseByCatCenter.has(topSlug)) expenseByCatCenter.set(topSlug, new Map());
     const ccMap = expenseByCatCenter.get(topSlug)!;
@@ -344,84 +339,65 @@ export async function getMISReport(tenantId: string, fy: string, throughDate?: s
     ccMap.get(centerName)![mi] += amt;
   }
 
-  // ── Build Cashflow Statement ──
+  // ── Build Cashflow Statement (from metadata) ──
 
+  const outflowCats = [...topLevelExpCats.values()]
+    .filter((c) => c.cashflowSection === "operating_outflow")
+    .sort((a, b) => a.displayOrder - b.displayOrder);
+  const investingCats = [...topLevelExpCats.values()]
+    .filter((c) => c.cashflowSection === "investing")
+    .sort((a, b) => a.displayOrder - b.displayOrder);
+  const knownCashflowSlugs = new Set([...outflowCats.map((c) => c.slug), ...investingCats.map((c) => c.slug)]);
+
+  // Inflows from income categories
   const inflowItems: MISLineItem[] = [];
-  const INFLOW_SLUGS = [
-    { slug: "medico_revenue", label: "Medico-Revenue" },
-    { slug: "academic_income", label: "Academic Income (Including Crash Batch)" },
-    { slug: "hostel_income", label: "Hostel Income (Including Electricity Charges)" },
-    { slug: "security_deposit_collected", label: "Security Deposit Collected" },
-    { slug: "revenue_sharing_tips", label: "Revenue Sharing Income (TIPS)" },
-    { slug: "reading_room", label: "Reading Room" },
-    { slug: "other_income", label: "Other Income" },
-    { slug: "study_material", label: "Study Material" },
-  ];
+  const sortedIncomeCats = [...allIncomeCats]
+    .filter((c) => c.misClassification !== "excluded")
+    .sort((a, b) => a.displayOrder - b.displayOrder);
 
-  for (const { slug, label } of INFLOW_SLUGS) {
-    const vals = incomeBySlug.get(slug) ?? emptyValues();
+  for (const cat of sortedIncomeCats) {
+    const vals = incomeBySlug.get(cat.slug) ?? emptyValues();
     if (sumValues(vals) !== 0) {
-      inflowItems.push(makeLine(label, vals));
+      inflowItems.push(makeLine(incLabel(cat), vals, cat.slug));
     }
   }
-
-  // Add any other income categories not in the standard list
+  // Any remaining income slugs not in categories
   for (const [slug, vals] of incomeBySlug) {
-    if (!INFLOW_SLUGS.some((s) => s.slug === slug) && sumValues(vals) !== 0) {
-      inflowItems.push(makeLine(slug, vals));
+    if (!allIncomeCats.some((c) => c.slug === slug) && sumValues(vals) !== 0) {
+      inflowItems.push(makeLine(slug, vals, slug));
     }
   }
 
   const totalIncomeVals = addArrays(...inflowItems.map((i) => i.values));
 
-  // Build slug->name lookup from expense rows for labeling
-  const slugToName = new Map<string, string>();
-  for (const sc of subCategoryRows) {
-    if (!sc.parentId) slugToName.set(sc.slug, sc.name);
-  }
-  for (const row of expenseRows) {
-    if (row.categorySlug && row.categoryName && !slugToName.has(row.categorySlug)) {
-      slugToName.set(row.categorySlug, row.categoryName);
-    }
-  }
-
-  function expenseLabel(slug: string): string {
-    return slugToName.get(slug) ?? slug.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-  }
-
-  const knownCashflowSlugs = new Set([...CASHFLOW_OUTFLOW_SLUGS, ...CASHFLOW_INVESTING_SLUGS]);
-
+  // Outflows
   const outflowItems: MISLineItem[] = [];
-  for (const slug of CASHFLOW_OUTFLOW_SLUGS) {
-    const vals = expenseBySlug.get(slug) ?? emptyValues();
+  for (const cat of outflowCats) {
+    const vals = expenseBySlug.get(cat.slug) ?? emptyValues();
     if (sumValues(vals) !== 0) {
-      outflowItems.push(makeLine(expenseLabel(slug), negateArray(vals)));
+      outflowItems.push(makeLine(expLabel(cat.slug), negateArray(vals), cat.slug));
     }
   }
-  // Include any expense categories NOT in the known MIS lists
+  // Unknown categories default to outflow
   for (const [slug, vals] of expenseBySlug) {
     if (!knownCashflowSlugs.has(slug) && sumValues(vals) !== 0) {
-      outflowItems.push(makeLine(expenseLabel(slug), negateArray(vals)));
+      outflowItems.push(makeLine(expLabel(slug), negateArray(vals), slug));
     }
   }
 
   const totalOutflowVals = addArrays(...outflowItems.map((i) => i.values));
-
   const netOperatingVals = addArrays(totalIncomeVals, totalOutflowVals);
 
   const investingItems: MISLineItem[] = [];
-  for (const slug of CASHFLOW_INVESTING_SLUGS) {
-    const vals = expenseBySlug.get(slug) ?? emptyValues();
+  for (const cat of investingCats) {
+    const vals = expenseBySlug.get(cat.slug) ?? emptyValues();
     if (sumValues(vals) !== 0) {
-      investingItems.push(makeLine(expenseLabel(slug), negateArray(vals)));
+      investingItems.push(makeLine(expLabel(cat.slug), negateArray(vals), cat.slug));
     }
   }
-
   const netInvestingVals = addArrays(...investingItems.map((i) => i.values));
-
   const netCashFlowVals = addArrays(netOperatingVals, netInvestingVals);
 
-  // Opening/closing balance computation (cumulative)
   const openingBalance = emptyValues();
   const closingBalance = emptyValues();
   for (let i = 0; i < 12; i++) {
@@ -429,72 +405,90 @@ export async function getMISReport(tenantId: string, fy: string, throughDate?: s
     closingBalance[i] = openingBalance[i] + netCashFlowVals[i];
   }
 
-  // ── Build P&L ──
+  // ── Build P&L (from metadata) ──
 
-  // Revenue excludes "Other Income" (it's added separately before EBITDA)
-  const revenueMedicoVals = incomeBySlug.get("medico_revenue") ?? emptyValues();
-  const otherIncomeVals = incomeBySlug.get("other_income") ?? emptyValues();
+  // Revenue groups (dynamic from revenue_group column)
+  const otherIncomeSlugs = new Set(
+    allIncomeCats.filter((c) => c.misClassification === "other_income").map((c) => c.slug)
+  );
+  const otherIncomeVals = addArrays(
+    ...[...otherIncomeSlugs].map((s) => incomeBySlug.get(s) ?? emptyValues())
+  );
   const totalRevenueVals = subtractArrays(totalIncomeVals, otherIncomeVals);
-  const revenueOfflineVals = subtractArrays(totalRevenueVals, revenueMedicoVals);
 
-  // Track which expense slugs are accounted for in the P&L
-  const pnlAccountedSlugs = new Set<string>([...DIRECT_EXPENSE_SLUGS, ...Object.keys(INDIRECT_EXPENSE_MAP), OTHER_INDIRECT_SLUG, ...CASHFLOW_INVESTING_SLUGS]);
+  // Build revenue groups by revenue_group value
+  const revGroupMap = new Map<string, number[]>();
+  for (const cat of allIncomeCats) {
+    if (cat.misClassification !== "revenue") continue;
+    const group = cat.revenueGroup ?? "other";
+    const vals = incomeBySlug.get(cat.slug) ?? emptyValues();
+    if (!revGroupMap.has(group)) revGroupMap.set(group, emptyValues());
+    const g = revGroupMap.get(group)!;
+    for (let i = 0; i < 12; i++) g[i] += vals[i];
+  }
 
-  // Direct Expenses
-  const directExpenseItems: MISLineItem[] = [];
-  for (const slug of DIRECT_EXPENSE_SLUGS) {
-    const vals = expenseBySlug.get(slug) ?? emptyValues();
+  const revenueGroups: MISLineItem[] = [];
+  for (const [group, vals] of revGroupMap) {
     if (sumValues(vals) !== 0) {
-      directExpenseItems.push(makeLine(expenseLabel(slug), vals));
+      const label = `Revenue (${group.charAt(0).toUpperCase() + group.slice(1)})`;
+      revenueGroups.push(makeLine(label, vals, group));
+    }
+  }
+
+  // Direct & Indirect expenses from pnl_section metadata
+  const directCats = [...topLevelExpCats.values()]
+    .filter((c) => c.pnlSection === "direct")
+    .sort((a, b) => a.displayOrder - b.displayOrder);
+  const indirectCats = [...topLevelExpCats.values()]
+    .filter((c) => c.pnlSection === "indirect")
+    .sort((a, b) => a.displayOrder - b.displayOrder);
+
+  const pnlAccountedSlugs = new Set([
+    ...directCats.map((c) => c.slug),
+    ...indirectCats.map((c) => c.slug),
+    ...[...topLevelExpCats.values()].filter((c) => c.pnlSection === "excluded").map((c) => c.slug),
+  ]);
+
+  const directExpenseItems: MISLineItem[] = [];
+  for (const cat of directCats) {
+    const vals = expenseBySlug.get(cat.slug) ?? emptyValues();
+    if (sumValues(vals) !== 0) {
+      directExpenseItems.push(makeLine(expLabel(cat.slug), vals, cat.slug));
     }
   }
   const totalDirectVals = addArrays(...directExpenseItems.map((i) => i.values));
 
-  // Gross Profit
   const grossProfitVals = subtractArrays(totalRevenueVals, totalDirectVals);
   const grossProfitPctVals = pctArray(grossProfitVals, totalRevenueVals);
 
-  // Other Income (already computed above as otherIncomeVals)
-
-  // Indirect Expenses
   const indirectExpenseItems: MISLineItem[] = [];
-  for (const [slug, label] of Object.entries(INDIRECT_EXPENSE_MAP)) {
-    const vals = expenseBySlug.get(slug) ?? emptyValues();
+  for (const cat of indirectCats) {
+    const vals = expenseBySlug.get(cat.slug) ?? emptyValues();
     if (sumValues(vals) !== 0) {
-      indirectExpenseItems.push(makeLine(label, vals));
+      indirectExpenseItems.push(makeLine(expLabel(cat.slug), vals, cat.slug));
     }
   }
-  // "Other Indirect Expenses" from operating_expenses slug
-  const otherIndirectVals = expenseBySlug.get(OTHER_INDIRECT_SLUG) ?? emptyValues();
-  if (sumValues(otherIndirectVals) !== 0) {
-    indirectExpenseItems.push(makeLine("Other Indirect Expenses", otherIndirectVals));
-  }
-  // Include any remaining expense categories not yet accounted for
+  // Remaining unclassified categories go to indirect
   for (const [slug, vals] of expenseBySlug) {
     if (!pnlAccountedSlugs.has(slug) && sumValues(vals) !== 0) {
-      indirectExpenseItems.push(makeLine(expenseLabel(slug), vals));
+      indirectExpenseItems.push(makeLine(expLabel(slug), vals, slug));
     }
   }
-
   const totalIndirectVals = addArrays(...indirectExpenseItems.map((i) => i.values));
 
-  // EBITDA
   const ebitdaVals = subtractArrays(
     addArrays(grossProfitVals, otherIncomeVals),
     totalIndirectVals
   );
   const ebitdaPctVals = pctArray(ebitdaVals, totalRevenueVals);
 
-  // ── Build Drill-downs ──
+  // ── Build Drilldowns (from drilldown_mode metadata) ──
 
   function toSlug(label: string): string {
     return label.toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, "_").slice(0, 60);
   }
 
-  function buildDrilldown(
-    source: Map<string, number[]>,
-    totalLabel: string
-  ): { items: MISDrilldownItem[]; total: MISLineItem } {
+  function buildDrilldown(source: Map<string, number[]>, totalLabel: string): { items: MISDrilldownItem[]; total: MISLineItem } {
     const items: MISDrilldownItem[] = [];
     const allVals = emptyValues();
     for (const [label, vals] of source) {
@@ -507,38 +501,43 @@ export async function getMISReport(tenantId: string, fy: string, throughDate?: s
     return { items, total: makeLine(totalLabel, allVals) };
   }
 
-  function buildCenterDrilldown(slug: string, totalLabel: string) {
-    const centers = expenseByCatCenter.get(slug) ?? new Map();
-    return buildDrilldown(centers, totalLabel);
-  }
-
-  function buildSubCatDrilldown(slug: string, totalLabel: string) {
-    const children = expenseByParentChild.get(slug) ?? new Map();
-    // If no sub-categories, use center breakdown
-    if (children.size === 0) {
-      return buildCenterDrilldown(slug, totalLabel);
-    }
-    return buildDrilldown(children, totalLabel);
-  }
-
   // Revenue by center
   const revByCenterResult = buildDrilldown(incomeByCenterName, "Total Revenue from Centres");
 
-  // Electricity, Food by center
-  const elecResult = buildCenterDrilldown("electricity_charges", "Total Electricity Charges");
-  const foodResult = buildCenterDrilldown("food_expenses_mess_bill", "Total Food Expenses");
+  // Dynamic drilldown sections from categories with drilldown_mode != 'none'
+  const drilldownCats = [...topLevelExpCats.values()]
+    .filter((c) => c.drilldownMode !== "none")
+    .sort((a, b) => a.displayOrder - b.displayOrder);
 
-  // Marketing, Capex, Payroll by sub-category
-  const marketingResult = buildSubCatDrilldown("advertising_expenses", "Total Marketing Expenses");
-  const capexResult = buildSubCatDrilldown("capital_expenditures", "Total Capex");
-  const payrollResult = buildSubCatDrilldown("employee_benefit_expenses", "Total Payroll Expenses");
+  const drilldownSections: MISDrilldownSection[] = [];
+  for (const cat of drilldownCats) {
+    const mode = cat.drilldownMode as "by_center" | "by_subcategory";
+    const label = expLabel(cat.slug);
+    let source: Map<string, number[]>;
 
-  // Other Indirect Expenses detailed
-  const otherIndirectResult = buildSubCatDrilldown("operating_expenses", "Total Other Indirect Expenses");
+    if (mode === "by_subcategory") {
+      const children = expenseByParentChild.get(cat.slug) ?? new Map();
+      source = children.size > 0 ? children : (expenseByCatCenter.get(cat.slug) ?? new Map());
+    } else {
+      source = expenseByCatCenter.get(cat.slug) ?? new Map();
+    }
+
+    const result = buildDrilldown(source, `Total ${label}`);
+    if (result.items.length > 0) {
+      drilldownSections.push({
+        slug: cat.slug,
+        label,
+        mode,
+        items: result.items,
+        total: result.total,
+      });
+    }
+  }
 
   return {
     months: labels,
     fyLabel,
+    fyStartMonth,
     cashflow: {
       openingBalance,
       inflows: inflowItems,
@@ -552,8 +551,7 @@ export async function getMISReport(tenantId: string, fy: string, throughDate?: s
       closingBalance,
     },
     pnl: {
-      revenueOffline: makeLine("Revenue (Offline)", revenueOfflineVals),
-      revenueMedico: makeLine("Revenue (Medico)", revenueMedicoVals),
+      revenueGroups,
       totalRevenue: makeLine("Total Revenue", totalRevenueVals),
       directExpenses: directExpenseItems,
       totalDirectExpenses: makeLine("Total Direct Expenses", totalDirectVals),
@@ -568,18 +566,7 @@ export async function getMISReport(tenantId: string, fy: string, throughDate?: s
     drilldowns: {
       revenueByCenter: revByCenterResult.items,
       totalRevenueByCenter: revByCenterResult.total,
-      electricityByCenter: elecResult.items,
-      totalElectricity: elecResult.total,
-      foodByCenter: foodResult.items,
-      totalFood: foodResult.total,
-      marketingByType: marketingResult.items,
-      totalMarketing: marketingResult.total,
-      capexByType: capexResult.items,
-      totalCapex: capexResult.total,
-      payrollBreakdown: payrollResult.items,
-      totalPayroll: payrollResult.total,
-      otherIndirect: otherIndirectResult.items,
-      totalOtherIndirect: otherIndirectResult.total,
+      sections: drilldownSections,
     },
   };
 }
@@ -596,7 +583,15 @@ export async function getMISCellTransactions(
 ) {
   const [startYearStr] = fy.split("-");
   const fyStartYear = parseInt(startYearStr, 10) + (parseInt(startYearStr, 10) < 100 ? 2000 : 0);
-  const { startDates, endDates } = fyMonths(fyStartYear);
+
+  const [settingsRow] = await db
+    .select({ fyStartMonth: finjoeSettings.fyStartMonth })
+    .from(finjoeSettings)
+    .where(eq(finjoeSettings.tenantId, tenantId))
+    .limit(1);
+  const fyStartMonth = settingsRow?.fyStartMonth ?? 4;
+
+  const { startDates, endDates } = fyMonths(fyStartYear, fyStartMonth);
 
   if (monthIdx < 0 || monthIdx > 11) return [];
 
@@ -604,7 +599,6 @@ export async function getMISCellTransactions(
   const monthEnd = endDates[monthIdx];
 
   if (type === "expense") {
-    // Find category ids matching the slug (including sub-categories)
     const cats = await db
       .select({ id: expenseCategories.id, slug: expenseCategories.slug, parentId: expenseCategories.parentId })
       .from(expenseCategories)
@@ -614,7 +608,6 @@ export async function getMISCellTransactions(
     const matchIds = new Set<string>();
     if (targetId) {
       matchIds.add(targetId);
-      // Include sub-categories
       for (const c of cats) {
         if (c.parentId === targetId) matchIds.add(c.id);
       }
@@ -660,7 +653,6 @@ export async function getMISCellTransactions(
       status: r.status,
     }));
   } else {
-    // Income
     const rows = await db
       .select({
         id: incomeRecords.id,

@@ -90,6 +90,10 @@ export const expenseCategories = pgTable("expense_categories", {
   parentId: varchar("parent_id"),
   displayOrder: integer("display_order").notNull().default(0),
   cashflowLabel: text("cashflow_label").notNull(),
+  cashflowSection: text("cashflow_section").notNull().default("operating_outflow"),
+  pnlSection: text("pnl_section").notNull().default("indirect"),
+  drilldownMode: text("drilldown_mode").notNull().default("none"),
+  misDisplayLabel: text("mis_display_label"),
   isActive: boolean("is_active").notNull().default(true),
   createdById: varchar("created_by_id"),
   updatedById: varchar("updated_by_id"),
@@ -323,6 +327,7 @@ export const finjoeSettings = pgTable("finjoe_settings", {
   requireConfirmationBeforePost: boolean("require_confirmation_before_post").default(false),
   requireAuditFieldsAboveAmount: integer("require_audit_fields_above_amount"),
   askOptionalFields: boolean("ask_optional_fields").default(false),
+  fyStartMonth: integer("fy_start_month").notNull().default(4),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
@@ -346,6 +351,9 @@ export const incomeCategories = pgTable("income_categories", {
   name: text("name").notNull(),
   slug: text("slug").notNull(),
   incomeType: text("income_type").notNull().default("other"),
+  misClassification: text("mis_classification").notNull().default("revenue"),
+  revenueGroup: text("revenue_group"),
+  misDisplayLabel: text("mis_display_label"),
   displayOrder: integer("display_order").notNull().default(0),
   isActive: boolean("is_active").notNull().default(true),
   createdById: varchar("created_by_id"),
