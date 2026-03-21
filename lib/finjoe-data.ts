@@ -941,6 +941,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       source?: string;
       recurringTemplateId?: string | null;
       recordedById?: string | null;
+      razorpayPaymentId?: string | null;
     }): Promise<{ id: string } | null> {
       const costCenterIdForDb = data.costCenterId === "__corporate__" || data.costCenterId === "null" ? null : data.costCenterId;
       const [created] = await db
@@ -956,6 +957,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           source: data.source ?? "finjoe",
           recurringTemplateId: data.recurringTemplateId ?? null,
           recordedById: data.recordedById ?? null,
+          razorpayPaymentId: data.razorpayPaymentId ?? null,
         })
         .returning({ id: incomeRecords.id });
       return created ?? null;

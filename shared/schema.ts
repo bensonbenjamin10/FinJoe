@@ -424,6 +424,28 @@ export const incomeRecords = pgTable("income_records", {
   bankTransactionId: varchar("bank_transaction_id").references(() => bankTransactions.id),
   recurringTemplateId: varchar("recurring_template_id"),
   recordedById: varchar("recorded_by_id").references(() => users.id),
+  razorpayPaymentId: varchar("razorpay_payment_id").unique(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Razorpay (or future gateway) checkout orders — links verify → income_records (idempotent by razorpay_payment_id on income)
+export const paymentOrders = pgTable("payment_orders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
+  amountRupees: integer("amount_rupees").notNull(),
+  currency: text("currency").notNull().default("INR"),
+  razorpayOrderId: text("razorpay_order_id").notNull().unique(),
+  status: text("status").notNull().default("created"),
+  paymentType: text("payment_type"),
+  incomeCategoryId: varchar("income_category_id")
+    .notNull()
+    .references(() => incomeCategories.id),
+  costCenterId: varchar("cost_center_id").references(() => costCenters.id),
+  incomeRecordId: varchar("income_record_id").references(() => incomeRecords.id),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -599,6 +621,9 @@ export type IncomeCategory = typeof incomeCategories.$inferSelect;
 export type InsertIncomeCategory = typeof incomeCategories.$inferInsert;
 export type IncomeRecord = typeof incomeRecords.$inferSelect;
 export type InsertIncomeRecord = typeof incomeRecords.$inferInsert;
+
+export type PaymentOrder = typeof paymentOrders.$inferSelect;
+export type InsertPaymentOrder = typeof paymentOrders.$inferInsert;
 
 export type BankTransaction = typeof bankTransactions.$inferSelect;
 export type InsertBankTransaction = typeof bankTransactions.$inferInsert;
