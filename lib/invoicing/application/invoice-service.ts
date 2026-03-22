@@ -8,7 +8,13 @@ import {
   paymentAllocations,
   tenants,
 } from "../../../shared/schema.js";
-import type { CreateCustomerInput, CreateInvoiceInput, InvoiceStatus, TaxCalculationContext } from "../ports/types.js";
+import type {
+  CreateCustomerInput,
+  CreateInvoiceInput,
+  CreateInvoiceLineInput,
+  InvoiceStatus,
+  TaxCalculationContext,
+} from "../ports/types.js";
 import type { TaxCalculationPort } from "../ports/tax-calculation-port.js";
 import { getTaxEngine } from "../ports/tax-regime-registry.js";
 
@@ -421,6 +427,45 @@ export function createInvoiceService(db: InvoicingDb) {
         else newStatus = "issued";
       }
       await db.update(invoices).set({ amountPaid: paid, status: newStatus, updatedAt: new Date() }).where(eq(invoices.id, invoiceId));
+    },
+
+    async previewTax(params: {
+      tenantId: string;
+      customerId: string | null;
+      lines: CreateInvoiceLineInput[];
+    }) {
+      const taxCalc = await resolveTaxCalc(db, params.tenantId);
+      let custGstin: string | null = null;
+      if (params.customerId) {
+        const [cust] = await db
+          .select({ gstin: billingCustomers.gstin })
+          .from(billingCustomers)
+          .where(and(eq(billingCustomers.id, params.customerId), eq(billingCustomers.tenantId, params.tenantId)))
+          .limit(1);
+        custGstin = cust?.gstin ?? null;
+      }
+      const [tenant] = await db
+        .select({ taxRegime: tenants.taxRegime, taxRegimeConfig: tenants.taxRegimeConfig })
+        .from(tenants)
+        .where(eq(tenants.id, params.tenantId))
+        .limit(1);
+      const supplierGstin =
+        typeof tenant?.taxRegimeConfig === "object" && tenant?.taxRegimeConfig
+          ? String((tenant.taxRegimeConfig as Record<string, unknown>).supplierGstin ?? "")
+          : "";
+      const taxContext: TaxCalculationContext = {
+        supplierStateCode:
+          gstinToStateCode(supplierGstin) ??
+          (typeof tenant?.taxRegimeConfig === "object" && tenant?.taxRegimeConfig
+            ? String((tenant.taxRegimeConfig as Record<string, unknown>).supplierStateCode ?? "") || undefined
+            : undefined),
+        customerStateCode: gstinToStateCode(custGstin),
+      };
+      const result = taxCalc.calculate(params.lines, taxContext);
+      return {
+        taxRegime: tenant?.taxRegime ?? "flat_percent",
+        result,
+      };
     },
   };
 }

@@ -44,6 +44,7 @@ import { registerPaymentRoutes } from "./payments-routes.js";
 import { registerInvoicingRoutes } from "./invoicing-routes.js";
 import { seedMISCategoriesForTenant } from "./seed-mis-categories.js";
 import { generateInviteToken, hashInviteToken } from "./invite-tokens.js";
+import { supportedRegimes } from "../lib/invoicing/ports/tax-regime-registry.js";
 import { getMedia } from "../lib/media-storage.js";
 import {
   notifyFinanceForApproval,
@@ -55,6 +56,53 @@ import {
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 const EXPORT_ROW_LIMIT = parseInt(process.env.EXPORT_ROW_LIMIT ?? "10000", 10) || 10000;
+
+const ALLOWED_TAX_REGIMES = new Set(["flat_percent", "gst_in", "vat_ae"]);
+
+function mergeTenantTaxRegimeConfig(
+  existing: Record<string, unknown> | null | undefined,
+  body: { supplierGstin?: unknown; supplierStateCode?: unknown; taxRegimeConfig?: unknown },
+): { config: Record<string, unknown>; error?: string } {
+  const cfg: Record<string, unknown> = {
+    ...(existing && typeof existing === "object" ? { ...existing } : {}),
+  };
+  const applyGstin = (raw: unknown) => {
+    const g = String(raw ?? "").trim().toUpperCase();
+    if (g && !/^[0-9A-Z]{15}$/.test(g)) return "supplierGstin must be 15 alphanumeric characters";
+    if (g) cfg.supplierGstin = g;
+    else delete cfg.supplierGstin;
+    return undefined;
+  };
+  const applyState = (raw: unknown) => {
+    const s = String(raw ?? "").trim();
+    if (s && !/^\d{2}$/.test(s)) {
+      return "supplierStateCode must be a 2-digit state code (e.g. 27 for Maharashtra)";
+    }
+    if (s) cfg.supplierStateCode = s;
+    else delete cfg.supplierStateCode;
+    return undefined;
+  };
+  if (body.taxRegimeConfig !== undefined && typeof body.taxRegimeConfig === "object" && body.taxRegimeConfig !== null) {
+    const p = body.taxRegimeConfig as Record<string, unknown>;
+    if ("supplierGstin" in p) {
+      const err = applyGstin(p.supplierGstin);
+      if (err) return { config: cfg, error: err };
+    }
+    if ("supplierStateCode" in p) {
+      const err = applyState(p.supplierStateCode);
+      if (err) return { config: cfg, error: err };
+    }
+  }
+  if (body.supplierGstin !== undefined) {
+    const err = applyGstin(body.supplierGstin);
+    if (err) return { config: cfg, error: err };
+  }
+  if (body.supplierStateCode !== undefined) {
+    const err = applyState(body.supplierStateCode);
+    if (err) return { config: cfg, error: err };
+  }
+  return { config: cfg };
+}
 const LIST_PAGE_SIZE = 100;
 const LIST_PAGE_SIZE_MAX = 200;
 
@@ -948,6 +996,75 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("FinJoe settings update error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to update settings" });
+    }
+  });
+
+  app.get("/api/admin/tenant/tax-settings", requireTenantStaff, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? (typeof req.query.tenantId === "string" ? req.query.tenantId : null);
+      if (!tid) return res.status(400).json({ error: "tenantId required" });
+      if (user.role !== "super_admin" && tid !== tenantId) return res.status(403).json({ error: "Forbidden" });
+
+      const [t] = await db
+        .select({ taxRegime: tenants.taxRegime, taxRegimeConfig: tenants.taxRegimeConfig })
+        .from(tenants)
+        .where(eq(tenants.id, tid))
+        .limit(1);
+      if (!t) return res.status(404).json({ error: "Tenant not found" });
+      res.json({
+        taxRegime: t.taxRegime,
+        taxRegimeConfig: (t.taxRegimeConfig as Record<string, unknown>) ?? {},
+        supportedRegimes: supportedRegimes(),
+      });
+    } catch (e) {
+      logger.error("Tenant tax settings get error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch tax settings" });
+    }
+  });
+
+  app.patch("/api/admin/tenant/tax-settings", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      if (user.role !== "super_admin" && tid !== tenantId) return res.status(403).json({ error: "Forbidden" });
+
+      const { taxRegime, supplierGstin, supplierStateCode, taxRegimeConfig } = req.body ?? {};
+      const [existing] = await db.select().from(tenants).where(eq(tenants.id, tid)).limit(1);
+      if (!existing) return res.status(404).json({ error: "Tenant not found" });
+
+      const updates: Record<string, unknown> = { updatedAt: new Date(), updatedById: user.id ?? null };
+
+      if (taxRegime !== undefined) {
+        const tr = String(taxRegime);
+        if (!ALLOWED_TAX_REGIMES.has(tr)) return res.status(400).json({ error: "Invalid taxRegime" });
+        updates.taxRegime = tr;
+      }
+
+      if (supplierGstin !== undefined || supplierStateCode !== undefined || taxRegimeConfig !== undefined) {
+        const merged = mergeTenantTaxRegimeConfig(existing.taxRegimeConfig as Record<string, unknown>, {
+          supplierGstin,
+          supplierStateCode,
+          taxRegimeConfig,
+        });
+        if (merged.error) return res.status(400).json({ error: merged.error });
+        updates.taxRegimeConfig = merged.config;
+      }
+
+      const [updated] = await db.update(tenants).set(updates as any).where(eq(tenants.id, tid)).returning();
+      res.json({
+        taxRegime: updated.taxRegime,
+        taxRegimeConfig: (updated.taxRegimeConfig as Record<string, unknown>) ?? {},
+        supportedRegimes: supportedRegimes(),
+      });
+    } catch (e) {
+      logger.error("Tenant tax settings patch error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to update tax settings" });
     }
   });
 
@@ -3887,7 +4004,7 @@ export async function registerRoutes(app: Express) {
 
   app.patch("/api/admin/tenants/:id", requireSuperAdmin, async (req, res) => {
     try {
-      const { name, slug, isActive } = req.body;
+      const { name, slug, isActive, taxRegime, supplierGstin, supplierStateCode, taxRegimeConfig } = req.body;
       const tenantId = req.params.id;
       const [existing] = await db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
       if (!existing) return res.status(404).json({ error: "Tenant not found" });
@@ -3899,6 +4016,20 @@ export async function registerRoutes(app: Express) {
         updates.slug = slugNorm;
       }
       if (isActive !== undefined) updates.isActive = isActive;
+      if (taxRegime !== undefined) {
+        const tr = String(taxRegime);
+        if (!ALLOWED_TAX_REGIMES.has(tr)) return res.status(400).json({ error: "Invalid taxRegime" });
+        updates.taxRegime = tr;
+      }
+      if (supplierGstin !== undefined || supplierStateCode !== undefined || taxRegimeConfig !== undefined) {
+        const merged = mergeTenantTaxRegimeConfig(existing.taxRegimeConfig as Record<string, unknown>, {
+          supplierGstin,
+          supplierStateCode,
+          taxRegimeConfig,
+        });
+        if (merged.error) return res.status(400).json({ error: merged.error });
+        updates.taxRegimeConfig = merged.config;
+      }
       updates.updatedById = req.user?.id || null;
       const [updated] = await db.update(tenants).set(updates as any).where(eq(tenants.id, tenantId)).returning();
       res.json(updated);

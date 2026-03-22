@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Settings, Loader2, Copy, AlertCircle, Mail, MessageSquare, RefreshCw, Plus, Send, ShieldCheck } from "lucide-react";
+import { Settings, Loader2, Copy, AlertCircle, Mail, MessageSquare, RefreshCw, Plus, Send, ShieldCheck, Percent } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
@@ -79,6 +79,26 @@ function getTemplateStatusesQueryKey(tenantId?: string | null) {
   return tenantId ? ["/api/admin/finjoe/template-statuses", tenantId] : ["/api/admin/finjoe/template-statuses"];
 }
 
+function getTaxSettingsQueryKey(tenantId?: string | null) {
+  return tenantId ? ["/api/admin/tenant/tax-settings", tenantId] : ["/api/admin/tenant/tax-settings"];
+}
+
+type TenantTaxSettings = {
+  taxRegime: string;
+  taxRegimeConfig: { supplierGstin?: string; supplierStateCode?: string };
+  supportedRegimes: string[];
+};
+
+const TAX_REGIME_LABELS: Record<string, string> = {
+  flat_percent: "Simple — line tax %",
+  gst_in: "India — GST (CGST/SGST/IGST)",
+  vat_ae: "UAE VAT (reserved — simple line tax until engine ships)",
+};
+
+function taxRegimeSelectOptions(supported: string[] | undefined): string[] {
+  return [...new Set([...(supported ?? []), "flat_percent", "gst_in", "vat_ae"])];
+}
+
 type TemplateStatus = "approved" | "pending" | "rejected" | "paused" | "disabled" | "unsubmitted";
 
 function TemplateStatusBadge({ status }: { status?: TemplateStatus | null }) {
@@ -146,6 +166,35 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
     enabled: !!tenantId && !!provider?.accountSid,
   });
 
+  const taxSettingsQueryKey = getTaxSettingsQueryKey(tenantId);
+  const { data: taxSettings, isLoading: taxSettingsLoading } = useQuery<TenantTaxSettings>({
+    queryKey: taxSettingsQueryKey,
+    queryFn: async () => {
+      const url = tenantId ? `/api/admin/tenant/tax-settings?tenantId=${encodeURIComponent(tenantId)}` : "/api/admin/tenant/tax-settings";
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch tax settings");
+      return res.json();
+    },
+    enabled: !!tenantId,
+    refetchOnWindowFocus: false,
+  });
+
+  const [taxForm, setTaxForm] = useState<{
+    taxRegime: string;
+    supplierGstin: string;
+    supplierStateCode: string;
+  }>({ taxRegime: "flat_percent", supplierGstin: "", supplierStateCode: "" });
+
+  useEffect(() => {
+    if (!taxSettings) return;
+    const cfg = taxSettings.taxRegimeConfig ?? {};
+    setTaxForm({
+      taxRegime: taxSettings.taxRegime,
+      supplierGstin: typeof cfg.supplierGstin === "string" ? cfg.supplierGstin : "",
+      supplierStateCode: typeof cfg.supplierStateCode === "string" ? cfg.supplierStateCode : "",
+    });
+  }, [taxSettings]);
+
   const [templateForm, setTemplateForm] = useState<FinJoeSettings>({});
   const [channelsForm, setChannelsForm] = useState<FinJoeSettings>({});
   const [costCenterForm, setCostCenterForm] = useState<Pick<FinJoeSettings, "costCenterLabel" | "costCenterType">>({});
@@ -172,6 +221,29 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: settingsQueryKey });
       toast({ title: "Settings saved" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const saveTaxSettingsMutation = useMutation({
+    mutationFn: async () => {
+      const body = {
+        tenantId,
+        taxRegime: taxForm.taxRegime,
+        supplierGstin: taxForm.supplierGstin.trim(),
+        supplierStateCode: taxForm.supplierStateCode.trim(),
+      };
+      const res = await apiRequest("PATCH", "/api/admin/tenant/tax-settings", body);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error || "Failed to save tax settings");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: taxSettingsQueryKey });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/invoicing/preview-tax"] });
+      toast({ title: "Tax settings saved" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -522,6 +594,81 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
             {updateSettingsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
             Save Cost Center Settings
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="p-6">
+          <CardTitle className="font-display flex items-center gap-2">
+            <Percent className="h-5 w-5" />
+            Sales tax &amp; invoicing
+          </CardTitle>
+          <CardDescription className="text-base">
+            Controls how tax is calculated on customer invoices. For India GST, set your organization GSTIN (or a 2-digit state code) so intrastate vs interstate (IGST) matches your billing customers&apos; GSTIN.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4 p-6">
+          {taxSettingsLoading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading tax settings…
+            </div>
+          ) : (
+            <>
+              <div className="grid gap-2">
+                <Label>Tax regime</Label>
+                <Select
+                  value={taxForm.taxRegime}
+                  onValueChange={(v) => setTaxForm((f) => ({ ...f, taxRegime: v }))}
+                >
+                  <SelectTrigger className="max-w-md">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {taxRegimeSelectOptions(taxSettings?.supportedRegimes).map((r) => (
+                      <SelectItem key={r} value={r}>
+                        {TAX_REGIME_LABELS[r] ?? r}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="supplier-gstin">Your GSTIN (optional)</Label>
+                <Input
+                  id="supplier-gstin"
+                  placeholder="15-character GSTIN"
+                  maxLength={15}
+                  className="font-mono max-w-md"
+                  value={taxForm.supplierGstin}
+                  onChange={(e) => setTaxForm((f) => ({ ...f, supplierGstin: e.target.value.toUpperCase() }))}
+                />
+                <p className="text-sm text-muted-foreground">
+                  Shown on tax invoices. State for GST split is taken from digits 1–2 of the GSTIN unless you override below.
+                </p>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="supplier-state">Supplier state code (optional override)</Label>
+                <Input
+                  id="supplier-state"
+                  placeholder="e.g. 27"
+                  maxLength={2}
+                  className="font-mono w-24"
+                  value={taxForm.supplierStateCode}
+                  onChange={(e) =>
+                    setTaxForm((f) => ({ ...f, supplierStateCode: e.target.value.replace(/\D/g, "").slice(0, 2) }))
+                  }
+                />
+                <p className="text-sm text-muted-foreground">
+                  Two-digit state code per GST (e.g. 27 Maharashtra). Use only if you do not set a GSTIN or need an explicit override.
+                </p>
+              </div>
+              <Button onClick={() => saveTaxSettingsMutation.mutate()} disabled={saveTaxSettingsMutation.isPending}>
+                {saveTaxSettingsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                Save tax settings
+              </Button>
+            </>
+          )}
         </CardContent>
       </Card>
 

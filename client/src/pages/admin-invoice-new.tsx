@@ -154,16 +154,104 @@ export default function AdminInvoiceNew() {
     [customers, customerId],
   );
 
-  const totals = useMemo(() => {
+  type TaxPreviewResponse = {
+    taxRegime: string;
+    result: {
+      subtotal: number;
+      taxAmount: number;
+      total: number;
+      lineTotals: number[];
+      taxBreakdown?: { code: string; label: string; rate: number; amount: number }[];
+    };
+  };
+
+  const previewPayload = useMemo(() => {
+    if (!tenantId) return null;
+    const payloadLines: {
+      description: string;
+      quantity: number;
+      unitAmount: number;
+      taxRate?: number;
+      hsnCode?: string;
+    }[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const desc = line.description.trim();
+      if (!desc) return null;
+      const quantity = parseNum(line.quantity);
+      const unitAmount = parseNum(line.unitAmount);
+      const taxRate = parseNum(line.taxRate) ?? 0;
+      if (quantity === null || quantity <= 0) return null;
+      if (unitAmount === null || unitAmount <= 0) return null;
+      payloadLines.push({
+        description: desc,
+        quantity,
+        unitAmount,
+        taxRate: taxRate > 0 ? taxRate : undefined,
+        hsnCode: line.hsnCode.trim() || undefined,
+      });
+    }
+    return {
+      tenantId,
+      customerId: customerId || null,
+      lines: payloadLines,
+    };
+  }, [tenantId, customerId, lines]);
+
+  const previewQueryKey = useMemo(
+    () =>
+      previewPayload
+        ? (["/api/admin/invoicing/preview-tax", JSON.stringify(previewPayload)] as const)
+        : (["/api/admin/invoicing/preview-tax", "disabled"] as const),
+    [previewPayload],
+  );
+
+  const { data: taxPreview, isFetching: taxPreviewLoading } = useQuery<TaxPreviewResponse>({
+    queryKey: previewQueryKey,
+    queryFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/invoicing/preview-tax", previewPayload);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error || "Tax preview failed");
+      }
+      return res.json();
+    },
+    enabled: !!previewPayload,
+  });
+
+  const displayTotals = useMemo(() => {
+    if (
+      taxPreview?.result &&
+      Array.isArray(taxPreview.result.lineTotals) &&
+      taxPreview.result.lineTotals.length === lines.length
+    ) {
+      return {
+        subtotal: taxPreview.result.subtotal,
+        tax: taxPreview.result.taxAmount,
+        total: taxPreview.result.total,
+        lineTotals: taxPreview.result.lineTotals,
+        taxBreakdown: taxPreview.result.taxBreakdown,
+        taxRegime: taxPreview.taxRegime,
+      };
+    }
     let subtotal = 0;
     let tax = 0;
+    const lineTotals: number[] = [];
     for (const line of lines) {
-      const { sub, tax: lt } = calcLineParts(line.quantity, line.unitAmount, line.taxRate);
+      const { sub, tax: lt, total } = calcLineParts(line.quantity, line.unitAmount, line.taxRate);
       subtotal += sub;
       tax += lt;
+      lineTotals.push(total);
     }
-    return { subtotal, tax, total: subtotal + tax };
-  }, [lines]);
+    return {
+      subtotal,
+      tax,
+      total: subtotal + tax,
+      lineTotals,
+      taxBreakdown: undefined as TaxPreviewResponse["result"]["taxBreakdown"],
+      taxRegime: undefined as string | undefined,
+    };
+  }, [taxPreview, lines]);
 
   const createCustomerMutation = useMutation({
     mutationFn: async (body: { tenantId: string; name: string; email?: string; phone?: string }) => {
@@ -489,7 +577,8 @@ export default function AdminInvoiceNew() {
                 </TableHeader>
                 <TableBody>
                   {lines.map((line, idx) => {
-                    const { total: lineTotal } = calcLineParts(line.quantity, line.unitAmount, line.taxRate);
+                    const fallback = calcLineParts(line.quantity, line.unitAmount, line.taxRate);
+                    const lineTotal = displayTotals.lineTotals[idx] ?? fallback.total;
                     return (
                       <TableRow key={line.key}>
                         <TableCell>
@@ -585,20 +674,39 @@ export default function AdminInvoiceNew() {
 
         <Card className="h-fit lg:sticky lg:top-4">
           <CardHeader>
-            <CardTitle className="text-base">Totals</CardTitle>
+            <CardTitle className="text-base flex items-center gap-2">
+              Totals
+              {taxPreviewLoading && previewPayload ? (
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden />
+              ) : null}
+            </CardTitle>
+            {displayTotals.taxRegime === "gst_in" ? (
+              <p className="text-xs text-muted-foreground font-normal">India GST preview (CGST/SGST/IGST) matches saved invoice.</p>
+            ) : null}
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <div className="flex justify-between gap-4">
               <span className="text-muted-foreground">Subtotal</span>
-              <span className="font-medium tabular-nums">{formatInr(totals.subtotal)}</span>
+              <span className="font-medium tabular-nums">{formatInr(displayTotals.subtotal)}</span>
             </div>
-            <div className="flex justify-between gap-4">
-              <span className="text-muted-foreground">Tax</span>
-              <span className="font-medium tabular-nums">{formatInr(totals.tax)}</span>
-            </div>
+            {displayTotals.taxBreakdown?.length ? (
+              <div className="space-y-1 pl-1 border-l-2 border-muted">
+                {displayTotals.taxBreakdown.map((tb, i) => (
+                  <div key={`${tb.code}-${i}`} className="flex justify-between gap-4 text-xs">
+                    <span className="text-muted-foreground">{tb.label}</span>
+                    <span className="font-medium tabular-nums">{formatInr(tb.amount)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex justify-between gap-4">
+                <span className="text-muted-foreground">Tax</span>
+                <span className="font-medium tabular-nums">{formatInr(displayTotals.tax)}</span>
+              </div>
+            )}
             <div className="flex justify-between gap-4 border-t pt-3 text-base font-semibold">
               <span>Total</span>
-              <span className="tabular-nums">{formatInr(totals.total)}</span>
+              <span className="tabular-nums">{formatInr(displayTotals.total)}</span>
             </div>
             <div className="flex flex-col gap-2 pt-2">
               <Button

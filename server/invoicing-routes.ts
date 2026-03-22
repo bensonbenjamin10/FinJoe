@@ -3,6 +3,7 @@ import { eq, and } from "drizzle-orm";
 import { db } from "./db.js";
 import { logger } from "./logger.js";
 import { requireTenantStaff, getTenantId } from "./auth.js";
+import type { CreateInvoiceLineInput } from "../lib/invoicing/ports/types.js";
 import { createInvoiceService } from "../lib/invoicing/application/invoice-service.js";
 import { createPaymentAllocationService } from "../lib/invoicing/application/payment-allocation-service.js";
 import { createAgingReportService } from "../lib/invoicing/application/aging-report-service.js";
@@ -137,6 +138,44 @@ export function registerInvoicingRoutes(app: Express) {
     } catch (e) {
       logger.error("Get invoice error", { err: String(e) });
       res.status(500).json({ error: "Failed to fetch invoice" });
+    }
+  });
+
+  app.post("/api/admin/invoicing/preview-tax", requireTenantStaff, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      const tid = tenantId ?? req.body?.tenantId;
+      if (user.role !== "super_admin" && !tid) return res.status(403).json({ error: "Tenant context required" });
+      if (!tid) return res.status(400).json({ error: "tenantId required" });
+      const { customerId, lines } = req.body ?? {};
+      if (!Array.isArray(lines) || lines.length === 0) {
+        return res.status(400).json({ error: "At least one line item required" });
+      }
+      const normalized: CreateInvoiceLineInput[] = [];
+      for (const l of lines) {
+        if (!l?.description?.trim()) return res.status(400).json({ error: "Line description required" });
+        if (typeof l.unitAmount !== "number" || l.unitAmount <= 0) {
+          return res.status(400).json({ error: "Line unit amount must be positive" });
+        }
+        if (typeof l.quantity !== "number" || l.quantity <= 0) {
+          return res.status(400).json({ error: "Line quantity must be positive" });
+        }
+        const taxRate = typeof l.taxRate === "number" && l.taxRate > 0 ? l.taxRate : 0;
+        normalized.push({
+          description: String(l.description).trim(),
+          quantity: l.quantity,
+          unitAmount: Math.round(l.unitAmount),
+          taxRate: taxRate > 0 ? taxRate : undefined,
+          hsnCode: l.hsnCode ? String(l.hsnCode).trim() || null : null,
+        });
+      }
+      const cid = typeof customerId === "string" && customerId ? customerId : null;
+      const out = await invoiceSvc.previewTax({ tenantId: tid, customerId: cid, lines: normalized });
+      res.json(out);
+    } catch (e) {
+      logger.error("Preview tax error", { err: String(e) });
+      res.status(500).json({ error: "Failed to preview tax" });
     }
   });
 
