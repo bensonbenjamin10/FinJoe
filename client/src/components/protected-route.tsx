@@ -12,7 +12,7 @@ interface ProtectedRouteProps {
 }
 
 export function ProtectedRoute({ children, requireAdmin = false, requireRoles }: ProtectedRouteProps) {
-  const { user, isLoading, isAuthenticated, isAdmin } = useAuth();
+  const { user, isLoading, isAuthenticated, isAdmin, isTenantStaff } = useAuth();
   const [, setLocation] = useLocation();
 
   const hasRequiredRole = requireRoles
@@ -24,10 +24,12 @@ export function ProtectedRoute({ children, requireAdmin = false, requireRoles }:
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
       setLocation("/login");
+    } else if (!isLoading && isAuthenticated && !requireAdmin && !requireRoles && !isTenantStaff) {
+      setLocation("/login");
     } else if (!isLoading && (requireAdmin || requireRoles) && !hasRequiredRole) {
-      setLocation(isAuthenticated ? "/admin/finjoe" : "/login");
+      setLocation(isAuthenticated ? "/admin/dashboard" : "/login");
     }
-  }, [isLoading, isAuthenticated, hasRequiredRole, requireAdmin, requireRoles, setLocation]);
+  }, [isLoading, isAuthenticated, hasRequiredRole, requireAdmin, requireRoles, isTenantStaff, setLocation]);
 
   if (isLoading) {
     return (
@@ -43,6 +45,10 @@ export function ProtectedRoute({ children, requireAdmin = false, requireRoles }:
   }
 
   if (!isAuthenticated) {
+    return null;
+  }
+
+  if (isAuthenticated && !requireAdmin && !requireRoles && !isTenantStaff) {
     return null;
   }
 

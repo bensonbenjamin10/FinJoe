@@ -77,6 +77,8 @@ export const users = pgTable("users", {
   role: text("role").notNull().default("admin"),
   costCenterId: varchar("cost_center_id").references(() => costCenters.id),
   isActive: boolean("is_active").notNull().default(true),
+  inviteTokenHash: text("invite_token_hash"),
+  inviteTokenExpiresAt: timestamp("invite_token_expires_at"),
   createdById: varchar("created_by_id"),
   updatedById: varchar("updated_by_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

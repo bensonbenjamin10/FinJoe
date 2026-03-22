@@ -1,11 +1,12 @@
 import express, { type Express } from "express";
+import crypto from "node:crypto";
 import multer from "multer";
 import passport from "passport";
 import { eq, and, desc, or, sql, inArray, isNull, gte, lte, aliasedTable } from "drizzle-orm";
 import { db, pool } from "./db.js";
 import { parseBankStatementCsv, isValidDateString } from "../lib/bank-statement-parser.js";
 import { analyzeImportSuggestions } from "../lib/import-analyzer.js";
-import { hashPassword, requireAdmin, requireSuperAdmin, getTenantId } from "./auth.js";
+import { hashPassword, requireAdmin, requireTenantStaff, requireApprover, requireSuperAdmin, getTenantId } from "./auth.js";
 import { logger } from "./logger.js";
 import {
   tenants,
@@ -42,6 +43,7 @@ import { getMISReport, getMISCellTransactions } from "./mis-report.js";
 import { registerPaymentRoutes } from "./payments-routes.js";
 import { registerInvoicingRoutes } from "./invoicing-routes.js";
 import { seedMISCategoriesForTenant } from "./seed-mis-categories.js";
+import { generateInviteToken, hashInviteToken } from "./invite-tokens.js";
 import { getMedia } from "../lib/media-storage.js";
 import {
   notifyFinanceForApproval,
@@ -99,7 +101,7 @@ export async function registerRoutes(app: Express) {
 
   app.get("/api/auth/me", (req, res) => {
     if (!req.isAuthenticated()) return res.status(401).json({ error: "Not authenticated" });
-    const { passwordHash, ...u } = req.user as any;
+    const { passwordHash, inviteTokenHash, inviteTokenExpiresAt, ...u } = req.user as any;
     res.json(u);
   });
 
@@ -240,6 +242,68 @@ export async function registerRoutes(app: Express) {
     }
   });
 
+  const publicAppOrigin = () =>
+    (process.env.PUBLIC_APP_URL || process.env.APP_ORIGIN || "http://localhost:5173").replace(/\/$/, "");
+
+  const TENANT_USER_ROLES = ["admin", "finance", "campus_coordinator", "head_office"] as const;
+
+  app.get("/api/auth/invite/validate", async (req, res) => {
+    try {
+      const token = typeof req.query?.token === "string" ? req.query.token : "";
+      if (!token || token.length < 16) return res.status(400).json({ valid: false, error: "Invalid token" });
+      const hash = hashInviteToken(token);
+      const [row] = await db
+        .select({ id: users.id, email: users.email, inviteTokenExpiresAt: users.inviteTokenExpiresAt })
+        .from(users)
+        .where(eq(users.inviteTokenHash, hash))
+        .limit(1);
+      if (!row?.inviteTokenExpiresAt || row.inviteTokenExpiresAt < new Date()) {
+        return res.json({ valid: false, error: "Expired or invalid link" });
+      }
+      res.json({ valid: true, email: row.email });
+    } catch (e) {
+      logger.error("Invite validate error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ valid: false, error: "Validation failed" });
+    }
+  });
+
+  app.post("/api/auth/invite/accept", async (req, res) => {
+    try {
+      const { token, password } = req.body || {};
+      if (!token || typeof token !== "string" || !password || typeof password !== "string") {
+        return res.status(400).json({ error: "token and password required" });
+      }
+      if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+      const hash = hashInviteToken(token);
+      const [row] = await db.select().from(users).where(eq(users.inviteTokenHash, hash)).limit(1);
+      if (!row || !row.inviteTokenExpiresAt || row.inviteTokenExpiresAt < new Date()) {
+        return res.status(400).json({ error: "Invalid or expired invitation" });
+      }
+      const [updated] = await db
+        .update(users)
+        .set({
+          passwordHash: await hashPassword(password),
+          inviteTokenHash: null,
+          inviteTokenExpiresAt: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, row.id))
+        .returning();
+      if (!updated) return res.status(500).json({ error: "Failed to update account" });
+      req.login(updated, (loginErr) => {
+        if (loginErr) {
+          logger.error("Login after invite accept failed", { requestId: req.requestId, err: String(loginErr) });
+          return res.status(201).json({ success: true, loginFailed: true });
+        }
+        const { passwordHash, inviteTokenHash: _h, inviteTokenExpiresAt: _e, ...u } = updated as any;
+        res.status(201).json(u);
+      });
+    } catch (e) {
+      logger.error("Invite accept error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to complete invitation" });
+    }
+  });
+
   app.get("/api/cost-centers", async (req, res) => {
     try {
       const q = req.query?.tenantId;
@@ -274,7 +338,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/cost-centers", requireAdmin, async (req, res) => {
+  app.get("/api/admin/cost-centers", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req) ?? req.query?.tenantId;
       const user = req.user as Express.User;
@@ -382,7 +446,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/users", requireAdmin, async (req, res) => {
+  app.get("/api/admin/users", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -536,7 +600,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/finjoe/role-requests", requireAdmin, async (req, res) => {
+  app.get("/api/admin/finjoe/role-requests", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -570,7 +634,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/finjoe/role-requests/:id/approve", requireAdmin, async (req, res) => {
+  app.post("/api/admin/finjoe/role-requests/:id/approve", requireApprover, async (req, res) => {
     try {
       let tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -602,7 +666,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/finjoe/role-requests/:id/reject", requireAdmin, async (req, res) => {
+  app.post("/api/admin/finjoe/role-requests/:id/reject", requireApprover, async (req, res) => {
     try {
       let tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -636,7 +700,7 @@ export async function registerRoutes(app: Express) {
   });
 
   // Message and media lookup APIs (proof of transactions)
-  app.get("/api/admin/conversations/:id/messages", requireAdmin, async (req, res) => {
+  app.get("/api/admin/conversations/:id/messages", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -697,7 +761,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/media/:id", requireAdmin, async (req, res) => {
+  app.get("/api/admin/media/:id", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -742,7 +806,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/expenses/:id/media", requireAdmin, async (req, res) => {
+  app.get("/api/admin/expenses/:id/media", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -776,7 +840,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/messages/search", requireAdmin, async (req, res) => {
+  app.get("/api/admin/messages/search", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req) ?? (typeof req.query.tenantId === "string" ? req.query.tenantId : null);
       const user = req.user as Express.User;
@@ -818,7 +882,7 @@ export async function registerRoutes(app: Express) {
   });
 
   // FinJoe settings (template SIDs)
-  app.get("/api/admin/finjoe/settings", requireAdmin, async (req, res) => {
+  app.get("/api/admin/finjoe/settings", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -973,7 +1037,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/finjoe/template-statuses", requireAdmin, async (req, res) => {
+  app.get("/api/admin/finjoe/template-statuses", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -1084,7 +1148,7 @@ export async function registerRoutes(app: Express) {
   });
 
   // WhatsApp provider credentials (Twilio)
-  app.get("/api/admin/finjoe/whatsapp-provider", requireAdmin, async (req, res) => {
+  app.get("/api/admin/finjoe/whatsapp-provider", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -1154,7 +1218,7 @@ export async function registerRoutes(app: Express) {
   });
 
   // Income categories
-  app.get("/api/admin/income-categories", requireAdmin, async (req, res) => {
+  app.get("/api/admin/income-categories", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -1254,7 +1318,7 @@ export async function registerRoutes(app: Express) {
   });
 
   // Income types (tenant-configurable)
-  app.get("/api/admin/income-types", requireAdmin, async (req, res) => {
+  app.get("/api/admin/income-types", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -1367,7 +1431,7 @@ export async function registerRoutes(app: Express) {
   });
 
   // Income records
-  app.get("/api/admin/income", requireAdmin, async (req, res) => {
+  app.get("/api/admin/income", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -1440,7 +1504,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/income", requireAdmin, async (req, res) => {
+  app.post("/api/admin/income", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -1472,7 +1536,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.patch("/api/admin/income/:id", requireAdmin, async (req, res) => {
+  app.patch("/api/admin/income/:id", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -1520,7 +1584,7 @@ export async function registerRoutes(app: Express) {
     return { startDate, endDate };
   }
 
-  app.get("/api/admin/reconciliation/summary", requireAdmin, async (req, res) => {
+  app.get("/api/admin/reconciliation/summary", requireTenantStaff, async (req, res) => {
     try {
       const tid = reconTenantId(req, res); if (!tid) return;
       const dates = reconDateRange(req, res); if (!dates) return;
@@ -1574,7 +1638,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/reconciliation/bank-transactions", requireAdmin, async (req, res) => {
+  app.get("/api/admin/reconciliation/bank-transactions", requireTenantStaff, async (req, res) => {
     try {
       const tid = reconTenantId(req, res); if (!tid) return;
       const dates = reconDateRange(req, res); if (!dates) return;
@@ -1626,7 +1690,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/reconciliation/unmatched-expenses", requireAdmin, async (req, res) => {
+  app.get("/api/admin/reconciliation/unmatched-expenses", requireTenantStaff, async (req, res) => {
     try {
       const tid = reconTenantId(req, res); if (!tid) return;
       const dates = reconDateRange(req, res); if (!dates) return;
@@ -1668,7 +1732,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/reconciliation/unmatched-income", requireAdmin, async (req, res) => {
+  app.get("/api/admin/reconciliation/unmatched-income", requireTenantStaff, async (req, res) => {
     try {
       const tid = reconTenantId(req, res); if (!tid) return;
       const dates = reconDateRange(req, res); if (!dates) return;
@@ -1706,7 +1770,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/reconciliation/auto-match", requireAdmin, async (req, res) => {
+  app.post("/api/admin/reconciliation/auto-match", requireTenantStaff, async (req, res) => {
     try {
       const tid = reconTenantId(req, res); if (!tid) return;
       const dates = reconDateRange(req, res); if (!dates) return;
@@ -1863,7 +1927,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/reconciliation/ai-suggest", requireAdmin, async (req, res) => {
+  app.post("/api/admin/reconciliation/ai-suggest", requireTenantStaff, async (req, res) => {
     try {
       const tid = reconTenantId(req, res); if (!tid) return;
       const dates = reconDateRange(req, res); if (!dates) return;
@@ -1928,7 +1992,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/reconciliation/match", requireAdmin, async (req, res) => {
+  app.post("/api/admin/reconciliation/match", requireTenantStaff, async (req, res) => {
     try {
       const tid = reconTenantId(req, res); if (!tid) return;
       const { bankTransactionId: btId, expenseId: eId, incomeId: iId } = req.body;
@@ -1963,7 +2027,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/reconciliation/unmatch", requireAdmin, async (req, res) => {
+  app.post("/api/admin/reconciliation/unmatch", requireTenantStaff, async (req, res) => {
     try {
       const tid = reconTenantId(req, res); if (!tid) return;
       const { bankTransactionId: btId } = req.body;
@@ -1996,7 +2060,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/reconciliation/import", requireAdmin, upload.single("file"), async (req, res) => {
+  app.post("/api/admin/reconciliation/import", requireTenantStaff, upload.single("file"), async (req, res) => {
     try {
       const tid = reconTenantId(req, res); if (!tid) return;
       const file = (req as any).file;
@@ -2058,7 +2122,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/analytics", requireAdmin, async (req, res) => {
+  app.get("/api/admin/analytics", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -2093,7 +2157,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/analytics/insights", requireAdmin, async (req, res) => {
+  app.get("/api/admin/analytics/insights", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -2138,7 +2202,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/analytics/predictions", requireAdmin, async (req, res) => {
+  app.get("/api/admin/analytics/predictions", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -2168,7 +2232,7 @@ export async function registerRoutes(app: Express) {
 
   // ── MIS Reports ──
 
-  app.get("/api/admin/mis/report", requireAdmin, async (req, res) => {
+  app.get("/api/admin/mis/report", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -2187,7 +2251,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/mis/transactions", requireAdmin, async (req, res) => {
+  app.get("/api/admin/mis/transactions", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -2210,7 +2274,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/mis/export", requireAdmin, async (req, res) => {
+  app.get("/api/admin/mis/export", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -2319,7 +2383,7 @@ export async function registerRoutes(app: Express) {
   });
 
   // Expense categories
-  app.get("/api/admin/expense-categories", requireAdmin, async (req, res) => {
+  app.get("/api/admin/expense-categories", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -2474,7 +2538,7 @@ export async function registerRoutes(app: Express) {
   });
 
   // Recurring expense templates
-  app.get("/api/admin/recurring-templates", requireAdmin, async (req, res) => {
+  app.get("/api/admin/recurring-templates", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -2589,7 +2653,7 @@ export async function registerRoutes(app: Express) {
   });
 
   // Recurring income templates
-  app.get("/api/admin/recurring-income-templates", requireAdmin, async (req, res) => {
+  app.get("/api/admin/recurring-income-templates", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -2860,7 +2924,7 @@ export async function registerRoutes(app: Express) {
   }
 
   // Expense/Income import from bank statement CSV
-  app.post("/api/admin/expenses/import/preview", requireAdmin, upload.single("file"), async (req, res) => {
+  app.post("/api/admin/expenses/import/preview", requireTenantStaff, upload.single("file"), async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -2909,7 +2973,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/expenses/import/analyze", requireAdmin, upload.single("file"), async (req, res) => {
+  app.post("/api/admin/expenses/import/analyze", requireTenantStaff, upload.single("file"), async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -3008,7 +3072,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/expenses/import/execute", requireAdmin, upload.single("file"), async (req, res) => {
+  app.post("/api/admin/expenses/import/execute", requireApprover, upload.single("file"), async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -3208,7 +3272,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/expenses/import/template", requireAdmin, async (req, res) => {
+  app.get("/api/admin/expenses/import/template", requireTenantStaff, async (req, res) => {
     try {
       const csv = "Date,Particulars,Withdrawals,Deposits,A/C,Major Head,Branch\n01-01-2025,Sample payment,1000,0,,,HO\n02-01-2025,Sample deposit,0,5000,,,HO";
       res.setHeader("Content-Type", "text/csv");
@@ -3221,7 +3285,7 @@ export async function registerRoutes(app: Express) {
   });
 
   // Expenses
-  app.get("/api/admin/expenses/vendor-suggestions", requireAdmin, async (req, res) => {
+  app.get("/api/admin/expenses/vendor-suggestions", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -3236,7 +3300,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/expenses", requireAdmin, async (req, res) => {
+  app.get("/api/admin/expenses", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -3324,7 +3388,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/expenses/export", requireAdmin, async (req, res) => {
+  app.get("/api/admin/expenses/export", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -3398,7 +3462,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/expenses/export/detailed", requireAdmin, async (req, res) => {
+  app.get("/api/admin/expenses/export/detailed", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -3497,7 +3561,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/expenses", requireAdmin, async (req, res) => {
+  app.post("/api/admin/expenses", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -3534,7 +3598,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.patch("/api/admin/expenses/:id", requireAdmin, async (req, res) => {
+  app.patch("/api/admin/expenses/:id", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -3586,7 +3650,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/expenses/:id/submit", requireAdmin, async (req, res) => {
+  app.post("/api/admin/expenses/:id/submit", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -3631,7 +3695,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/expenses/:id/approve", requireAdmin, async (req, res) => {
+  app.post("/api/admin/expenses/:id/approve", requireApprover, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -3657,7 +3721,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/expenses/:id/reject", requireAdmin, async (req, res) => {
+  app.post("/api/admin/expenses/:id/reject", requireApprover, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -3684,7 +3748,7 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/expenses/:id/payout", requireAdmin, async (req, res) => {
+  app.post("/api/admin/expenses/:id/payout", requireApprover, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -3943,6 +4007,197 @@ export async function registerRoutes(app: Express) {
       if (e?.code === "23505") return res.status(400).json({ error: "Email already in use" });
       logger.error("User update error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to update user" });
+    }
+  });
+
+  async function sendInviteEmailToUser(tenantId: string, toEmail: string, rawToken: string, requestId?: string) {
+    const base = publicAppOrigin();
+    const inviteUrl = `${base}/accept-invite?token=${encodeURIComponent(rawToken)}`;
+    const html = `<p>You have been invited to FinJoe.</p><p><a href="${inviteUrl}">Set your password and sign in</a></p><p>This link expires in 7 days. If you did not expect this email, you can ignore it.</p>`;
+    const ok = await sendFinJoeEmail([toEmail], "You're invited to FinJoe", html, { tenantId }, requestId);
+    return { ok, inviteUrl };
+  }
+
+  app.get("/api/admin/tenant-users", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req) ?? (typeof req.query?.tenantId === "string" ? req.query.tenantId : null);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+      const rows = await db
+        .select({
+          id: users.id,
+          email: users.email,
+          name: users.name,
+          role: users.role,
+          isActive: users.isActive,
+          costCenterId: users.costCenterId,
+          createdAt: users.createdAt,
+          inviteTokenExpiresAt: users.inviteTokenExpiresAt,
+        })
+        .from(users)
+        .where(eq(users.tenantId, tenantId))
+        .orderBy(users.name);
+      const now = new Date();
+      res.json(
+        rows.map(({ inviteTokenExpiresAt, ...r }) => ({
+          ...r,
+          invitePending: !!(inviteTokenExpiresAt && inviteTokenExpiresAt > now),
+        }))
+      );
+    } catch (e) {
+      logger.error("Tenant users list error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch users" });
+    }
+  });
+
+  app.post("/api/admin/tenant-users", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req) ?? req.body?.tenantId;
+      const actor = req.user as Express.User;
+      if (actor.role !== "super_admin" && !tenantId) return res.status(400).json({ error: "tenantId required" });
+      if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+
+      const { email, name, role, costCenterId, password, sendInvite } = req.body || {};
+      if (!email || !name || !role) return res.status(400).json({ error: "email, name, and role required" });
+      const roleNorm = String(role).trim();
+      if (!TENANT_USER_ROLES.includes(roleNorm as (typeof TENANT_USER_ROLES)[number])) {
+        return res.status(400).json({ error: `role must be one of: ${TENANT_USER_ROLES.join(", ")}` });
+      }
+      const emailLower = String(email).toLowerCase().trim();
+      const doInvite = sendInvite === true || sendInvite === "true";
+      if (!doInvite && (!password || String(password).length < 8)) {
+        return res.status(400).json({ error: "password required (min 8 chars) or set sendInvite: true" });
+      }
+
+      const [dup] = await db.select({ id: users.id }).from(users).where(eq(users.email, emailLower)).limit(1);
+      if (dup) return res.status(400).json({ error: "Email already in use" });
+
+      let inviteRaw: string | null = null;
+      let inviteHash: string | null = null;
+      let inviteExp: Date | null = null;
+      let passwordHashVal: string;
+      if (doInvite) {
+        const inv = generateInviteToken();
+        inviteRaw = inv.raw;
+        inviteHash = inv.hash;
+        inviteExp = inv.expiresAt;
+        passwordHashVal = await hashPassword(crypto.randomUUID());
+      } else {
+        passwordHashVal = await hashPassword(String(password));
+      }
+
+      const [created] = await db
+        .insert(users)
+        .values({
+          email: emailLower,
+          passwordHash: passwordHashVal,
+          name: String(name).trim(),
+          role: roleNorm,
+          tenantId,
+          costCenterId: costCenterId || null,
+          isActive: true,
+          inviteTokenHash: inviteHash,
+          inviteTokenExpiresAt: inviteExp,
+          createdById: actor.id,
+        })
+        .returning();
+
+      if (!created) return res.status(500).json({ error: "Failed to create user" });
+
+      if (doInvite && inviteRaw) {
+        const { ok } = await sendInviteEmailToUser(tenantId, emailLower, inviteRaw, req.requestId);
+        if (!ok) {
+          logger.warn("Invite email may not have sent (check Resend / from address)", {
+            requestId: req.requestId,
+            tenantId,
+            email: emailLower,
+          });
+        }
+      }
+
+      const { passwordHash, inviteTokenHash: _ih, inviteTokenExpiresAt: _ie, ...u } = created as any;
+      res.status(201).json({ ...u, inviteSent: doInvite });
+    } catch (e: any) {
+      if (e?.code === "23505") return res.status(400).json({ error: "Email already in use" });
+      logger.error("Tenant user create error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to create user" });
+    }
+  });
+
+  app.patch("/api/admin/tenant-users/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req) ?? req.body?.tenantId;
+      const actor = req.user as Express.User;
+      if (actor.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const userId = req.params.id;
+      const [existing] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      if (!existing) return res.status(404).json({ error: "User not found" });
+      if (existing.role === "super_admin") return res.status(403).json({ error: "Cannot modify platform admin" });
+      if (actor.role !== "super_admin") {
+        if (existing.tenantId !== tenantId) return res.status(403).json({ error: "Forbidden" });
+      }
+
+      const { name, email, role, isActive, costCenterId, password } = req.body || {};
+      const updates: Record<string, unknown> = { updatedAt: new Date(), updatedById: actor.id };
+      if (name !== undefined) updates.name = String(name).trim();
+      if (email !== undefined) updates.email = String(email).toLowerCase().trim();
+      if (isActive !== undefined) updates.isActive = isActive;
+      if (costCenterId !== undefined) updates.costCenterId = costCenterId || null;
+      if (role !== undefined) {
+        const roleNorm = String(role).trim();
+        if (roleNorm === "super_admin") return res.status(400).json({ error: "Cannot assign super_admin" });
+        if (!TENANT_USER_ROLES.includes(roleNorm as (typeof TENANT_USER_ROLES)[number])) {
+          return res.status(400).json({ error: `role must be one of: ${TENANT_USER_ROLES.join(", ")}` });
+        }
+        updates.role = roleNorm;
+      }
+      if (typeof password === "string" && password.trim()) {
+        if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+        updates.passwordHash = await hashPassword(password);
+        updates.inviteTokenHash = null;
+        updates.inviteTokenExpiresAt = null;
+      }
+
+      const [updated] = await db.update(users).set(updates as any).where(eq(users.id, userId)).returning();
+      if (!updated) return res.status(404).json({ error: "User not found" });
+      const { passwordHash, inviteTokenHash: _h, inviteTokenExpiresAt: _e, ...u } = updated as any;
+      res.json(u);
+    } catch (e: any) {
+      if (e?.code === "23505") return res.status(400).json({ error: "Email already in use" });
+      logger.error("Tenant user patch error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to update user" });
+    }
+  });
+
+  app.post("/api/admin/tenant-users/:id/send-invite", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req) ?? req.body?.tenantId;
+      const actor = req.user as Express.User;
+      if (actor.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const userId = req.params.id;
+      const [existing] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      if (!existing) return res.status(404).json({ error: "User not found" });
+      if (existing.role === "super_admin") return res.status(403).json({ error: "Forbidden" });
+      if (actor.role !== "super_admin" && existing.tenantId !== tenantId) return res.status(403).json({ error: "Forbidden" });
+
+      const tid = existing.tenantId!;
+      const inv = generateInviteToken();
+      await db
+        .update(users)
+        .set({
+          inviteTokenHash: inv.hash,
+          inviteTokenExpiresAt: inv.expiresAt,
+          updatedAt: new Date(),
+          updatedById: actor.id,
+        })
+        .where(eq(users.id, userId));
+
+      const { ok } = await sendInviteEmailToUser(tid, existing.email, inv.raw, req.requestId);
+      res.json({ success: true, emailSent: ok });
+    } catch (e) {
+      logger.error("Send invite error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to send invite" });
     }
   });
 

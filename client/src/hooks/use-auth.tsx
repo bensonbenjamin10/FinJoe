@@ -44,14 +44,20 @@ export function useAuth() {
   const EXPENSE_ROLES = ["admin", "finance", "campus_coordinator", "head_office"];
   const APPROVE_ROLES = ["admin", "finance"];
 
+  const isTenantStaff =
+    !!user && (user.role === "super_admin" || EXPENSE_ROLES.includes(user.role));
+  const isTenantAdmin = !!user && (user.role === "admin" || user.role === "super_admin");
+
   return {
     user,
     isLoading,
     isAuthenticated: !!user,
     isAdmin: user?.role === "admin",
-    hasExpenseAccess: !!user && EXPENSE_ROLES.includes(user.role),
-    canApproveExpenses: !!user && APPROVE_ROLES.includes(user.role),
-    canImportExpenses: !!user && APPROVE_ROLES.includes(user.role),
+    isTenantAdmin,
+    isTenantStaff,
+    hasExpenseAccess: isTenantStaff,
+    canApproveExpenses: !!user && (user.role === "super_admin" || APPROVE_ROLES.includes(user.role)),
+    canImportExpenses: !!user && (user.role === "super_admin" || APPROVE_ROLES.includes(user.role)),
     logout: () => logoutMutation.mutate(),
     isLoggingOut: logoutMutation.isPending,
   };

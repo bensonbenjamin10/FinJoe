@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { eq, and } from "drizzle-orm";
 import { db } from "./db.js";
 import { logger } from "./logger.js";
-import { requireAdmin, getTenantId } from "./auth.js";
+import { requireTenantStaff, getTenantId } from "./auth.js";
 import { createInvoiceService } from "../lib/invoicing/application/invoice-service.js";
 import { createPaymentAllocationService } from "../lib/invoicing/application/payment-allocation-service.js";
 import { createAgingReportService } from "../lib/invoicing/application/aging-report-service.js";
@@ -20,7 +20,7 @@ export function registerInvoicingRoutes(app: Express) {
 
   // ── Customers ──
 
-  app.get("/api/admin/invoicing/customers", requireAdmin, async (req, res) => {
+  app.get("/api/admin/invoicing/customers", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -36,7 +36,7 @@ export function registerInvoicingRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/invoicing/customers", requireAdmin, async (req, res) => {
+  app.post("/api/admin/invoicing/customers", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -53,7 +53,7 @@ export function registerInvoicingRoutes(app: Express) {
     }
   });
 
-  app.patch("/api/admin/invoicing/customers/:id", requireAdmin, async (req, res) => {
+  app.patch("/api/admin/invoicing/customers/:id", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -71,7 +71,7 @@ export function registerInvoicingRoutes(app: Express) {
 
   // ── Invoices ──
 
-  app.get("/api/admin/invoicing/kpis", requireAdmin, async (req, res) => {
+  app.get("/api/admin/invoicing/kpis", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -86,7 +86,7 @@ export function registerInvoicingRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/invoicing/aging", requireAdmin, async (req, res) => {
+  app.get("/api/admin/invoicing/aging", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -101,7 +101,7 @@ export function registerInvoicingRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/invoicing/invoices", requireAdmin, async (req, res) => {
+  app.get("/api/admin/invoicing/invoices", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -124,7 +124,7 @@ export function registerInvoicingRoutes(app: Express) {
     }
   });
 
-  app.get("/api/admin/invoicing/invoices/:id", requireAdmin, async (req, res) => {
+  app.get("/api/admin/invoicing/invoices/:id", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -140,7 +140,7 @@ export function registerInvoicingRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/invoicing/invoices", requireAdmin, async (req, res) => {
+  app.post("/api/admin/invoicing/invoices", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -163,7 +163,7 @@ export function registerInvoicingRoutes(app: Express) {
     }
   });
 
-  app.patch("/api/admin/invoicing/invoices/:id", requireAdmin, async (req, res) => {
+  app.patch("/api/admin/invoicing/invoices/:id", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -190,7 +190,7 @@ export function registerInvoicingRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/invoicing/invoices/:id/issue", requireAdmin, async (req, res) => {
+  app.post("/api/admin/invoicing/invoices/:id/issue", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -206,7 +206,7 @@ export function registerInvoicingRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/invoicing/invoices/:id/void", requireAdmin, async (req, res) => {
+  app.post("/api/admin/invoicing/invoices/:id/void", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -224,7 +224,7 @@ export function registerInvoicingRoutes(app: Express) {
 
   // ── Payments ──
 
-  app.post("/api/admin/invoicing/invoices/:id/payments", requireAdmin, async (req, res) => {
+  app.post("/api/admin/invoicing/invoices/:id/payments", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -253,7 +253,7 @@ export function registerInvoicingRoutes(app: Express) {
 
   const docPort = new HtmlInvoiceDocument(db);
 
-  app.get("/api/admin/invoicing/invoices/:id/preview", requireAdmin, async (req, res) => {
+  app.get("/api/admin/invoicing/invoices/:id/preview", requireTenantStaff, async (req, res) => {
     try {
       const html = await docPort.generateHtml(req.params.id);
       res.type("html").send(html);
@@ -263,7 +263,7 @@ export function registerInvoicingRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/invoicing/invoices/:id/send", requireAdmin, async (req, res) => {
+  app.post("/api/admin/invoicing/invoices/:id/send", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;

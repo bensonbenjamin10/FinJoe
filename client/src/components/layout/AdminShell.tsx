@@ -36,6 +36,7 @@ import {
   LayoutDashboard,
   MessageCircle,
   Settings,
+  Users,
   LogOut,
   ChevronDown,
   TrendingUp,
@@ -55,7 +56,7 @@ interface AdminShellProps {
 export function AdminShell({ children }: AdminShellProps) {
   const [location] = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { user, logout } = useAuth();
+  const { user, logout, isTenantAdmin } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
   const urlTenantId = searchParams.get("tenantId");
   const tenantId = isSuperAdmin ? (urlTenantId || user?.tenantId || null) : user?.tenantId ?? null;
@@ -86,6 +87,9 @@ export function AdminShell({ children }: AdminShellProps) {
     }
   };
 
+  const teamHref =
+    isSuperAdmin && urlTenantId ? `/admin/team?tenantId=${encodeURIComponent(urlTenantId)}` : "/admin/team";
+
   const navItems = [
     { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/admin/reports", label: "Reports", icon: FileSpreadsheet },
@@ -94,6 +98,7 @@ export function AdminShell({ children }: AdminShellProps) {
           { href: "/admin/tenants", label: "Tenants", icon: Building2 },
         ]
       : []),
+    ...(isTenantAdmin ? [{ href: teamHref, label: "Team", icon: Users }] : []),
     { href: "/admin/finjoe", label: "FinJoe", icon: MessageCircle },
     { href: "/admin/expenses", label: "Expenses", icon: Receipt },
     { href: "/admin/recurring-templates", label: "Recurring Expenses", icon: Repeat },
@@ -126,7 +131,7 @@ export function AdminShell({ children }: AdminShellProps) {
               <SidebarMenu>
                 {navItems.map((item) => (
                   <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton asChild isActive={location === item.href}>
+                    <SidebarMenuButton asChild isActive={location === item.href.split("?")[0]}>
                       <Link href={item.href}>
                         <item.icon className="h-4 w-4" />
                         <span>{item.label}</span>

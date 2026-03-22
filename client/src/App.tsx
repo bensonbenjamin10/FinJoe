@@ -19,6 +19,8 @@ import AdminTenantUsers from "@/pages/admin-tenant-users";
 import AdminAccountSettings from "@/pages/admin-account-settings";
 import AdminReconciliation from "@/pages/admin-reconciliation";
 import AdminReports from "@/pages/admin-reports";
+import AdminTeam from "@/pages/admin-team";
+import AcceptInvite from "@/pages/accept-invite";
 import AdminInvoiceNew from "@/pages/admin-invoice-new";
 import AdminInvoicing from "@/pages/admin-invoicing";
 import AdminInvoiceDetail from "@/pages/admin-invoice-detail";
@@ -36,6 +38,7 @@ function Router() {
         <Route path="/" component={Landing} />
         <Route path="/setup" component={Setup} />
         <Route path="/signup" component={Signup} />
+        <Route path="/accept-invite" component={AcceptInvite} />
         <Route path="/login" component={Login} />
         <Route path="/admin/tenants/:id/users">
           <ProtectedRoute requireRoles={["super_admin"]}>
@@ -62,6 +65,13 @@ function Router() {
           <ProtectedRoute requireRoles={["super_admin"]}>
             <AdminShell>
               <AdminTenants />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/team">
+          <ProtectedRoute requireRoles={["admin", "super_admin"]}>
+            <AdminShell>
+              <AdminTeam />
             </AdminShell>
           </ProtectedRoute>
         </Route>

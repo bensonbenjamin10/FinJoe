@@ -110,11 +110,39 @@ declare global {
   }
 }
 
+/** Tenant dashboard roles (excludes super_admin, which bypasses all checks below). */
+export const TENANT_STAFF_ROLES = ["admin", "finance", "campus_coordinator", "head_office"] as const;
+
+/** Approve/reject expenses, payouts, role requests, bulk import execute. */
+export const APPROVER_ROLES = ["admin", "finance"] as const;
+
+function roleAllowed(user: Express.User, allowed: readonly string[]): boolean {
+  if (user.role === "super_admin") return true;
+  return allowed.includes(user.role);
+}
+
+/** Factory: authenticated user must have one of `allowed` roles, or be super_admin. */
+export function requireAnyRole(allowed: readonly string[]) {
+  return (req: any, res: any, next: any) => {
+    if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
+    const user = req.user as Express.User;
+    if (!roleAllowed(user, allowed)) return res.status(403).json({ message: "Forbidden" });
+    next();
+  };
+}
+
+/** Tenant org admin or super_admin — contacts, cost center CRUD, settings, category seeds, etc. */
+export const requireTenantAdmin = requireAnyRole(["admin"]);
+
+/** Any staff role that may use the dashboard for operational data. */
+export const requireTenantStaff = requireAnyRole(TENANT_STAFF_ROLES);
+
+/** Admin or finance — approvals, import execute, payouts. */
+export const requireApprover = requireAnyRole(APPROVER_ROLES);
+
+/** @alias requireTenantAdmin */
 export function requireAdmin(req: any, res: any, next: any) {
-  if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
-  const user = req.user as Express.User;
-  if (user.role !== "admin" && user.role !== "super_admin") return res.status(403).json({ message: "Forbidden" });
-  next();
+  return requireTenantAdmin(req, res, next);
 }
 
 export function requireSuperAdmin(req: any, res: any, next: any) {
