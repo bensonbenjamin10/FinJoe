@@ -7,7 +7,7 @@ This document scopes what a full **TDS (India)** feature set would entail so eng
 ## Current state (FinJoe)
 
 - **Expenses**: GSTIN, tax type (ITC / RCM / etc.), invoice metadata; optional audit rules in FinJoe settings.
-- **AR / invoicing**: Configurable tax regime (`flat_percent`, `gst_in`, reserved `vat_ae`), supplier GSTIN/state, server-side tax engines, HTML tax invoice for India GST.
+- **AR / invoicing**: Configurable tax regime (`flat_percent`, `gst_in`, reserved `vat_ae`), supplier GSTIN/state (tenant default plus optional per cost center billing GSTIN and per-draft invoice override), server-side tax engines, HTML tax invoice for India GST.
 - **No**: TDS deduction on vendor payments, Form 16/16A, challan workflow, or return preparation.
 
 ## TDS — suggested domains
@@ -50,8 +50,12 @@ This document scopes what a full **TDS (India)** feature set would entail so eng
 2. **Phase B — Engine**: Section master + auto-calculation on expense/payment with GL postings.
 3. **Phase C — Remittance**: Challan tracking, period close, export packages for compliance tools.
 
+## India GST — supplier identity on invoices (multi-GSTIN)
+
+For tenants using `gst_in`, the **effective supplier GSTIN and state** used in tax calculation and on the printed invoice are chosen in this order: (1) explicit fields on the draft invoice (“issue as” GSTIN / state override), (2) the invoice’s **cost center** billing GSTIN and optional billing state code when a cost center is set, (3) the tenant’s tax settings (organization default). On save, the resolved values are written to `invoices.ext` (including `supplierGstin`, `supplierGstinSource`, and override keys when applicable) so issued documents stay stable if master data changes later.
+
 ## Related code pointers
 
 - Expense GST / tax type: `client/src/pages/admin-expenses.tsx`, `shared/schema.ts` (`expenses.gstin`, `taxType`).
 - MIS categories: `server/seed-mis-categories.ts` (`tds_payment`, `opex_tds_payment`).
-- Invoice tax: `lib/invoicing/ports/tax-regime-registry.ts`, `lib/invoicing/application/invoice-service.ts`.
+- Invoice tax: `lib/invoicing/ports/tax-regime-registry.ts`, `lib/invoicing/application/invoice-service.ts`, `lib/invoicing/resolve-supplier-identity.ts`.

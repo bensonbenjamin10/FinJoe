@@ -148,7 +148,7 @@ export function registerInvoicingRoutes(app: Express) {
       const tid = tenantId ?? req.body?.tenantId;
       if (user.role !== "super_admin" && !tid) return res.status(403).json({ error: "Tenant context required" });
       if (!tid) return res.status(400).json({ error: "tenantId required" });
-      const { customerId, lines } = req.body ?? {};
+      const { customerId, lines, costCenterId, supplierGstinOverride, supplierStateCodeOverride } = req.body ?? {};
       if (!Array.isArray(lines) || lines.length === 0) {
         return res.status(400).json({ error: "At least one line item required" });
       }
@@ -171,7 +171,28 @@ export function registerInvoicingRoutes(app: Express) {
         });
       }
       const cid = typeof customerId === "string" && customerId ? customerId : null;
-      const out = await invoiceSvc.previewTax({ tenantId: tid, customerId: cid, lines: normalized });
+      const ccRaw = costCenterId === undefined ? undefined : costCenterId === null || costCenterId === "" || costCenterId === "__corporate__" ? null : String(costCenterId);
+      if (supplierGstinOverride != null && supplierGstinOverride !== "") {
+        const g = String(supplierGstinOverride).trim().toUpperCase();
+        if (!/^[0-9A-Z]{15}$/.test(g)) return res.status(400).json({ error: "supplierGstinOverride must be 15 alphanumeric characters" });
+      }
+      if (supplierStateCodeOverride != null && supplierStateCodeOverride !== "") {
+        const s = String(supplierStateCodeOverride).trim();
+        if (!/^\d{2}$/.test(s)) return res.status(400).json({ error: "supplierStateCodeOverride must be a 2-digit state code" });
+      }
+      const out = await invoiceSvc.previewTax({
+        tenantId: tid,
+        customerId: cid,
+        costCenterId: ccRaw,
+        supplierGstinOverride: supplierGstinOverride === undefined ? undefined : supplierGstinOverride === null || supplierGstinOverride === "" ? null : String(supplierGstinOverride).trim().toUpperCase(),
+        supplierStateCodeOverride:
+          supplierStateCodeOverride === undefined
+            ? undefined
+            : supplierStateCodeOverride === null || supplierStateCodeOverride === ""
+              ? null
+              : String(supplierStateCodeOverride).trim(),
+        lines: normalized,
+      });
       res.json(out);
     } catch (e) {
       logger.error("Preview tax error", { err: String(e) });
@@ -186,7 +207,7 @@ export function registerInvoicingRoutes(app: Express) {
       const tid = tenantId ?? req.body?.tenantId;
       if (user.role !== "super_admin" && !tid) return res.status(403).json({ error: "Tenant context required" });
       if (!tid) return res.status(400).json({ error: "tenantId required" });
-      const { customerId, issueDate, dueDate, notes, costCenterId, incomeCategoryId, lines } = req.body;
+      const { customerId, issueDate, dueDate, notes, costCenterId, incomeCategoryId, lines, supplierGstinOverride, supplierStateCodeOverride } = req.body;
       if (!customerId) return res.status(400).json({ error: "customerId required" });
       if (!Array.isArray(lines) || lines.length === 0) return res.status(400).json({ error: "At least one line item required" });
       for (const l of lines) {
@@ -194,7 +215,26 @@ export function registerInvoicingRoutes(app: Express) {
         if (typeof l.unitAmount !== "number" || l.unitAmount <= 0) return res.status(400).json({ error: "Line unit amount must be positive" });
         if (typeof l.quantity !== "number" || l.quantity <= 0) return res.status(400).json({ error: "Line quantity must be positive" });
       }
-      const inv = await invoiceSvc.createInvoice({ tenantId: tid, customerId, issueDate, dueDate, notes, costCenterId, incomeCategoryId, lines });
+      if (supplierGstinOverride != null && supplierGstinOverride !== "") {
+        const g = String(supplierGstinOverride).trim().toUpperCase();
+        if (!/^[0-9A-Z]{15}$/.test(g)) return res.status(400).json({ error: "supplierGstinOverride must be 15 alphanumeric characters" });
+      }
+      if (supplierStateCodeOverride != null && supplierStateCodeOverride !== "") {
+        const s = String(supplierStateCodeOverride).trim();
+        if (!/^\d{2}$/.test(s)) return res.status(400).json({ error: "supplierStateCodeOverride must be a 2-digit state code" });
+      }
+      const inv = await invoiceSvc.createInvoice({
+        tenantId: tid,
+        customerId,
+        issueDate,
+        dueDate,
+        notes,
+        costCenterId,
+        incomeCategoryId,
+        lines,
+        supplierGstinOverride,
+        supplierStateCodeOverride,
+      });
       res.status(201).json(inv);
     } catch (e) {
       logger.error("Create invoice error", { err: String(e) });
@@ -209,7 +249,7 @@ export function registerInvoicingRoutes(app: Express) {
       const tid = tenantId ?? req.body?.tenantId;
       if (user.role !== "super_admin" && !tid) return res.status(403).json({ error: "Tenant context required" });
       if (!tid) return res.status(400).json({ error: "tenantId required" });
-      const { customerId, issueDate, dueDate, notes, costCenterId, incomeCategoryId, lines } = req.body;
+      const { customerId, issueDate, dueDate, notes, costCenterId, incomeCategoryId, lines, supplierGstinOverride, supplierStateCodeOverride } = req.body;
       if (lines !== undefined) {
         if (!Array.isArray(lines) || lines.length === 0) return res.status(400).json({ error: "At least one line item required" });
         for (const l of lines) {
@@ -218,8 +258,24 @@ export function registerInvoicingRoutes(app: Express) {
           if (typeof l.quantity !== "number" || l.quantity <= 0) return res.status(400).json({ error: "Line quantity must be positive" });
         }
       }
+      if (supplierGstinOverride != null && supplierGstinOverride !== "") {
+        const g = String(supplierGstinOverride).trim().toUpperCase();
+        if (!/^[0-9A-Z]{15}$/.test(g)) return res.status(400).json({ error: "supplierGstinOverride must be 15 alphanumeric characters" });
+      }
+      if (supplierStateCodeOverride != null && supplierStateCodeOverride !== "") {
+        const s = String(supplierStateCodeOverride).trim();
+        if (!/^\d{2}$/.test(s)) return res.status(400).json({ error: "supplierStateCodeOverride must be a 2-digit state code" });
+      }
       const result = await invoiceSvc.updateDraftInvoice(tid, req.params.id, {
-        customerId, issueDate, dueDate, notes, costCenterId, incomeCategoryId, lines,
+        customerId,
+        issueDate,
+        dueDate,
+        notes,
+        costCenterId,
+        incomeCategoryId,
+        lines,
+        supplierGstinOverride,
+        supplierStateCodeOverride,
       });
       if ("error" in result) return res.status(409).json({ error: result.error });
       res.json(result.invoice);

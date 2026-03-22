@@ -103,6 +103,24 @@ function mergeTenantTaxRegimeConfig(
   }
   return { config: cfg };
 }
+
+function normalizeCostCenterBillingFields(body: {
+  billingGstin?: unknown;
+  billingStateCode?: unknown;
+}): { billingGstin?: string | null; billingStateCode?: string | null; error?: string } {
+  const result: { billingGstin?: string | null; billingStateCode?: string | null } = {};
+  if (body.billingGstin !== undefined) {
+    const g = String(body.billingGstin ?? "").trim().toUpperCase();
+    if (g && !/^[0-9A-Z]{15}$/.test(g)) return { error: "billingGstin must be 15 alphanumeric characters" };
+    result.billingGstin = g || null;
+  }
+  if (body.billingStateCode !== undefined) {
+    const s = String(body.billingStateCode ?? "").trim();
+    if (s && !/^\d{2}$/.test(s)) return { error: "billingStateCode must be a 2-digit state code" };
+    result.billingStateCode = s || null;
+  }
+  return result;
+}
 const LIST_PAGE_SIZE = 100;
 const LIST_PAGE_SIZE_MAX = 200;
 
@@ -404,6 +422,8 @@ export async function registerRoutes(app: Express) {
           slug: costCenters.slug,
           type: costCenters.type,
           isActive: costCenters.isActive,
+          billingGstin: costCenters.billingGstin,
+          billingStateCode: costCenters.billingStateCode,
           createdAt: costCenters.createdAt,
           updatedAt: costCenters.updatedAt,
           createdByName: creatorTable.name,
@@ -427,12 +447,14 @@ export async function registerRoutes(app: Express) {
       const user = req.user as Express.User;
       if (user.role !== "super_admin" && !tenantId) return res.status(400).json({ error: "tenantId required" });
       if (!tenantId || typeof tenantId !== "string") return res.status(400).json({ error: "tenantId required (pass in body for super_admin)" });
-      const { name, slug, type } = req.body;
+      const { name, slug, type, billingGstin, billingStateCode } = req.body;
       if (!name || typeof name !== "string" || !name.trim()) return res.status(400).json({ error: "name required" });
       const slugVal = (slug && typeof slug === "string" && slug.trim())
         ? slug.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "")
         : name.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
       if (!slugVal || /^[-]+$/.test(slugVal)) return res.status(400).json({ error: "slug could not be derived from name (use letters or numbers)" });
+      const billingNorm = normalizeCostCenterBillingFields({ billingGstin, billingStateCode });
+      if (billingNorm.error) return res.status(400).json({ error: billingNorm.error });
       const [created] = await db
         .insert(costCenters)
         .values({
@@ -442,6 +464,8 @@ export async function registerRoutes(app: Express) {
           type: (type && typeof type === "string") ? type.trim() || null : null,
           isActive: true,
           createdById: user?.id || null,
+          ...(billingNorm.billingGstin !== undefined && { billingGstin: billingNorm.billingGstin }),
+          ...(billingNorm.billingStateCode !== undefined && { billingStateCode: billingNorm.billingStateCode }),
         })
         .returning();
       if (!created) return res.status(500).json({ error: "Failed to create" });
@@ -459,13 +483,19 @@ export async function registerRoutes(app: Express) {
       const user = req.user as Express.User;
       if (user.role !== "super_admin" && !tenantId) return res.status(400).json({ error: "tenantId required" });
       if (!tenantId || typeof tenantId !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { name, slug, type, isActive } = req.body;
+      const { name, slug, type, isActive, billingGstin, billingStateCode } = req.body;
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (name !== undefined && typeof name === "string" && name.trim()) updates.name = name.trim();
       if (slug !== undefined && typeof slug === "string" && slug.trim())
         updates.slug = slug.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
       if (type !== undefined) updates.type = (typeof type === "string" && type.trim()) ? type.trim() : null;
       if (typeof isActive === "boolean") updates.isActive = isActive;
+      if (billingGstin !== undefined || billingStateCode !== undefined) {
+        const billingNorm = normalizeCostCenterBillingFields({ billingGstin, billingStateCode });
+        if (billingNorm.error) return res.status(400).json({ error: billingNorm.error });
+        if (billingNorm.billingGstin !== undefined) updates.billingGstin = billingNorm.billingGstin;
+        if (billingNorm.billingStateCode !== undefined) updates.billingStateCode = billingNorm.billingStateCode;
+      }
       updates.updatedById = user?.id || null;
       const whereClause = and(eq(costCenters.id, req.params.id), eq(costCenters.tenantId, tenantId));
       const [updated] = await db.update(costCenters).set(updates as any).where(whereClause).returning();

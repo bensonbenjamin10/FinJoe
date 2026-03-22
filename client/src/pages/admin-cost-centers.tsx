@@ -55,8 +55,15 @@ export default function AdminCostCenters({
   };
   const costCenterLabelPlural = plural(costCenterLabel);
   const [editDialog, setEditDialog] = useState<CostCenter | null>(null);
-  const [addForm, setAddForm] = useState({ name: "", slug: "", type: "" });
-  const [editForm, setEditForm] = useState({ name: "", slug: "", type: "", isActive: true });
+  const [addForm, setAddForm] = useState({ name: "", slug: "", type: "", billingGstin: "", billingStateCode: "" });
+  const [editForm, setEditForm] = useState({
+    name: "",
+    slug: "",
+    type: "",
+    isActive: true,
+    billingGstin: "",
+    billingStateCode: "",
+  });
 
   const qs = tenantId ? `?tenantId=${tenantId}` : "";
   const { data: costCenters = [], isLoading } = useQuery<CostCenter[]>({
@@ -70,12 +77,20 @@ export default function AdminCostCenters({
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: { name: string; slug?: string; type?: string }) => {
+    mutationFn: async (data: {
+      name: string;
+      slug?: string;
+      type?: string;
+      billingGstin?: string;
+      billingStateCode?: string;
+    }) => {
       const res = await apiRequest("POST", "/api/admin/cost-centers", {
         ...(tenantId && { tenantId }),
         name: data.name,
         slug: data.slug || undefined,
         type: data.type || undefined,
+        ...(data.billingGstin !== undefined && { billingGstin: data.billingGstin || null }),
+        ...(data.billingStateCode !== undefined && { billingStateCode: data.billingStateCode || null }),
       });
       if (!res.ok) {
         const err = await res.json();
@@ -89,17 +104,27 @@ export default function AdminCostCenters({
       queryClient.invalidateQueries({ queryKey: ["/api/campuses"] });
       toast({ title: `${costCenterLabel} created` });
       setAddDialog(false);
-      setAddForm({ name: "", slug: "", type: "" });
+      setAddForm({ name: "", slug: "", type: "", billingGstin: "", billingStateCode: "" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: Partial<typeof editForm> }) => {
-      const res = await apiRequest("PATCH", `/api/admin/cost-centers/${id}`, {
-        ...(tenantId && { tenantId }),
-        ...data,
-      });
+    mutationFn: async ({
+      id,
+      data,
+    }: {
+      id: string;
+      data: Partial<typeof editForm> & { billingGstin?: string | null; billingStateCode?: string | null };
+    }) => {
+      const body: Record<string, unknown> = { ...(tenantId && { tenantId }) };
+      if (data.name !== undefined) body.name = data.name;
+      if (data.slug !== undefined) body.slug = data.slug;
+      if (data.type !== undefined) body.type = data.type;
+      if (data.isActive !== undefined) body.isActive = data.isActive;
+      if (data.billingGstin !== undefined) body.billingGstin = data.billingGstin;
+      if (data.billingStateCode !== undefined) body.billingStateCode = data.billingStateCode;
+      const res = await apiRequest("PATCH", `/api/admin/cost-centers/${id}`, body);
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to update");
@@ -136,7 +161,7 @@ export default function AdminCostCenters({
   });
 
   const openAdd = () => {
-    setAddForm({ name: "", slug: "", type: "" });
+    setAddForm({ name: "", slug: "", type: "", billingGstin: "", billingStateCode: "" });
     setAddDialog(true);
   };
 
@@ -146,6 +171,8 @@ export default function AdminCostCenters({
       slug: cc.slug,
       type: cc.type || "",
       isActive: cc.isActive,
+      billingGstin: cc.billingGstin ?? "",
+      billingStateCode: cc.billingStateCode ?? "",
     });
     setEditDialog(cc);
   };
@@ -159,6 +186,8 @@ export default function AdminCostCenters({
       name: addForm.name.trim(),
       slug: addForm.slug.trim() || undefined,
       type: addForm.type.trim() || undefined,
+      billingGstin: addForm.billingGstin.trim() || undefined,
+      billingStateCode: addForm.billingStateCode.trim() || undefined,
     });
   };
 
@@ -175,6 +204,8 @@ export default function AdminCostCenters({
         slug: editForm.slug.trim() || undefined,
         type: editForm.type.trim() || undefined,
         isActive: editForm.isActive,
+        billingGstin: editForm.billingGstin.trim() || null,
+        billingStateCode: editForm.billingStateCode.trim() || null,
       },
     });
   };
@@ -199,7 +230,8 @@ export default function AdminCostCenters({
               {costCenterLabelPlural}
             </CardTitle>
             <CardDescription className="text-base mt-1">
-              Add and manage {costCenterLabelPlural.toLowerCase()} (e.g. branches, departments). Configure the label in Settings.
+              Add and manage {costCenterLabelPlural.toLowerCase()} (e.g. branches, departments). Optional billing GSTIN per{" "}
+              {costCenterLabel.toLowerCase()} for India GST invoices. Configure the label in Settings.
             </CardDescription>
           </div>
           <Button onClick={openAdd} className="w-full sm:w-auto">
@@ -224,6 +256,7 @@ export default function AdminCostCenters({
                     <TableHead className="px-6 py-4">Name</TableHead>
                     <TableHead className="px-6 py-4">Slug</TableHead>
                     <TableHead className="px-6 py-4">Type</TableHead>
+                    <TableHead className="px-6 py-4">Billing GSTIN</TableHead>
                     <TableHead className="px-6 py-4">Status</TableHead>
                     <TableHead className="w-[100px] px-6 py-4">Actions</TableHead>
                   </TableRow>
@@ -246,6 +279,9 @@ export default function AdminCostCenters({
                       </TableCell>
                       <TableCell className="px-6 py-4 font-mono text-sm">{cc.slug}</TableCell>
                       <TableCell className="px-6 py-4">{cc.type || "-"}</TableCell>
+                      <TableCell className="px-6 py-4 font-mono text-xs">
+                        {cc.billingGstin || "—"}
+                      </TableCell>
                       <TableCell className="px-6 py-4">
                         {cc.isActive ? (
                           <Badge variant="default">Active</Badge>
@@ -306,6 +342,31 @@ export default function AdminCostCenters({
                 onChange={(e) => setAddForm((f) => ({ ...f, type: e.target.value }))}
               />
             </div>
+            <div className="grid gap-2">
+              <Label>Billing GSTIN (optional)</Label>
+              <Input
+                className="font-mono"
+                placeholder="15-character GSTIN for invoices (India GST)"
+                maxLength={15}
+                value={addForm.billingGstin}
+                onChange={(e) => setAddForm((f) => ({ ...f, billingGstin: e.target.value.toUpperCase() }))}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label>Billing state code (optional)</Label>
+              <Input
+                className="font-mono w-24"
+                placeholder="27"
+                maxLength={2}
+                value={addForm.billingStateCode}
+                onChange={(e) =>
+                  setAddForm((f) => ({
+                    ...f,
+                    billingStateCode: e.target.value.replace(/\D/g, "").slice(0, 2),
+                  }))
+                }
+              />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddDialog(false)}>
@@ -358,6 +419,31 @@ export default function AdminCostCenters({
                   onCheckedChange={(v) => setEditForm((f) => ({ ...f, isActive: v }))}
                 />
                 <Label htmlFor="edit-cc-active">Active</Label>
+              </div>
+              <div className="grid gap-2">
+                <Label>Billing GSTIN (optional)</Label>
+                <Input
+                  className="font-mono"
+                  placeholder="15-character GSTIN"
+                  maxLength={15}
+                  value={editForm.billingGstin}
+                  onChange={(e) => setEditForm((f) => ({ ...f, billingGstin: e.target.value.toUpperCase() }))}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Billing state code (optional)</Label>
+                <Input
+                  className="font-mono w-24"
+                  placeholder="27"
+                  maxLength={2}
+                  value={editForm.billingStateCode}
+                  onChange={(e) =>
+                    setEditForm((f) => ({
+                      ...f,
+                      billingStateCode: e.target.value.replace(/\D/g, "").slice(0, 2),
+                    }))
+                  }
+                />
               </div>
             </div>
           )}

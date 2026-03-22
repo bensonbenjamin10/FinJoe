@@ -17,6 +17,10 @@ export interface CreateInvoiceInput {
   notes?: string | null;
   costCenterId?: string | null;
   incomeCategoryId?: string | null;
+  /** Per-invoice supplier GSTIN override (India GST); null clears on update. */
+  supplierGstinOverride?: string | null;
+  /** Per-invoice 2-digit state override; null clears on update. */
+  supplierStateCodeOverride?: string | null;
   lines: CreateInvoiceLineInput[];
 }
 

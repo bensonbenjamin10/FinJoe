@@ -604,7 +604,10 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
             Sales tax &amp; invoicing
           </CardTitle>
           <CardDescription className="text-base">
-            Controls how tax is calculated on customer invoices. For India GST, set your organization GSTIN (or a 2-digit state code) so intrastate vs interstate (IGST) matches your billing customers&apos; GSTIN.
+            Controls how tax is calculated on customer invoices. For India GST, this screen sets the organization-wide
+            default GSTIN or state code. Per-branch GSTINs can live on each cost center; a draft invoice can also
+            override the supplier GSTIN. Resolution order is invoice override, then cost center billing GSTIN, then the
+            values here.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4 p-6">
@@ -634,7 +637,7 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
                 </Select>
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="supplier-gstin">Your GSTIN (optional)</Label>
+                <Label htmlFor="supplier-gstin">Default GSTIN (optional)</Label>
                 <Input
                   id="supplier-gstin"
                   placeholder="15-character GSTIN"
@@ -644,11 +647,12 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
                   onChange={(e) => setTaxForm((f) => ({ ...f, supplierGstin: e.target.value.toUpperCase() }))}
                 />
                 <p className="text-sm text-muted-foreground">
-                  Shown on tax invoices. State for GST split is taken from digits 1–2 of the GSTIN unless you override below.
+                  Fallback when an invoice does not set an override and its cost center has no billing GSTIN. State for
+                  GST split follows digits 1–2 of the GSTIN unless you override below.
                 </p>
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="supplier-state">Supplier state code (optional override)</Label>
+                <Label htmlFor="supplier-state">Default supplier state code (optional)</Label>
                 <Input
                   id="supplier-state"
                   placeholder="e.g. 27"
@@ -660,7 +664,8 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
                   }
                 />
                 <p className="text-sm text-muted-foreground">
-                  Two-digit state code per GST (e.g. 27 Maharashtra). Use only if you do not set a GSTIN or need an explicit override.
+                  Two-digit state code (e.g. 27 Maharashtra). Use when there is no GSTIN or you need an explicit default
+                  supplier state for this tenant.
                 </p>
               </div>
               <Button onClick={() => saveTaxSettingsMutation.mutate()} disabled={saveTaxSettingsMutation.isPending}>

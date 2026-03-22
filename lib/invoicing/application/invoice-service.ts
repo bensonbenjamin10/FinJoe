@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, gte, lte } from "drizzle-orm";
+import { eq, and, asc, desc, sql, gte, lte } from "drizzle-orm";
 import {
   billingCustomers,
   invoices,
@@ -7,20 +7,113 @@ import {
   costCenters,
   paymentAllocations,
   tenants,
+  type InvoiceLine,
 } from "../../../shared/schema.js";
 import type {
   CreateCustomerInput,
   CreateInvoiceInput,
   CreateInvoiceLineInput,
   InvoiceStatus,
+  TaxBreakdownLine,
   TaxCalculationContext,
 } from "../ports/types.js";
 import type { TaxCalculationPort } from "../ports/tax-calculation-port.js";
 import { getTaxEngine } from "../ports/tax-regime-registry.js";
+import {
+  resolveSupplierIdentity,
+  gstinToStateCode,
+  type InvoiceOverrideInput,
+} from "../resolve-supplier-identity.js";
 
-function gstinToStateCode(gstin: string | null | undefined): string | undefined {
-  if (!gstin || gstin.length < 2) return undefined;
-  return gstin.slice(0, 2);
+function invoiceOverrideFromInputAndExt(
+  ext: Record<string, unknown>,
+  patch?: {
+    supplierGstinOverride?: string | null;
+    supplierStateCodeOverride?: string | null;
+  } | null,
+): InvoiceOverrideInput | undefined {
+  let g = ext.supplierGstinOverride != null ? String(ext.supplierGstinOverride).trim().toUpperCase() : undefined;
+  let s = ext.supplierStateCodeOverride != null ? String(ext.supplierStateCodeOverride).trim() : undefined;
+  if (s && !/^\d{2}$/.test(s)) s = undefined;
+
+  if (patch?.supplierGstinOverride !== undefined) {
+    if (patch.supplierGstinOverride === null || patch.supplierGstinOverride === "") g = undefined;
+    else g = patch.supplierGstinOverride.trim().toUpperCase();
+  }
+  if (patch?.supplierStateCodeOverride !== undefined) {
+    if (patch.supplierStateCodeOverride === null || patch.supplierStateCodeOverride === "") s = undefined;
+    else s = patch.supplierStateCodeOverride.trim();
+  }
+  if (g || (s && /^\d{2}$/.test(s))) return { supplierGstin: g, supplierStateCode: s };
+  return undefined;
+}
+
+function applyInvoiceTaxExt(
+  ext: Record<string, unknown>,
+  args: {
+    taxBreakdown?: TaxBreakdownLine[];
+    resolved: ReturnType<typeof resolveSupplierIdentity>;
+    customerGstin: string | null | undefined;
+    mergedOverride: InvoiceOverrideInput | undefined;
+  },
+) {
+  const { taxBreakdown, resolved, customerGstin, mergedOverride } = args;
+  if (taxBreakdown?.length) ext.taxBreakdown = taxBreakdown;
+  else delete ext.taxBreakdown;
+
+  if (resolved.supplierGstin) ext.supplierGstin = resolved.supplierGstin;
+  else delete ext.supplierGstin;
+
+  if (customerGstin) ext.customerGstin = customerGstin;
+  else delete ext.customerGstin;
+
+  if (resolved.source) ext.supplierGstinSource = resolved.source;
+  else delete ext.supplierGstinSource;
+
+  if (resolved.source === "invoice_override" && mergedOverride) {
+    if (mergedOverride.supplierGstin) ext.supplierGstinOverride = mergedOverride.supplierGstin;
+    else delete ext.supplierGstinOverride;
+    if (mergedOverride.supplierStateCode && /^\d{2}$/.test(mergedOverride.supplierStateCode)) {
+      ext.supplierStateCodeOverride = mergedOverride.supplierStateCode;
+    } else delete ext.supplierStateCodeOverride;
+  } else {
+    delete ext.supplierGstinOverride;
+    delete ext.supplierStateCodeOverride;
+  }
+}
+
+async function loadCostCenterBilling(db: InvoicingDb, tenantId: string, ccId: string | null) {
+  if (!ccId) return null;
+  const [row] = await db
+    .select({
+      billingGstin: costCenters.billingGstin,
+      billingStateCode: costCenters.billingStateCode,
+    })
+    .from(costCenters)
+    .where(and(eq(costCenters.id, ccId), eq(costCenters.tenantId, tenantId)))
+    .limit(1);
+  return row ?? null;
+}
+
+async function fetchInvoiceLinesAsInput(db: InvoicingDb, invoiceId: string): Promise<CreateInvoiceLineInput[]> {
+  const rows = await db
+    .select()
+    .from(invoiceLines)
+    .where(eq(invoiceLines.invoiceId, invoiceId))
+    .orderBy(asc(invoiceLines.displayOrder));
+  return rows.map((l: InvoiceLine) => {
+    const lineExt = (l.ext ?? {}) as Record<string, unknown>;
+    const hsn = lineExt.hsnCode != null ? String(lineExt.hsnCode) : null;
+    return {
+      description: l.description,
+      quantity: l.quantity,
+      unitAmount: l.unitAmount,
+      taxRate: l.taxRate > 0 ? l.taxRate : undefined,
+      hsnCode: hsn || null,
+      incomeCategoryId: l.incomeCategoryId ?? undefined,
+      displayOrder: l.displayOrder ?? undefined,
+    };
+  });
 }
 
 export type InvoicingDb = any;
@@ -111,24 +204,48 @@ export function createInvoiceService(db: InvoicingDb) {
         .where(eq(tenants.id, input.tenantId))
         .limit(1);
 
-      const supplierGstin = typeof tenant?.taxRegimeConfig === "object" && tenant.taxRegimeConfig
-        ? String((tenant.taxRegimeConfig as Record<string, unknown>).supplierGstin ?? "")
-        : "";
+      const ccId = input.costCenterId && input.costCenterId !== "__corporate__" ? input.costCenterId : null;
+      const ccRow = await loadCostCenterBilling(db, input.tenantId, ccId);
+
+      const hasCreateOv =
+        input.supplierGstinOverride !== undefined || input.supplierStateCodeOverride !== undefined;
+      const mergedOv = invoiceOverrideFromInputAndExt(
+        {},
+        hasCreateOv
+          ? {
+              supplierGstinOverride: input.supplierGstinOverride,
+              supplierStateCodeOverride: input.supplierStateCodeOverride,
+            }
+          : undefined,
+      );
+
+      const tenantCfg =
+        typeof tenant?.taxRegimeConfig === "object" && tenant?.taxRegimeConfig
+          ? (tenant.taxRegimeConfig as Record<string, unknown>)
+          : {};
+
+      const resolved = resolveSupplierIdentity({
+        tenantConfig: tenantCfg,
+        costCenter: ccRow,
+        invoiceOverride: mergedOv,
+      });
 
       const taxContext: TaxCalculationContext = {
-        supplierStateCode: gstinToStateCode(supplierGstin) ?? (typeof tenant?.taxRegimeConfig === "object" && tenant.taxRegimeConfig ? String((tenant.taxRegimeConfig as Record<string, unknown>).supplierStateCode ?? "") : undefined),
+        supplierStateCode: resolved.supplierStateCode,
         customerStateCode: gstinToStateCode(cust?.gstin),
       };
 
       const result = taxCalc.calculate(input.lines, taxContext);
       const { subtotal, taxAmount, total, lineTotals, taxBreakdown, lineTaxBreakdowns } = result;
       const invoiceNumber = nextInvoiceNumber(input.tenantId);
-      const ccId = input.costCenterId && input.costCenterId !== "__corporate__" ? input.costCenterId : null;
 
       const ext: Record<string, unknown> = {};
-      if (taxBreakdown?.length) ext.taxBreakdown = taxBreakdown;
-      if (supplierGstin) ext.supplierGstin = supplierGstin;
-      if (cust?.gstin) ext.customerGstin = cust.gstin;
+      applyInvoiceTaxExt(ext, {
+        taxBreakdown,
+        resolved,
+        customerGstin: cust?.gstin,
+        mergedOverride: mergedOv,
+      });
 
       const [inv] = await db
         .insert(invoices)
@@ -178,6 +295,8 @@ export function createInvoiceService(db: InvoicingDb) {
       notes?: string | null;
       costCenterId?: string | null;
       incomeCategoryId?: string | null;
+      supplierGstinOverride?: string | null;
+      supplierStateCodeOverride?: string | null;
       lines?: CreateInvoiceInput["lines"];
     }) {
       const [inv] = await db
@@ -198,9 +317,37 @@ export function createInvoiceService(db: InvoicingDb) {
       }
       if (input.incomeCategoryId !== undefined) updates.incomeCategoryId = input.incomeCategoryId ?? null;
 
-      if (input.lines && input.lines.length > 0) {
+      const prevExt = (inv.ext ?? {}) as Record<string, unknown>;
+      const patchOverrides =
+        input.supplierGstinOverride !== undefined || input.supplierStateCodeOverride !== undefined
+          ? {
+              supplierGstinOverride: input.supplierGstinOverride,
+              supplierStateCodeOverride: input.supplierStateCodeOverride,
+            }
+          : undefined;
+      const mergedOv = invoiceOverrideFromInputAndExt(prevExt, patchOverrides);
+
+      const effectiveCcId =
+        input.costCenterId !== undefined
+          ? input.costCenterId && input.costCenterId !== "__corporate__"
+            ? input.costCenterId
+            : null
+          : inv.costCenterId;
+
+      const customerId = input.customerId ?? inv.customerId;
+
+      const needRecalc =
+        (input.lines && input.lines.length > 0) ||
+        input.customerId !== undefined ||
+        input.costCenterId !== undefined ||
+        patchOverrides !== undefined;
+
+      if (needRecalc) {
+        const linesToUse =
+          input.lines && input.lines.length > 0 ? input.lines : await fetchInvoiceLinesAsInput(db, id);
+        if (!linesToUse.length) return { error: "At least one line item required" };
+
         const taxCalc = await resolveTaxCalc(db, tenantId);
-        const customerId = input.customerId ?? inv.customerId;
         const [cust] = await db
           .select({ gstin: billingCustomers.gstin })
           .from(billingCustomers)
@@ -211,27 +358,38 @@ export function createInvoiceService(db: InvoicingDb) {
           .from(tenants)
           .where(eq(tenants.id, tenantId))
           .limit(1);
-        const supplierGstin = typeof tenant?.taxRegimeConfig === "object" && tenant.taxRegimeConfig
-          ? String((tenant.taxRegimeConfig as Record<string, unknown>).supplierGstin ?? "")
-          : "";
+        const tenantCfg =
+          typeof tenant?.taxRegimeConfig === "object" && tenant?.taxRegimeConfig
+            ? (tenant.taxRegimeConfig as Record<string, unknown>)
+            : {};
+        const ccRow = await loadCostCenterBilling(db, tenantId, effectiveCcId);
+        const resolved = resolveSupplierIdentity({
+          tenantConfig: tenantCfg,
+          costCenter: ccRow,
+          invoiceOverride: mergedOv,
+        });
+
         const taxContext: TaxCalculationContext = {
-          supplierStateCode: gstinToStateCode(supplierGstin) ?? (typeof tenant?.taxRegimeConfig === "object" && tenant.taxRegimeConfig ? String((tenant.taxRegimeConfig as Record<string, unknown>).supplierStateCode ?? "") : undefined),
+          supplierStateCode: resolved.supplierStateCode,
           customerStateCode: gstinToStateCode(cust?.gstin),
         };
 
-        const result = taxCalc.calculate(input.lines, taxContext);
+        const result = taxCalc.calculate(linesToUse, taxContext);
         updates.subtotal = result.subtotal;
         updates.taxAmount = result.taxAmount;
         updates.total = result.total;
 
-        const ext: Record<string, unknown> = {};
-        if (result.taxBreakdown?.length) ext.taxBreakdown = result.taxBreakdown;
-        if (supplierGstin) ext.supplierGstin = supplierGstin;
-        if (cust?.gstin) ext.customerGstin = cust.gstin;
+        const ext: Record<string, unknown> = { ...prevExt };
+        applyInvoiceTaxExt(ext, {
+          taxBreakdown: result.taxBreakdown,
+          resolved,
+          customerGstin: cust?.gstin,
+          mergedOverride: mergedOv,
+        });
         updates.ext = ext;
 
         await db.delete(invoiceLines).where(eq(invoiceLines.invoiceId, id));
-        const lineValues = input.lines.map((l, i) => {
+        const lineValues = linesToUse.map((l, i) => {
           const lineExt: Record<string, unknown> = {};
           if (l.hsnCode) lineExt.hsnCode = l.hsnCode;
           if (result.lineTaxBreakdowns?.[i]?.length) lineExt.taxBreakdown = result.lineTaxBreakdowns[i];
@@ -432,6 +590,9 @@ export function createInvoiceService(db: InvoicingDb) {
     async previewTax(params: {
       tenantId: string;
       customerId: string | null;
+      costCenterId?: string | null;
+      supplierGstinOverride?: string | null;
+      supplierStateCodeOverride?: string | null;
       lines: CreateInvoiceLineInput[];
     }) {
       const taxCalc = await resolveTaxCalc(db, params.tenantId);
@@ -449,16 +610,36 @@ export function createInvoiceService(db: InvoicingDb) {
         .from(tenants)
         .where(eq(tenants.id, params.tenantId))
         .limit(1);
-      const supplierGstin =
+
+      const ccId =
+        params.costCenterId && params.costCenterId !== "__corporate__" ? params.costCenterId : null;
+      const ccRow = await loadCostCenterBilling(db, params.tenantId, ccId);
+
+      const hasOv =
+        params.supplierGstinOverride !== undefined || params.supplierStateCodeOverride !== undefined;
+      const mergedOv = invoiceOverrideFromInputAndExt(
+        {},
+        hasOv
+          ? {
+              supplierGstinOverride: params.supplierGstinOverride,
+              supplierStateCodeOverride: params.supplierStateCodeOverride,
+            }
+          : undefined,
+      );
+
+      const tenantCfg =
         typeof tenant?.taxRegimeConfig === "object" && tenant?.taxRegimeConfig
-          ? String((tenant.taxRegimeConfig as Record<string, unknown>).supplierGstin ?? "")
-          : "";
+          ? (tenant.taxRegimeConfig as Record<string, unknown>)
+          : {};
+
+      const resolved = resolveSupplierIdentity({
+        tenantConfig: tenantCfg,
+        costCenter: ccRow,
+        invoiceOverride: mergedOv,
+      });
+
       const taxContext: TaxCalculationContext = {
-        supplierStateCode:
-          gstinToStateCode(supplierGstin) ??
-          (typeof tenant?.taxRegimeConfig === "object" && tenant?.taxRegimeConfig
-            ? String((tenant.taxRegimeConfig as Record<string, unknown>).supplierStateCode ?? "") || undefined
-            : undefined),
+        supplierStateCode: resolved.supplierStateCode,
         customerStateCode: gstinToStateCode(custGstin),
       };
       const result = taxCalc.calculate(params.lines, taxContext);

@@ -54,6 +54,7 @@ import { cn } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
+import type { CostCenter } from "@shared/schema";
 
 type Customer = { id: string; name: string; email: string | null; phone: string | null; gstin: string | null };
 type IncomeCategoryRow = { id: string; name: string };
@@ -123,6 +124,9 @@ export default function AdminInvoiceNew() {
   const [issueDate, setIssueDate] = useState(() => format(new Date(), "yyyy-MM-dd"));
   const [dueDate, setDueDate] = useState(() => format(addDays(new Date(), 30), "yyyy-MM-dd"));
   const [incomeCategoryId, setIncomeCategoryId] = useState<string>("");
+  const [costCenterId, setCostCenterId] = useState<string>("__corporate__");
+  const [supplierGstinOverride, setSupplierGstinOverride] = useState("");
+  const [supplierStateCodeOverride, setSupplierStateCodeOverride] = useState("");
   const [notes, setNotes] = useState("");
   const [lines, setLines] = useState<LineRow[]>(() => [newLine()]);
 
@@ -144,6 +148,27 @@ export default function AdminInvoiceNew() {
     queryFn: async () => {
       const res = await fetch(`/api/admin/income-categories${tenantQuery}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load categories");
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+
+  const { data: finjoeSettings } = useQuery<{ costCenterLabel?: string | null }>({
+    queryKey: ["/api/admin/finjoe/settings", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/finjoe/settings${tenantQuery}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load settings");
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+  const costCenterLabel = finjoeSettings?.costCenterLabel?.trim() || "Cost center";
+
+  const { data: invoiceCostCenters = [], isLoading: costCentersLoading } = useQuery<CostCenter[]>({
+    queryKey: ["/api/admin/cost-centers", tenantId, "invoice-new"],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/cost-centers${tenantQuery}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load cost centers");
       return res.json();
     },
     enabled: !!tenantId,
@@ -191,12 +216,20 @@ export default function AdminInvoiceNew() {
         hsnCode: line.hsnCode.trim() || undefined,
       });
     }
-    return {
+    const ccForApi =
+      costCenterId && costCenterId !== "__corporate__" ? costCenterId : null;
+    const gstO = supplierGstinOverride.trim().toUpperCase();
+    const stO = supplierStateCodeOverride.trim();
+    const base: Record<string, unknown> = {
       tenantId,
       customerId: customerId || null,
       lines: payloadLines,
     };
-  }, [tenantId, customerId, lines]);
+    if (ccForApi) base.costCenterId = ccForApi;
+    if (gstO) base.supplierGstinOverride = gstO;
+    if (stO.length === 2) base.supplierStateCodeOverride = stO;
+    return base;
+  }, [tenantId, customerId, lines, costCenterId, supplierGstinOverride, supplierStateCodeOverride]);
 
   const previewQueryKey = useMemo(
     () =>
@@ -295,6 +328,15 @@ export default function AdminInvoiceNew() {
         });
       }
 
+      const gstO = supplierGstinOverride.trim().toUpperCase();
+      const stO = supplierStateCodeOverride.trim();
+      if (gstO && gstO.length !== 15) {
+        throw new Error("Issue as GSTIN must be exactly 15 characters, or leave blank");
+      }
+      if (stO && stO.length !== 2) {
+        throw new Error("Supplier state override must be exactly 2 digits, or leave blank");
+      }
+
       const body: Record<string, unknown> = {
         tenantId,
         customerId,
@@ -303,7 +345,10 @@ export default function AdminInvoiceNew() {
         notes: notes.trim() || undefined,
         incomeCategoryId: incomeCategoryId || undefined,
         lines: payloadLines,
+        costCenterId: costCenterId === "__corporate__" ? null : costCenterId,
       };
+      if (gstO) body.supplierGstinOverride = gstO;
+      if (stO.length === 2) body.supplierStateCodeOverride = stO;
 
       const res = await apiRequest("POST", "/api/admin/invoicing/invoices", body);
       const invoice = (await res.json()) as { id: string };
@@ -540,6 +585,62 @@ export default function AdminInvoiceNew() {
                   </SelectContent>
                 </Select>
               </div>
+
+              <div className="space-y-2">
+                <Label>{costCenterLabel}</Label>
+                <Select
+                  value={costCenterId}
+                  onValueChange={setCostCenterId}
+                  disabled={costCentersLoading}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={`Select ${costCenterLabel.toLowerCase()}`} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__corporate__">Corporate / not set</SelectItem>
+                    {invoiceCostCenters.filter((cc) => cc.isActive).map((cc) => (
+                      <SelectItem key={cc.id} value={cc.id}>
+                        {cc.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  For India GST, the billing GSTIN on this {costCenterLabel.toLowerCase()} is used as the supplier on the
+                  invoice when you do not set an override below.
+                </p>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="issue-as-gstin">Issue as GSTIN (optional)</Label>
+                  <Input
+                    id="issue-as-gstin"
+                    className="font-mono"
+                    placeholder="Uses cost center or organization default if blank"
+                    maxLength={15}
+                    value={supplierGstinOverride}
+                    onChange={(e) => setSupplierGstinOverride(e.target.value.toUpperCase())}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="supplier-state-ov">Supplier state override (optional)</Label>
+                  <Input
+                    id="supplier-state-ov"
+                    className="font-mono w-24"
+                    placeholder="27"
+                    maxLength={2}
+                    value={supplierStateCodeOverride}
+                    onChange={(e) =>
+                      setSupplierStateCodeOverride(e.target.value.replace(/\D/g, "").slice(0, 2))
+                    }
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground -mt-2">
+                Two-digit state alone can adjust place-of-supply when combined with a GSTIN from the cost center or tenant
+                default.
+              </p>
 
               <div className="space-y-2">
                 <Label htmlFor="notes">Notes</Label>

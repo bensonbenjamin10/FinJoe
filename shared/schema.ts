@@ -58,6 +58,10 @@ export const costCenters = pgTable("cost_centers", {
   slug: text("slug").notNull(),
   type: varchar("type"),
   isActive: boolean("is_active").notNull().default(true),
+  /** Default supplier GSTIN for AR invoices when tax regime is India GST (multi-branch). */
+  billingGstin: text("billing_gstin"),
+  /** Optional 2-digit state code override when billing GSTIN is absent. */
+  billingStateCode: text("billing_state_code"),
   createdById: varchar("created_by_id"),
   updatedById: varchar("updated_by_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

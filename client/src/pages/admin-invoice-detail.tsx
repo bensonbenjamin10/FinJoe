@@ -56,6 +56,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
+import type { CostCenter } from "@shared/schema";
 import { QRCodeSVG } from "qrcode.react";
 import {
   Ban,
@@ -120,7 +121,14 @@ type InvoiceDetail = {
   voidedAt: string | null;
   createdAt: string;
   updatedAt: string;
-  ext?: { taxBreakdown?: TaxBreakdownLine[]; supplierGstin?: string; customerGstin?: string };
+  ext?: {
+    taxBreakdown?: TaxBreakdownLine[];
+    supplierGstin?: string;
+    customerGstin?: string;
+    supplierGstinSource?: "invoice_override" | "cost_center" | "tenant" | null;
+    supplierGstinOverride?: string;
+    supplierStateCodeOverride?: string;
+  };
   customer: { name: string; email: string | null; phone: string | null; gstin: string | null } | null;
   lines: InvoiceLine[];
   allocations: Allocation[];
@@ -145,6 +153,19 @@ function formatDisplayDate(value: string | Date | null | undefined): string {
     return format(d, "dd MMM yyyy");
   } catch {
     return "—";
+  }
+}
+
+function supplierGstinSourceLabel(source: string | null | undefined): string {
+  switch (source) {
+    case "invoice_override":
+      return "Invoice override";
+    case "cost_center":
+      return "Cost center default";
+    case "tenant":
+      return "Organization default";
+    default:
+      return "";
   }
 }
 
@@ -257,6 +278,32 @@ export default function AdminInvoiceDetail() {
     },
     enabled: !!id && !!tenantId,
   });
+
+  const { data: detailCostCenters = [] } = useQuery<CostCenter[]>({
+    queryKey: ["/api/admin/cost-centers", tenantId, "invoice-detail"],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/cost-centers${qs}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load cost centers");
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+
+  const { data: detailFinjoeSettings } = useQuery<{ costCenterLabel?: string | null }>({
+    queryKey: ["/api/admin/finjoe/settings", tenantId, "invoice-detail"],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/finjoe/settings${qs}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load settings");
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+  const detailCostCenterLabel = detailFinjoeSettings?.costCenterLabel?.trim() || "Cost center";
+
+  const invoiceCostCenterName = useMemo(() => {
+    if (!invoice?.costCenterId) return null;
+    return detailCostCenters.find((c) => c.id === invoice.costCenterId)?.name ?? null;
+  }, [invoice?.costCenterId, detailCostCenters]);
 
   useEffect(() => {
     if (!recordPaymentOpen || !invoice) return;
@@ -590,10 +637,31 @@ export default function AdminInvoiceDetail() {
                     {formatDisplayDate(invoice.dueDate)}
                   </p>
                 </div>
-                {invoice.ext?.supplierGstin && (
+                {invoice.costCenterId && (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Supplier GSTIN: <span className="font-mono">{invoice.ext.supplierGstin}</span>
+                    {detailCostCenterLabel}:{" "}
+                    <span className="font-medium text-foreground">
+                      {invoiceCostCenterName ?? invoice.costCenterId}
+                    </span>
                   </p>
+                )}
+                {invoice.ext?.supplierGstin && (
+                  <div className="mt-2 space-y-0.5 text-xs text-muted-foreground">
+                    <p>
+                      Supplier GSTIN: <span className="font-mono">{invoice.ext.supplierGstin}</span>
+                    </p>
+                    {invoice.ext.supplierGstinSource ? (
+                      <p>Source: {supplierGstinSourceLabel(invoice.ext.supplierGstinSource)}</p>
+                    ) : null}
+                    {(invoice.ext.supplierGstinOverride || invoice.ext.supplierStateCodeOverride) && (
+                      <p className="font-mono text-[11px]">
+                        Overrides stored:{" "}
+                        {[invoice.ext.supplierGstinOverride, invoice.ext.supplierStateCodeOverride]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
