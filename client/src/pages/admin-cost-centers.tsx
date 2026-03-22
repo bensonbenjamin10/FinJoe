@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -66,15 +67,24 @@ export default function AdminCostCenters({
   });
 
   const qs = tenantId ? `?tenantId=${tenantId}` : "";
-  const { data: costCenters = [], isLoading } = useQuery<CostCenter[]>({
+  const {
+    data: costCenters,
+    isLoading,
+    isError,
+    error,
+  } = useQuery<CostCenter[]>({
     queryKey: ["/api/admin/cost-centers", tenantId],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/cost-centers${qs}`);
-      if (!res.ok) throw new Error("Failed to fetch");
+      const res = await fetch(`/api/admin/cost-centers${qs}`, { credentials: "include" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error || `Failed to fetch (${res.status})`);
+      }
       return res.json();
     },
     enabled: !!tenantId,
   });
+  const list = costCenters ?? [];
 
   const createMutation = useMutation({
     mutationFn: async (data: {
@@ -244,7 +254,16 @@ export default function AdminCostCenters({
             <div className="py-12 flex justify-center">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
-          ) : costCenters.length === 0 ? (
+          ) : isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Could not load {costCenterLabelPlural.toLowerCase()}</AlertTitle>
+              <AlertDescription>
+                {error instanceof Error ? error.message : "Something went wrong."} If this mentions a missing database
+                column, run <code className="text-xs">npm run db:migrate</code> on the server (includes{" "}
+                <code className="text-xs">0008_cost_center_billing_gst</code>).
+              </AlertDescription>
+            </Alert>
+          ) : list.length === 0 ? (
             <div className="py-12 text-center text-muted-foreground">
               No {costCenterLabelPlural.toLowerCase()} yet. Add your first one to get started.
             </div>
@@ -262,7 +281,7 @@ export default function AdminCostCenters({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {costCenters.map((cc) => (
+                  {list.map((cc) => (
                     <TableRow key={cc.id}>
                       <TableCell className="px-6 py-4">
                         <div className="flex flex-col gap-0.5">

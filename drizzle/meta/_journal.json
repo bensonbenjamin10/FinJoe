@@ -57,6 +57,13 @@
       "when": 1774117930000,
       "tag": "0007_user_invite_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1774117940000,
+      "tag": "0008_cost_center_billing_gst",
+      "breakpoints": true
     }
   ]
 }
