@@ -347,7 +347,8 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
               <div className="grid gap-2">
                 <Label>Link to existing user (optional)</Label>
                 <p className="text-sm text-muted-foreground">
-                  Admin/finance contacts need a linked user to approve expenses via WhatsApp. Link to existing user or leave blank to create one automatically.
+                  Admin/finance contacts need a linked user to approve expenses via WhatsApp. Add dashboard users with real emails under{" "}
+                  <span className="font-medium text-foreground">Team</span> in the sidebar, then link them here—or leave blank to auto-create an internal-only account.
                 </p>
                 <Select
                   value={form.studentId || "none"}
