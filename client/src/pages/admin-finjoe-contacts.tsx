@@ -29,15 +29,22 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Plus, Edit, Trash2, MessageCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { useCostCenterLabel } from "@/hooks/use-cost-center-label";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { FinJoeContact, Campus } from "@shared/schema";
+import { Link } from "wouter";
+import { useAuth } from "@/hooks/use-auth";
+import { FINJOE_PATHS, finjoePathWithTenant } from "@/lib/finjoe-routes";
 
 const ROLES = ["cost_center_coordinator", "campus_coordinator", "head_office", "finance", "admin", "vendor", "faculty", "student", "guest"] as const;
 
 export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | null }) {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
+  const dashboardUsersHref = finjoePathWithTenant(FINJOE_PATHS.peopleUsers, tenantId ?? null, isSuperAdmin);
   const { costCenterLabel } = useCostCenterLabel(tenantId);
   const [dialog, setDialog] = useState<{ mode: "add" | "edit"; contact?: FinJoeContact } | null>(null);
   const [form, setForm] = useState({
@@ -193,7 +200,16 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
 
   return (
     <>
-    <Card>
+      <Alert className="mb-4">
+        <AlertDescription>
+          Admin/finance WhatsApp contacts often need a matching{" "}
+          <Link href={dashboardUsersHref} className="font-medium text-primary underline-offset-4 hover:underline">
+            dashboard user
+          </Link>{" "}
+          (logins). Manage them under FinJoe → Dashboard users.
+        </AlertDescription>
+      </Alert>
+      <Card>
         <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between p-6">
           <div>
             <CardTitle className="flex items-center gap-2">
@@ -348,7 +364,10 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
                 <Label>Link to existing user (optional)</Label>
                 <p className="text-sm text-muted-foreground">
                   Admin/finance contacts need a linked user to approve expenses via WhatsApp. Add dashboard users with real emails under{" "}
-                  <span className="font-medium text-foreground">Team</span> in the sidebar, then link them here—or leave blank to auto-create an internal-only account.
+                  <Link href={dashboardUsersHref} className="font-medium text-primary underline-offset-4 hover:underline">
+                    Dashboard users
+                  </Link>{" "}
+                  (FinJoe), then link them here—or leave blank to auto-create an internal-only account.
                 </p>
                 <Select
                   value={form.studentId || "none"}

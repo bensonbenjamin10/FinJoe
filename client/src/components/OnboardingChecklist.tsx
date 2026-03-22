@@ -31,10 +31,11 @@ function setDismissed(tenantId: string, dismissed: boolean) {
 interface OnboardingChecklistProps {
   tenantId: string | null;
   currentTab: string;
-  onTabChange: (tab: string) => void;
+  /** Navigate to a FinJoe checklist tab (maps to path-based routes). */
+  onNavigateToTab: (tab: string) => void;
 }
 
-export function OnboardingChecklist({ tenantId, currentTab, onTabChange }: OnboardingChecklistProps) {
+export function OnboardingChecklist({ tenantId, currentTab, onNavigateToTab }: OnboardingChecklistProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [dismissedInSession, setDismissedInSession] = useState(false);
 
@@ -128,6 +129,19 @@ export function OnboardingChecklist({ tenantId, currentTab, onTabChange }: Onboa
     enabled: !!tenantId,
   });
 
+  const { data: tenantUsers = [] } = useQuery<{ role: string }[]>({
+    queryKey: ["/api/admin/tenant-users", tenantId],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/admin/tenant-users${tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : ""}`,
+        { credentials: "include" }
+      );
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+
   const [, setLocation] = useLocation();
 
   if (!tenantId) return null;
@@ -139,8 +153,19 @@ export function OnboardingChecklist({ tenantId, currentTab, onTabChange }: Onboa
   const hasExpenseCategories = expenseCategories.length > 0;
   const hasIncomeCategories = incomeCategories.length > 0;
   const hasIncomeTypes = incomeTypes.length > 0;
+  const hasStaffDashboardUsers = tenantUsers.some((u) =>
+    ["finance", "campus_coordinator", "cost_center_coordinator", "head_office"].includes(u.role)
+  );
 
-  const allComplete = hasCostCenterLabel && hasCostCenters && hasContacts && hasWhatsApp && hasExpenseCategories && hasIncomeCategories && hasIncomeTypes;
+  const allComplete =
+    hasCostCenterLabel &&
+    hasCostCenters &&
+    hasContacts &&
+    hasStaffDashboardUsers &&
+    hasWhatsApp &&
+    hasExpenseCategories &&
+    hasIncomeCategories &&
+    hasIncomeTypes;
   const dismissed = dismissedInSession || getDismissedTenants().has(tenantId);
 
   if (dismissed) return null;
@@ -163,6 +188,12 @@ export function OnboardingChecklist({ tenantId, currentTab, onTabChange }: Onboa
       label: "Add FinJoe contacts",
       done: hasContacts,
       tab: "contacts",
+    },
+    {
+      id: "dashboard-users",
+      label: "Add staff dashboard users (finance, coordinators)",
+      done: hasStaffDashboardUsers,
+      tab: "team",
     },
     {
       id: "whatsapp",
@@ -236,7 +267,7 @@ export function OnboardingChecklist({ tenantId, currentTab, onTabChange }: Onboa
                     if ("navigateTo" in step && step.navigateTo) {
                       setLocation(step.navigateTo);
                     } else if ("tab" in step) {
-                      onTabChange(step.tab);
+                      onNavigateToTab(step.tab);
                     }
                   }}
                 >

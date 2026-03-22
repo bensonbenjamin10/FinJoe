@@ -8,7 +8,9 @@ import Login from "@/pages/login";
 import Setup from "@/pages/setup";
 import Signup from "@/pages/signup";
 import AdminDashboard from "@/pages/admin-dashboard";
-import AdminFinJoe from "@/pages/admin-finjoe";
+import AdminFinJoeHub from "@/pages/admin-finjoe-hub";
+import { LegacyTeamRedirect } from "@/components/FinJoeRedirect";
+import { FINJOE_AREA_PATH_PATTERN } from "@/lib/finjoe-routes";
 import AdminExpenses from "@/pages/admin-expenses";
 import AdminIncome from "@/pages/admin-income";
 import AdminRecurringTemplates from "@/pages/admin-recurring-templates";
@@ -19,7 +21,6 @@ import AdminTenantUsers from "@/pages/admin-tenant-users";
 import AdminAccountSettings from "@/pages/admin-account-settings";
 import AdminReconciliation from "@/pages/admin-reconciliation";
 import AdminReports from "@/pages/admin-reports";
-import AdminTeam from "@/pages/admin-team";
 import AcceptInvite from "@/pages/accept-invite";
 import AdminInvoiceNew from "@/pages/admin-invoice-new";
 import AdminInvoicing from "@/pages/admin-invoicing";
@@ -70,8 +71,13 @@ function Router() {
         </Route>
         <Route path="/admin/team">
           <ProtectedRoute requireRoles={["admin", "super_admin"]}>
+            <LegacyTeamRedirect />
+          </ProtectedRoute>
+        </Route>
+        <Route path={FINJOE_AREA_PATH_PATTERN}>
+          <ProtectedRoute>
             <AdminShell>
-              <AdminTeam />
+              <AdminFinJoeHub />
             </AdminShell>
           </ProtectedRoute>
         </Route>
@@ -86,13 +92,6 @@ function Router() {
           <ProtectedRoute>
             <AdminShell>
               <AdminReports />
-            </AdminShell>
-          </ProtectedRoute>
-        </Route>
-        <Route path="/admin/finjoe">
-          <ProtectedRoute>
-            <AdminShell>
-              <AdminFinJoe />
             </AdminShell>
           </ProtectedRoute>
         </Route>

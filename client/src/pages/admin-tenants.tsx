@@ -43,6 +43,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useLocation } from "wouter";
 import type { Tenant } from "@shared/schema";
+import { FINJOE_PATHS, finjoePathWithTenant } from "@/lib/finjoe-routes";
 
 export default function AdminTenants() {
   const { toast } = useToast();
@@ -214,7 +215,9 @@ export default function AdminTenants() {
                             variant="ghost"
                             size="sm"
                             className="h-8 px-2 font-medium"
-                            onClick={() => setLocation(`/admin/finjoe?tenantId=${t.id}`)}
+                            onClick={() =>
+                              setLocation(finjoePathWithTenant(FINJOE_PATHS.structureCostCenters, t.id, true))
+                            }
                           >
                             Manage
                           </Button>

@@ -80,7 +80,7 @@ export default function Setup() {
     onSuccess: () => {
       toast({ title: "Setup Complete!", description: "Redirecting to admin..." });
       queryClient.invalidateQueries({ queryKey: ["/api/setup/status"] });
-      setTimeout(() => setLocation("/admin/finjoe"), 1500);
+      setTimeout(() => setLocation("/admin/dashboard"), 1500);
     },
     onError: (error: any) => {
       toast({

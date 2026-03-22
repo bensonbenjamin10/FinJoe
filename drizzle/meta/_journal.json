@@ -29,6 +29,34 @@
       "when": 1774117819784,
       "tag": "0003_invoicing_ar_lite",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1774117900000,
+      "tag": "0004_allocation_idempotency",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1774117910000,
+      "tag": "0005_tax_regime",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1774117920000,
+      "tag": "0006_billing_customers_gstin",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1774117930000,
+      "tag": "0007_user_invite_tokens",
+      "breakpoints": true
     }
   ]
 }

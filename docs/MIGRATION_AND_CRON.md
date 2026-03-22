@@ -25,11 +25,13 @@ FinJoe uses **drizzle-kit** to manage schema migrations. The schema source of tr
 
 - `drizzle.config.ts` — drizzle-kit configuration (schema path, output dir, DB credentials)
 - `drizzle/` — generated migration SQL files and metadata (`meta/_journal.json`, snapshots)
-- `scripts/run-migrations.mjs` — migration runner using `drizzle-orm/node-postgres/migrator`
+- `scripts/run-migrations.mjs` — migration runner using `drizzle-orm/node-postgres/migrator` (normalizes Railway `DATABASE_URL` with `sslmode=disable`, same idea as `db-query`)
 - `migrations-legacy/` — archived hand-written SQL migrations (001–034), kept for reference only
 
 ### Notes
 
+- **`npm run db:migrate` output**: The runner lists every migration in `drizzle/meta/_journal.json` with `✓` (hash present in `drizzle.__drizzle_migrations`) or `·` (pending). If everything shows `✓`, Drizzle intentionally does nothing — that is still success. Pending rows are applied in one run and printed as `Applied in this run:`.
+- **Journal `when` timestamps must increase** for each entry. Drizzle’s migrator only applies a migration if `max(applied.created_at) < entry.when` (using the **pre-run** latest row only). If a later file has a smaller `when` than an earlier one (e.g. `0007` added with an old date after `0006`), that migration is **silently skipped** — `db:migrate` still prints “complete”.
 - The `session` table (used by `connect-pg-simple`) and the `embedding vector(768)` column on `expenses` (pgvector) exist in the DB but are not modeled in `shared/schema.ts`. They are managed outside Drizzle via raw SQL and remain untouched by drizzle-kit.
 - The baseline migration (`drizzle/0000_chunky_reaper.sql`) is a no-op — it represents the initial schema that was already applied before drizzle-kit was adopted.
 

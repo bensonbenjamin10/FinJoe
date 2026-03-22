@@ -61,7 +61,7 @@ export default function Login() {
         description: `Welcome back, ${user.name}!`,
       });
       
-      setLocation("/admin/finjoe");
+      setLocation("/admin/dashboard");
     },
     onError: (error: Error) => {
       setError(error.message);

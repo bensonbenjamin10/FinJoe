@@ -34,6 +34,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Loader2, Mail, Pencil, UserPlus } from "lucide-react";
+import { Link } from "wouter";
+import { FINJOE_PATHS, finjoePathWithTenant } from "@/lib/finjoe-routes";
 
 const ROLES = ["admin", "finance", "campus_coordinator", "head_office"] as const;
 
@@ -48,7 +50,7 @@ type TenantUserRow = {
   invitePending?: boolean;
 };
 
-export default function AdminTeam() {
+export default function AdminTeam({ embedded = false }: { embedded?: boolean }) {
   const { toast } = useToast();
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
@@ -181,31 +183,64 @@ export default function AdminTeam() {
     });
   };
 
+  const addUserButton = (
+    <Button onClick={() => setCreateOpen(true)}>
+      <UserPlus className="h-4 w-4 mr-2" />
+      Add user
+    </Button>
+  );
+
   if (isSuperAdmin && !tenantId) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Team" description="Select a tenant from the header to manage dashboard users." />
+        {!embedded && (
+          <PageHeader title="Team" description="Select a tenant from the header to manage dashboard users." />
+        )}
+        {embedded && (
+          <h2 className="text-lg font-semibold">Dashboard users</h2>
+        )}
         <Card>
           <CardContent className="py-10 text-center text-muted-foreground">
-            Choose a tenant using the tenant selector above, then return to Team.
+            Choose a tenant using the tenant selector above, then return to Dashboard users.
           </CardContent>
         </Card>
       </div>
     );
   }
 
+  const contactsHref = finjoePathWithTenant(FINJOE_PATHS.peopleContacts, tenantId, isSuperAdmin);
+
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Team"
-        description="Dashboard users for your organization. Link them to WhatsApp contacts from FinJoe → Contacts."
-        actions={
-          <Button onClick={() => setCreateOpen(true)}>
-            <UserPlus className="h-4 w-4 mr-2" />
-            Add user
-          </Button>
-        }
-      />
+      {embedded ? (
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-1">
+            <h2 className="text-lg font-semibold">Dashboard users</h2>
+            <p className="text-sm text-muted-foreground">
+              Logins for your organization. Link them to WhatsApp contacts from{" "}
+              <Link href={contactsHref} className="font-medium text-primary underline-offset-4 hover:underline">
+                Contacts
+              </Link>
+              .
+            </p>
+          </div>
+          {addUserButton}
+        </div>
+      ) : (
+        <PageHeader
+          title="Team"
+          description={
+            <span>
+              Dashboard users for your organization. Link them to WhatsApp contacts from{" "}
+              <Link href={contactsHref} className="font-medium text-primary underline-offset-4 hover:underline">
+                FinJoe → Contacts
+              </Link>
+              .
+            </span>
+          }
+          actions={addUserButton}
+        />
+      )}
 
       <Card>
         <CardHeader>

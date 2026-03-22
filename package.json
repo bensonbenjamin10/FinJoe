@@ -12,6 +12,7 @@
     "start": "node start.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node scripts/run-migrations.mjs",
+    "db:repair-invite-columns": "node scripts/ensure-user-invite-columns.mjs",
     "db:studio": "drizzle-kit studio",
     "db:pull": "drizzle-kit pull",
     "db:query": "node scripts/db-query.mjs",

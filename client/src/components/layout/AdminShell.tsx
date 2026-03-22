@@ -36,7 +36,6 @@ import {
   LayoutDashboard,
   MessageCircle,
   Settings,
-  Users,
   LogOut,
   ChevronDown,
   TrendingUp,
@@ -46,8 +45,10 @@ import {
   GitCompareArrows,
   FileSpreadsheet,
   FileText,
+  Users,
 } from "lucide-react";
 import type { Tenant } from "@shared/schema";
+import { FINJOE_PATHS, finjoePathWithTenant } from "@/lib/finjoe-routes";
 
 interface AdminShellProps {
   children: React.ReactNode;
@@ -87,8 +88,13 @@ export function AdminShell({ children }: AdminShellProps) {
     }
   };
 
-  const teamHref =
-    isSuperAdmin && urlTenantId ? `/admin/team?tenantId=${encodeURIComponent(urlTenantId)}` : "/admin/team";
+  const finjoeHref =
+    isSuperAdmin && urlTenantId
+      ? `/admin/finjoe?tenantId=${encodeURIComponent(urlTenantId)}`
+      : "/admin/finjoe";
+
+  /** Deep-link to dashboard users (scalable path; same destination as legacy `/admin/team`). */
+  const teamHref = finjoePathWithTenant(FINJOE_PATHS.peopleUsers, tenantId, isSuperAdmin);
 
   const navItems = [
     { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -99,7 +105,7 @@ export function AdminShell({ children }: AdminShellProps) {
         ]
       : []),
     ...(isTenantAdmin ? [{ href: teamHref, label: "Team", icon: Users }] : []),
-    { href: "/admin/finjoe", label: "FinJoe", icon: MessageCircle },
+    { href: finjoeHref, label: "FinJoe", icon: MessageCircle },
     { href: "/admin/expenses", label: "Expenses", icon: Receipt },
     { href: "/admin/recurring-templates", label: "Recurring Expenses", icon: Repeat },
     { href: "/admin/income", label: "Income", icon: TrendingUp },
@@ -129,16 +135,26 @@ export function AdminShell({ children }: AdminShellProps) {
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu>
-                {navItems.map((item) => (
+                {navItems.map((item) => {
+                  const locPath = location.split("?")[0];
+                  const itemPath = item.href.split("?")[0];
+                  const isActive =
+                    itemPath === "/admin/finjoe"
+                      ? locPath.startsWith("/admin/finjoe")
+                      : itemPath === FINJOE_PATHS.peopleUsers
+                        ? locPath.startsWith("/admin/finjoe/people/users")
+                        : locPath === itemPath;
+                  return (
                   <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton asChild isActive={location === item.href.split("?")[0]}>
+                    <SidebarMenuButton asChild isActive={isActive}>
                       <Link href={item.href}>
                         <item.icon className="h-4 w-4" />
                         <span>{item.label}</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
-                ))}
+                  );
+                })}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
