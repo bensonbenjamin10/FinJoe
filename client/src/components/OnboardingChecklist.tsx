@@ -157,11 +157,20 @@ export function OnboardingChecklist({ tenantId, currentTab, onNavigateToTab }: O
     ["finance", "campus_coordinator", "cost_center_coordinator", "head_office"].includes(u.role)
   );
 
+  const staffRoles = ["admin", "finance", "head_office", "campus_coordinator", "cost_center_coordinator"];
+  const staffContacts = contacts.filter((c: { role: string; studentId?: string | null }) =>
+    staffRoles.includes(c.role)
+  );
+  const allStaffContactsLinked =
+    staffContacts.length > 0 &&
+    staffContacts.every((c: { studentId?: string | null }) => !!c.studentId);
+
   const allComplete =
     hasCostCenterLabel &&
     hasCostCenters &&
     hasContacts &&
     hasStaffDashboardUsers &&
+    allStaffContactsLinked &&
     hasWhatsApp &&
     hasExpenseCategories &&
     hasIncomeCategories &&
@@ -184,16 +193,22 @@ export function OnboardingChecklist({ tenantId, currentTab, onNavigateToTab }: O
       tab: "cost-centers",
     },
     {
+      id: "dashboard-users",
+      label: "Add staff dashboard users (finance, coordinators)",
+      done: hasStaffDashboardUsers,
+      tab: "team",
+    },
+    {
       id: "contacts",
       label: "Add FinJoe contacts",
       done: hasContacts,
       tab: "contacts",
     },
     {
-      id: "dashboard-users",
-      label: "Add staff dashboard users (finance, coordinators)",
-      done: hasStaffDashboardUsers,
-      tab: "team",
+      id: "link-contacts",
+      label: "Link dashboard users to staff contacts",
+      done: allStaffContactsLinked,
+      tab: "contacts",
     },
     {
       id: "whatsapp",

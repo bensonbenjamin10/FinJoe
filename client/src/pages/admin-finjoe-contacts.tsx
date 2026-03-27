@@ -27,7 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Plus, Edit, Trash2, MessageCircle } from "lucide-react";
+import { Plus, Edit, Trash2, MessageCircle, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
@@ -260,7 +260,15 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
                             const u = users.find((x) => x.id === c.studentId);
                             return u ? `${u.name} (${u.email})` : c.studentId;
                           })()
-                        : "-"}
+                        : (["admin", "finance", "head_office", "campus_coordinator", "cost_center_coordinator"].includes(c.role)
+                          ? (
+                            <span className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+                              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                              Not linked
+                            </span>
+                          )
+                          : "-"
+                        )}
                     </TableCell>
                     <TableCell className="px-6 py-4">
                       {c.isActive ? (
@@ -359,11 +367,11 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
                 {costCenterLabel} coordinators are scoped to a {costCenterLabel.toLowerCase()}. Select the {costCenterLabel.toLowerCase()} they manage.
               </p>
             )}
-            {(form.role === "admin" || form.role === "finance") && (
+            {(["admin", "finance", "head_office", "campus_coordinator", "cost_center_coordinator"].includes(form.role)) && (
               <div className="grid gap-2">
                 <Label>Link to existing user (optional)</Label>
                 <p className="text-sm text-muted-foreground">
-                  Admin/finance contacts need a linked user to approve expenses via WhatsApp. Add dashboard users with real emails under{" "}
+                  Staff contacts need a linked dashboard user to interact with FinJoe. Add users with real emails under{" "}
                   <Link href={dashboardUsersHref} className="font-medium text-primary underline-offset-4 hover:underline">
                     Dashboard users
                   </Link>{" "}
