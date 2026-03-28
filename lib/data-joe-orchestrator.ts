@@ -4,6 +4,7 @@
 
 import Papa from "papaparse";
 import { PDFDocument, type LoadOptions } from "pdf-lib";
+import { decryptPDF } from "@pdfsmaller/pdf-decrypt";
 import { GoogleGenAI } from "@google/genai";
 import { jsonrepair } from "jsonrepair";
 import type { ParsedExpenseRow, ParsedIncomeRow } from "./bank-statement-parser.js";
@@ -176,8 +177,10 @@ export async function tryPreparePdfBuffer(buffer: Buffer, password?: string): Pr
   } catch {
     if (!password) return { ok: buffer, needsPassword: true };
     try {
-      const doc = await PDFDocument.load(buffer, { password, ignoreEncryption: false } as LoadOptions);
-      return { ok: Buffer.from(await doc.save()) };
+      const decryptedBytes = await decryptPDF(buffer, password);
+      // Verify we can load the decrypted bytes without error
+      await PDFDocument.load(decryptedBytes, { ignoreEncryption: false });
+      return { ok: Buffer.from(decryptedBytes) };
     } catch {
       return { ok: buffer, needsPassword: true };
     }
