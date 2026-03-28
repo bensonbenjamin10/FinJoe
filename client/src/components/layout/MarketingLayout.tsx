@@ -11,6 +11,7 @@ import {
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Menu, LogIn } from "lucide-react";
 import { cn } from "@/lib/utils";
+import logoImage from "@assets/finjoe-logo.png";
 
 const NAV_LINKS = [
   { href: "/#features", label: "Features" },
@@ -29,7 +30,8 @@ export function MarketingLayout({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen flex-col bg-background">
       <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="container mx-auto flex h-14 md:h-16 items-center justify-between px-4 md:px-6">
-          <Link href="/" className="flex items-center gap-2 font-display font-semibold text-foreground hover:text-primary transition-colors">
+          <Link href="/" className="flex items-center gap-2.5 font-display font-semibold text-foreground hover:text-primary transition-colors">
+            <img src={logoImage} alt="" className="h-9 w-auto md:h-10" width={160} height={160} />
             <span className="text-xl md:text-2xl">FinJoe</span>
           </Link>
 
@@ -104,7 +106,8 @@ export function MarketingLayout({ children }: { children: React.ReactNode }) {
         <div className="container mx-auto px-4 py-12 md:py-16 md:px-6">
           <div className="flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
             <div className="space-y-2">
-              <Link href="/" className="font-display text-lg font-semibold text-foreground hover:text-primary transition-colors">
+              <Link href="/" className="flex items-center gap-2 font-display text-lg font-semibold text-foreground hover:text-primary transition-colors">
+                <img src={logoImage} alt="" className="h-8 w-auto" width={128} height={128} />
                 FinJoe
               </Link>
               <p className="text-sm text-muted-foreground max-w-xs">

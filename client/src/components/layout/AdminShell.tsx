@@ -49,6 +49,7 @@ import {
 } from "lucide-react";
 import type { Tenant } from "@shared/schema";
 import { FINJOE_PATHS, finjoePathWithTenant } from "@/lib/finjoe-routes";
+import logoImage from "@assets/finjoe-logo.png";
 
 interface AdminShellProps {
   children: React.ReactNode;
@@ -126,8 +127,9 @@ export function AdminShell({ children }: AdminShellProps) {
         <SidebarHeader className="border-b border-sidebar-border">
           <div className="flex h-14 items-center gap-2 px-2">
             <SidebarTrigger className="md:hidden" />
-            <Link href="/admin/dashboard" className="font-display text-lg font-semibold text-foreground hover:text-primary transition-colors">
-              FinJoe
+            <Link href="/admin/dashboard" className="flex items-center gap-2 font-display text-lg font-semibold text-foreground hover:text-primary transition-colors min-w-0">
+              <img src={logoImage} alt="" className="h-8 w-8 shrink-0 rounded-md object-contain" width={32} height={32} />
+              <span className="truncate">FinJoe</span>
             </Link>
           </div>
         </SidebarHeader>

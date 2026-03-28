@@ -1,8 +1,10 @@
+import { useState, useEffect } from "react";
 import { Switch, Route, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { SplashScreen } from "@/components/SplashScreen";
 import Landing from "@/pages/landing";
 import Login from "@/pages/login";
 import Setup from "@/pages/setup";
@@ -169,11 +171,20 @@ function Router() {
   );
 }
 
+const SPLASH_MS = 3000;
+
 export default function App() {
+  const [showSplash, setShowSplash] = useState(true);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setShowSplash(false), SPLASH_MS);
+    return () => window.clearTimeout(id);
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <Router />
+        {showSplash ? <SplashScreen /> : <Router />}
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>

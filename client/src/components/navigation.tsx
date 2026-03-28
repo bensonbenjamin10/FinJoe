@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { LinkButton } from "@/components/link-button";
 import { Menu, X, LogOut, User } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
-import logoImage from "@assets/01 MEDPG ESOP LOGO_1761946382894.png";
+import logoImage from "@assets/finjoe-logo.png";
 
 export function Navigation() {
   const [location] = useLocation();
@@ -23,12 +23,8 @@ export function Navigation() {
 
   const navLinks = [
     { href: "/", label: "Home" },
-    { href: "/programs", label: "Programs" },
-    { href: "/campus", label: "Campus" },
-    { href: "/blog", label: "Blog" },
-    { href: "/faculty", label: "Faculty" },
-    { href: "/results", label: "Results" },
-    { href: "/contact", label: "Contact" },
+    { href: "/#features", label: "Features" },
+    { href: "/#how-it-works", label: "How it works" },
   ];
 
   return (
@@ -49,7 +45,7 @@ export function Navigation() {
           >
             <img 
               src={logoImage} 
-              alt="MedPG - Every student is our priority" 
+              alt="FinJoe" 
               className="h-10 w-auto sm:h-12"
             />
           </Link>
@@ -62,7 +58,7 @@ export function Navigation() {
                 href={link.href}
                 data-testid={`link-nav-${link.label.toLowerCase()}`}
                 className={`px-4 py-2 rounded-md text-sm font-medium transition-colors hover-elevate active-elevate-2 ${
-                  location === link.href
+                  link.href === "/" && location === "/"
                     ? "bg-accent text-accent-foreground"
                     : "text-foreground/80"
                 }`}
@@ -127,12 +123,12 @@ export function Navigation() {
                   Login
                 </LinkButton>
                 <LinkButton
-                  href="/contact"
+                  href="/signup"
                   variant="outline"
                   size="default"
                   data-testid="button-register-nav"
                 >
-                  Register Now
+                  Sign up
                 </LinkButton>
               </>
             )}
@@ -165,7 +161,7 @@ export function Navigation() {
                   data-testid={`link-mobile-${link.label.toLowerCase()}`}
                   onClick={() => setIsMobileMenuOpen(false)}
                   className={`block px-4 py-3 rounded-md text-sm font-medium hover-elevate active-elevate-2 ${
-                    location === link.href
+                    link.href === "/" && location === "/"
                       ? "bg-accent text-accent-foreground"
                       : "text-foreground/80"
                   }`}
@@ -230,12 +226,12 @@ export function Navigation() {
                     Login
                   </LinkButton>
                   <LinkButton
-                    href="/contact"
+                    href="/signup"
                     className="w-full"
                     onClick={() => setIsMobileMenuOpen(false)}
                     data-testid="button-register-mobile"
                   >
-                    Register Now
+                    Sign up
                   </LinkButton>
                 </>
               )}

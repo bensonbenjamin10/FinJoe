@@ -1,14 +1,17 @@
 /**
  * FinJoe brand constants — colors, copy, and design tokens.
- * Pantone-inspired palette: Teal (trust, growth) + Gold (success, premium).
+ * Logo palette: emerald green + amber gold + navy (see client/src/assets/finjoe-logo.png).
  */
 
 export const BRAND = {
-  /** Primary teal — PANTONE 7472 C */
-  primary: "#0d9488",
-  primaryDark: "#0f766e",
-  /** Accent gold — PANTONE 7559 C */
-  accent: "#d4a853",
+  /** Primary emerald — logo green */
+  primary: "#16a34a",
+  primaryDark: "#15803d",
+  /** Accent amber — logo gold */
+  accent: "#eab308",
+  accentDeep: "#ca8a04",
+  /** Navy — overlap / text contrast */
+  navy: "#1e293b",
   /** Neutral slate */
   neutral: {
     dark: "#1e293b",

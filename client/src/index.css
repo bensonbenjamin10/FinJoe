@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* LIGHT MODE — FinJoe Pantone-inspired palette */
+/* LIGHT MODE — FinJoe logo palette: emerald green, amber gold, navy */
 :root {
   --button-outline: rgba(0,0,0, .10);
   --badge-outline: rgba(0,0,0, .05);
@@ -14,68 +14,68 @@
   --elevate-1: rgba(0,0,0, .03);
   --elevate-2: rgba(0,0,0, .08);
 
-  /* Brand: Primary teal #0d9488, Accent gold #d4a853, Background #f8fafc */
+  /* Brand: primary emerald, accent amber, navy text, soft cool background */
   --background: 210 40% 98%;
 
-  --foreground: 217 33% 17%;
+  --foreground: 222 42% 18%;
 
   --border: 215 20% 90%;
 
   --card: 210 40% 99%;
 
-  --card-foreground: 217 33% 18%;
+  --card-foreground: 222 42% 18%;
 
   --card-border: 215 20% 92%;
 
-  --sidebar: 210 30% 96%;
+  --sidebar: 152 25% 96%;
 
-  --sidebar-foreground: 217 33% 22%;
+  --sidebar-foreground: 222 38% 22%;
 
   --sidebar-border: 215 20% 90%;
 
-  --sidebar-primary: 174 84% 32%;
+  --sidebar-primary: 158 62% 42%;
 
   --sidebar-primary-foreground: 0 0% 100%;
 
-  --sidebar-accent: 174 50% 94%;
+  --sidebar-accent: 152 40% 93%;
 
-  --sidebar-accent-foreground: 217 33% 25%;
+  --sidebar-accent-foreground: 222 38% 25%;
 
-  --sidebar-ring: 174 84% 32%;
+  --sidebar-ring: 158 62% 42%;
 
   --popover: 210 40% 99%;
 
-  --popover-foreground: 217 33% 18%;
+  --popover-foreground: 222 42% 18%;
 
   --popover-border: 215 20% 92%;
 
-  --primary: 174 84% 32%;
+  --primary: 158 62% 42%;
 
   --primary-foreground: 0 0% 100%;
 
   --secondary: 215 20% 92%;
 
-  --secondary-foreground: 217 33% 25%;
+  --secondary-foreground: 222 38% 25%;
 
   --muted: 215 20% 94%;
 
-  --muted-foreground: 215 16% 45%;
+  --muted-foreground: 215 16% 42%;
 
-  --accent: 38 59% 58%;
+  --accent: 38 88% 52%;
 
-  --accent-foreground: 38 30% 15%;
+  --accent-foreground: 222 42% 16%;
 
   --destructive: 0 72% 51%;
 
   --destructive-foreground: 0 0% 98%;
 
   --input: 215 20% 75%;
-  --ring: 174 84% 32%;
-  --chart-1: 174 84% 32%;
-  --chart-2: 38 59% 58%;
-  --chart-3: 280 65% 45%;
-  --chart-4: 30 80% 48%;
-  --chart-5: 340 75% 48%;
+  --ring: 158 62% 42%;
+  --chart-1: 158 62% 42%;
+  --chart-2: 38 88% 52%;
+  --chart-3: 222 42% 38%;
+  --chart-4: 280 55% 48%;
+  --chart-5: 340 65% 48%;
 
   /* Typography */
   --font-sans: "DM Sans", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -89,7 +89,7 @@
   --text-body: 1rem;
   --text-small: 0.875rem;
   --leading-body: 1.6;
-  --radius: .5rem; /* 8px */
+  --radius: .625rem; /* 10px — matches logo rounded geometry */
   --shadow-2xs: 0px 1px 2px 0px hsl(220 15% 15% / 0.05);
   --shadow-xs: 0px 1px 3px 0px hsl(220 15% 15% / 0.08);
   --shadow-sm: 0px 2px 4px 0px hsl(220 15% 15% / 0.06), 0px 1px 2px -1px hsl(220 15% 15% / 0.04);
@@ -144,65 +144,65 @@
 
   --background: 222 47% 11%;
 
-  --foreground: 215 8% 92%;
+  --foreground: 210 25% 94%;
 
-  --border: 215 15% 22%;
+  --border: 222 20% 22%;
 
-  --card: 215 20% 14%;
+  --card: 222 35% 14%;
 
-  --card-foreground: 215 8% 90%;
+  --card-foreground: 210 25% 92%;
 
-  --card-border: 215 15% 20%;
+  --card-border: 222 20% 20%;
 
-  --sidebar: 215 20% 15%;
+  --sidebar: 222 40% 13%;
 
-  --sidebar-foreground: 215 8% 88%;
+  --sidebar-foreground: 210 20% 90%;
 
-  --sidebar-border: 215 15% 22%;
+  --sidebar-border: 222 20% 22%;
 
-  --sidebar-primary: 174 70% 45%;
+  --sidebar-primary: 158 55% 50%;
 
   --sidebar-primary-foreground: 0 0% 100%;
 
-  --sidebar-accent: 215 12% 22%;
+  --sidebar-accent: 222 25% 20%;
 
-  --sidebar-accent-foreground: 215 8% 85%;
+  --sidebar-accent-foreground: 210 20% 88%;
 
-  --sidebar-ring: 174 70% 45%;
+  --sidebar-ring: 158 55% 50%;
 
-  --popover: 215 20% 16%;
+  --popover: 222 35% 15%;
 
-  --popover-foreground: 215 8% 86%;
+  --popover-foreground: 210 25% 90%;
 
-  --popover-border: 215 15% 22%;
+  --popover-border: 222 20% 22%;
 
-  --primary: 174 70% 45%;
+  --primary: 158 55% 50%;
 
   --primary-foreground: 0 0% 100%;
 
-  --secondary: 215 15% 22%;
+  --secondary: 222 20% 22%;
 
-  --secondary-foreground: 215 8% 88%;
+  --secondary-foreground: 210 20% 90%;
 
-  --muted: 215 15% 20%;
+  --muted: 222 18% 20%;
 
-  --muted-foreground: 215 8% 65%;
+  --muted-foreground: 215 12% 62%;
 
-  --accent: 38 55% 50%;
+  --accent: 38 80% 55%;
 
-  --accent-foreground: 38 20% 95%;
+  --accent-foreground: 222 47% 12%;
 
   --destructive: 0 72% 51%;
 
   --destructive-foreground: 0 0% 98%;
 
-  --input: 220 15% 35%;
-  --ring: 174 70% 45%;
-  --chart-1: 174 70% 55%;
-  --chart-2: 38 55% 60%;
-  --chart-3: 280 65% 65%;
-  --chart-4: 30 80% 65%;
-  --chart-5: 340 75% 65%;
+  --input: 222 18% 28%;
+  --ring: 158 55% 50%;
+  --chart-1: 158 55% 55%;
+  --chart-2: 38 80% 58%;
+  --chart-3: 210 25% 70%;
+  --chart-4: 280 55% 62%;
+  --chart-5: 340 60% 58%;
 
   --shadow-2xs: 0px 1px 2px 0px hsl(0 0% 0% / 0.30);
   --shadow-xs: 0px 1px 3px 0px hsl(0 0% 0% / 0.40);
@@ -249,6 +249,27 @@
 
   body {
     @apply font-sans antialiased bg-background text-foreground;
+  }
+}
+
+/* Splash / brand loader */
+@keyframes splash-progress {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes splash-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
