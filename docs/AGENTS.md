@@ -61,6 +61,10 @@ npm run db:query -- "SELECT id, name FROM tenants"
 
 ### Other Core Tables
 
+- `vendors` – Accounts-payable vendor master (normalized; links from `expenses.vendor_id`)
+- `tenant_integrations` – OAuth tokens + org id per provider (e.g. Zoho Books)
+- `integration_mappings` – FinJoe entity id ↔ external system id (idempotent sync)
+- `integration_events` – Outbox for async integration jobs
 - `tenants` – Organizations
 - `cost_centers` (alias `campuses`) – Branches, departments
 - `expenses` – Expense records

@@ -78,6 +78,20 @@
       "when": 1774117960000,
       "tag": "0010_expense_categories_tenant_slug_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1774117970000,
+      "tag": "0011_vendors_expense_tax",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1774117980000,
+      "tag": "0012_integrations",
+      "breakpoints": true
     }
   ]
 }

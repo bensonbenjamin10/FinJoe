@@ -21,7 +21,9 @@ import {
   recurringExpenseTemplates,
   recurringIncomeTemplates,
   tenants,
+  vendors,
 } from "../shared/schema";
+import { findOrCreateVendorByName } from "./vendors.js";
 
 export type FinJoeDb = any;
 
@@ -91,9 +93,17 @@ export type CreateExpenseInput = {
   description?: string | null;
   invoiceNumber?: string | null;
   invoiceDate?: string | null;
+  /** Resolved vendor row; if omitted, derived from vendorName via findOrCreateVendorByName. */
+  vendorId?: string | null;
   vendorName?: string | null;
   gstin?: string | null;
   taxType?: string | null;
+  /** Tax base in paise (optional). */
+  baseAmount?: number | null;
+  /** Tax amount in paise (optional). */
+  taxAmount?: number | null;
+  /** Whole percent 0–100 (optional). */
+  taxRate?: number | null;
   voucherNumber?: string | null;
   submittedByContactPhone?: string | null;
   source?: string;
@@ -188,6 +198,10 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
 
     async createExpense(data: CreateExpenseInput): Promise<{ id: string } | null> {
       const costCenterIdForDb = data.costCenterId === "__corporate__" || data.costCenterId === "null" ? null : data.costCenterId;
+      let vendorId = data.vendorId ?? null;
+      if (!vendorId && data.vendorName?.trim()) {
+        vendorId = await findOrCreateVendorByName(db, data.tenantId, data.vendorName, data.gstin);
+      }
       const [created] = await db
         .insert(expenses)
         .values({
@@ -202,9 +216,13 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           recurringTemplateId: data.recurringTemplateId ?? null,
           invoiceNumber: data.invoiceNumber ?? null,
           invoiceDate: data.invoiceDate ? new Date(data.invoiceDate) : null,
+          vendorId,
           vendorName: data.vendorName ?? null,
           gstin: data.gstin ?? null,
           taxType: data.taxType ?? null,
+          baseAmount: data.baseAmount ?? null,
+          taxAmount: data.taxAmount ?? null,
+          taxRate: data.taxRate ?? null,
           submittedByContactPhone: data.submittedByContactPhone ?? null,
         })
         .returning({ id: expenses.id });
@@ -286,9 +304,13 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         description?: string | null;
         invoiceNumber?: string | null;
         invoiceDate?: string | null;
+        vendorId?: string | null;
         vendorName?: string | null;
         gstin?: string | null;
         taxType?: string | null;
+        baseAmount?: number | null;
+        taxAmount?: number | null;
+        taxRate?: number | null;
       }
     ): Promise<{ id: string } | null> {
       const existing = await this.getExpense(id);
@@ -303,9 +325,29 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       if (updates.description !== undefined) setValues.description = updates.description;
       if (updates.invoiceNumber !== undefined) setValues.invoiceNumber = updates.invoiceNumber;
       if (updates.invoiceDate !== undefined) setValues.invoiceDate = updates.invoiceDate ? new Date(updates.invoiceDate) : null;
-      if (updates.vendorName !== undefined) setValues.vendorName = updates.vendorName;
+      if (updates.vendorId !== undefined) setValues.vendorId = updates.vendorId;
       if (updates.gstin !== undefined) setValues.gstin = updates.gstin;
+      if (updates.vendorName !== undefined) {
+        setValues.vendorName = updates.vendorName;
+        if (updates.vendorName?.trim()) {
+          const [cur] = await db.select({ gstin: expenses.gstin }).from(expenses).where(eq(expenses.id, id)).limit(1);
+          const gstForVendor = updates.gstin !== undefined ? updates.gstin : cur?.gstin;
+          const vid = await findOrCreateVendorByName(db, tenantId, updates.vendorName, gstForVendor);
+          setValues.vendorId = vid;
+        } else {
+          setValues.vendorId = null;
+        }
+      } else if (updates.gstin !== undefined) {
+        const [row] = await db.select({ vendorName: expenses.vendorName }).from(expenses).where(eq(expenses.id, id)).limit(1);
+        if (row?.vendorName?.trim()) {
+          const vid = await findOrCreateVendorByName(db, tenantId, row.vendorName, updates.gstin);
+          setValues.vendorId = vid;
+        }
+      }
       if (updates.taxType !== undefined) setValues.taxType = updates.taxType;
+      if (updates.baseAmount !== undefined) setValues.baseAmount = updates.baseAmount;
+      if (updates.taxAmount !== undefined) setValues.taxAmount = updates.taxAmount;
+      if (updates.taxRate !== undefined) setValues.taxRate = updates.taxRate;
 
       const [updated] = await db
         .update(expenses)
@@ -1049,6 +1091,10 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       if (!nextRunDate || nextRunDate < "2022-01-01") {
         return { error: "startDate must be 2022 or later. The computed next run date would be in the past." };
       }
+      let vendorId: string | null = null;
+      if (data.vendorName?.trim()) {
+        vendorId = await findOrCreateVendorByName(db, data.tenantId, data.vendorName, data.gstin);
+      }
       const [created] = await db
         .insert(recurringExpenseTemplates)
         .values({
@@ -1057,6 +1103,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           categoryId: data.categoryId,
           amount: data.amount,
           description: data.description ?? null,
+          vendorId,
           vendorName: data.vendorName ?? null,
           gstin: data.gstin ?? null,
           taxType: data.taxType ?? null,
@@ -1086,6 +1133,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           categoryId: recurringExpenseTemplates.categoryId,
           amount: recurringExpenseTemplates.amount,
           description: recurringExpenseTemplates.description,
+          vendorId: recurringExpenseTemplates.vendorId,
           vendorName: recurringExpenseTemplates.vendorName,
           gstin: recurringExpenseTemplates.gstin,
           taxType: recurringExpenseTemplates.taxType,
@@ -1153,8 +1201,24 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       const setValues: Record<string, unknown> = { updatedAt: new Date() };
       if (updates.amount !== undefined) setValues.amount = updates.amount;
       if (updates.description !== undefined) setValues.description = updates.description;
-      if (updates.vendorName !== undefined) setValues.vendorName = updates.vendorName;
       if (updates.gstin !== undefined) setValues.gstin = updates.gstin;
+      if (updates.vendorName !== undefined) {
+        setValues.vendorName = updates.vendorName;
+        if (updates.vendorName?.trim()) {
+          const [cur] = await db.select({ gstin: recurringExpenseTemplates.gstin }).from(recurringExpenseTemplates).where(eq(recurringExpenseTemplates.id, id)).limit(1);
+          const gstForVendor = updates.gstin !== undefined ? updates.gstin : cur?.gstin;
+          const vid = await findOrCreateVendorByName(db, tenantId, updates.vendorName, gstForVendor);
+          setValues.vendorId = vid;
+        } else {
+          setValues.vendorId = null;
+        }
+      } else if (updates.gstin !== undefined) {
+        const [row] = await db.select({ vendorName: recurringExpenseTemplates.vendorName }).from(recurringExpenseTemplates).where(eq(recurringExpenseTemplates.id, id)).limit(1);
+        if (row?.vendorName?.trim()) {
+          const vid = await findOrCreateVendorByName(db, tenantId, row.vendorName, updates.gstin);
+          setValues.vendorId = vid;
+        }
+      }
       if (updates.taxType !== undefined) setValues.taxType = updates.taxType;
       if (updates.invoiceNumber !== undefined) setValues.invoiceNumber = updates.invoiceNumber;
       if (updates.voucherNumber !== undefined) setValues.voucherNumber = updates.voucherNumber;
@@ -1503,18 +1567,42 @@ const VENDOR_SUGGESTIONS_LIMIT = 100;
 
 /** List distinct vendor names from expenses for autocomplete suggestions */
 export async function listDistinctVendorNames(db: FinJoeDb, tenantId: string): Promise<string[]> {
-  const rows = await db
+  const fromVendors = await db
+    .select({ name: vendors.name })
+    .from(vendors)
+    .where(and(eq(vendors.tenantId, tenantId), eq(vendors.isActive, true)))
+    .orderBy(vendors.name)
+    .limit(VENDOR_SUGGESTIONS_LIMIT);
+  const legacy = await db
     .selectDistinct({ vendorName: expenses.vendorName })
     .from(expenses)
-    .where(and(eq(expenses.tenantId, tenantId), sql`${expenses.vendorName} IS NOT NULL AND ${expenses.vendorName} != ''`))
+    .where(
+      and(
+        eq(expenses.tenantId, tenantId),
+        isNull(expenses.vendorId),
+        sql`${expenses.vendorName} IS NOT NULL AND trim(${expenses.vendorName}) <> ''`,
+      ),
+    )
     .orderBy(expenses.vendorName)
     .limit(VENDOR_SUGGESTIONS_LIMIT);
-  const result: string[] = [];
-  for (const r of rows) {
-    const name = (r.vendorName as string)?.trim();
-    if (name) result.push(name);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of fromVendors) {
+    const n = (r.name as string)?.trim();
+    if (n && !seen.has(n.toLowerCase())) {
+      seen.add(n.toLowerCase());
+      out.push(n);
+    }
   }
-  return result;
+  for (const r of legacy) {
+    const name = (r.vendorName as string)?.trim();
+    if (name && !seen.has(name.toLowerCase())) {
+      seen.add(name.toLowerCase());
+      out.push(name);
+    }
+    if (out.length >= VENDOR_SUGGESTIONS_LIMIT) break;
+  }
+  return out.slice(0, VENDOR_SUGGESTIONS_LIMIT);
 }
 
 /** Max expenses to create per template per run (catch-up for missed cron runs) */
@@ -1609,6 +1697,7 @@ export async function generateExpensesFromTemplates(
             amount,
             expenseDate: nextRunStr,
             description,
+            vendorId: (tpl.vendorId as string | null | undefined) ?? undefined,
             vendorName,
             invoiceDate: nextRunStr,
             gstin: (tpl.gstin as string | null) ?? undefined,

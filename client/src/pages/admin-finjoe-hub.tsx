@@ -1,6 +1,6 @@
 import { Switch, Route, Redirect, Link, useLocation } from "wouter";
 import { useSearchParams } from "wouter";
-import { Building2, MessageCircle, Settings, UserPlus, Users } from "lucide-react";
+import { Building2, Download, MessageCircle, Settings, UserPlus, Users } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { OnboardingChecklist } from "@/components/OnboardingChecklist";
 import { FinJoeRootRedirect } from "@/components/FinJoeRedirect";
@@ -9,6 +9,7 @@ import AdminCostCenters from "./admin-cost-centers";
 import AdminFinJoeContacts from "./admin-finjoe-contacts";
 import AdminFinJoeRoleRequests from "./admin-finjoe-role-requests";
 import AdminFinJoeSettings from "./admin-finjoe-settings";
+import AdminAccountingExports from "./admin-accounting-exports";
 import AdminTeam from "./admin-team";
 import {
   FINJOE_PATHS,
@@ -108,6 +109,8 @@ export default function AdminFinJoeHub() {
           navLink(FINJOE_PATHS.peopleUsers, "Dashboard users", <Users className="h-4 w-4" />)}
         {navLink(FINJOE_PATHS.peopleRoleRequests, "Role requests", <UserPlus className="h-4 w-4" />)}
         {canManageFinJoe &&
+          navLink(FINJOE_PATHS.integrationsExports, "Accounting export", <Download className="h-4 w-4" />)}
+        {canManageFinJoe &&
           navLink(FINJOE_PATHS.integrationsSettings, "Settings", <Settings className="h-4 w-4" />)}
       </nav>
 
@@ -124,6 +127,9 @@ export default function AdminFinJoeHub() {
           </Route>
           <Route path="/admin/finjoe/people/role-requests">
             <AdminFinJoeRoleRequests tenantId={tenantId} />
+          </Route>
+          <Route path="/admin/finjoe/integrations/exports">
+            <AdminAccountingExports tenantId={tenantId} />
           </Route>
           <Route path="/admin/finjoe/integrations/settings">
             <AdminFinJoeSettings tenantId={tenantId} />

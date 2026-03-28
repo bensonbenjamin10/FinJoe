@@ -44,6 +44,7 @@ import { generateAnalyticsInsights } from "../lib/analytics-insights.js";
 import { getMISReport, getMISCellTransactions } from "./mis-report.js";
 import { registerPaymentRoutes } from "./payments-routes.js";
 import { registerInvoicingRoutes } from "./invoicing-routes.js";
+import { registerIntegrationsRoutes } from "./integrations-routes.js";
 import { seedMISCategoriesForTenant } from "./seed-mis-categories.js";
 import { provisionDemoTenantData, normalizePhoneForContact } from "./demo-seeder.js";
 import { generateInviteToken, hashInviteToken } from "./invite-tokens.js";
@@ -4522,6 +4523,7 @@ export async function registerRoutes(app: Express) {
 
   registerPaymentRoutes(app);
   registerInvoicingRoutes(app);
+  registerIntegrationsRoutes(app);
 
   return server;
 }

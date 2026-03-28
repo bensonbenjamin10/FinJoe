@@ -9,6 +9,7 @@ export const FINJOE_PATHS = {
   peopleUsers: "/admin/finjoe/people/users",
   peopleRoleRequests: "/admin/finjoe/people/role-requests",
   integrationsSettings: "/admin/finjoe/integrations/settings",
+  integrationsExports: "/admin/finjoe/integrations/exports",
 } as const;
 
 /** Onboarding / checklist tab ids → path (no query). */
@@ -42,5 +43,6 @@ export function finjoePathToChecklistTab(pathname: string): string {
   if (pathname.includes("/people/users")) return "team";
   if (pathname.includes("/people/role-requests")) return "role-requests";
   if (pathname.includes("/integrations/settings")) return "settings";
+  if (pathname.includes("/integrations/exports")) return "settings";
   return "cost-centers";
 }

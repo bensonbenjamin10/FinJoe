@@ -21,7 +21,8 @@
     "cron:weekly-insights": "node scripts/run-weekly-insights.mjs",
     "cron:recurring-expenses": "node scripts/run-recurring-expenses.mjs",
     "create-templates": "node scripts/create-finjoe-templates.mjs",
-    "backfill:embeddings": "tsx scripts/backfill-expense-embeddings.ts"
+    "backfill:embeddings": "tsx scripts/backfill-expense-embeddings.ts",
+    "db:migrate-vendors": "node scripts/migrate-vendors.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.44.0",

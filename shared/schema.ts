@@ -73,6 +73,21 @@ export const costCenters = pgTable("cost_centers", {
 // Legacy alias for backward compatibility
 export const campuses = costCenters;
 
+/** Accounts-payable vendor master (normalized; syncs to Zoho/Tally ledgers). */
+export const vendors = pgTable("vendors", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  slug: text("slug").notNull(),
+  gstin: text("gstin"),
+  address: text("address"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // Users - FinJoe's equivalent of students (admin, finance, etc.). tenant_id null = super_admin
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -157,9 +172,17 @@ export const expenses = pgTable("expenses", {
   attachments: jsonb("attachments").$type<string[]>().default([]),
   invoiceNumber: text("invoice_number"),
   invoiceDate: timestamp("invoice_date"),
+  /** Optional FK to vendors; vendor_name remains denormalized for search/display. */
+  vendorId: varchar("vendor_id").references(() => vendors.id),
   vendorName: text("vendor_name"),
   gstin: text("gstin"),
   taxType: text("tax_type"),
+  /** Tax base in minor units (paise); null = treat amount as total inclusive or unknown split. */
+  baseAmount: integer("base_amount"),
+  /** Tax amount in minor units (paise). */
+  taxAmount: integer("tax_amount"),
+  /** GST/VAT rate as whole percent 0–100 (same convention as invoice_lines.tax_rate). */
+  taxRate: integer("tax_rate"),
   voucherNumber: text("voucher_number"),
   bankTransactionId: varchar("bank_transaction_id"),
   recurringTemplateId: varchar("recurring_template_id"),
@@ -177,6 +200,7 @@ export const recurringExpenseTemplates = pgTable("recurring_expense_templates", 
   categoryId: varchar("category_id").references(() => expenseCategories.id).notNull(),
   amount: integer("amount").notNull(),
   description: text("description"),
+  vendorId: varchar("vendor_id").references(() => vendors.id),
   vendorName: text("vendor_name"),
   gstin: text("gstin"),
   taxType: text("tax_type"),
@@ -569,15 +593,73 @@ export const cronRuns = pgTable("cron_runs", {
   errorMessage: text("error_message"),
 });
 
+/** OAuth + org context for external accounting (Zoho Books, etc.) */
+export const tenantIntegrations = pgTable("tenant_integrations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  /** e.g. zoho_books, quickbooks_online */
+  provider: text("provider").notNull(),
+  accessToken: text("access_token"),
+  refreshToken: text("refresh_token"),
+  tokenExpiresAt: timestamp("token_expires_at"),
+  organizationId: text("organization_id"),
+  scope: text("scope"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+/** Maps FinJoe entity IDs to external system IDs (idempotent sync). */
+export const integrationMappings = pgTable("integration_mappings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  integrationType: text("integration_type").notNull(),
+  entityType: text("entity_type").notNull(),
+  finjoeId: varchar("finjoe_id").notNull(),
+  externalId: text("external_id").notNull(),
+  lastSyncAt: timestamp("last_sync_at"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+/** Outbox for rate-limited / retried sync jobs. */
+export const integrationEvents = pgTable("integration_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  provider: text("provider").notNull(),
+  eventType: text("event_type").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+  status: text("status").notNull().default("pending"),
+  attempts: integer("attempts").notNull().default(0),
+  lastError: text("last_error"),
+  processedAt: timestamp("processed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // Relations
 export const tenantsRelations = relations(tenants, ({ many }) => ({
   costCenters: many(costCenters),
   campuses: many(costCenters),
   users: many(users),
+  vendors: many(vendors),
   finJoeContacts: many(finJoeContacts),
   finjoeSettings: many(finjoeSettings),
   wabaProviders: many(tenantWabaProviders),
   incomeTypes: many(incomeTypes),
+}));
+
+export const vendorsRelations = relations(vendors, ({ one, many }) => ({
+  tenant: one(tenants, { fields: [vendors.tenantId], references: [tenants.id] }),
+  expenses: many(expenses),
+  recurringTemplates: many(recurringExpenseTemplates),
 }));
 
 export const tenantWabaProvidersRelations = relations(tenantWabaProviders, ({ one }) => ({
@@ -611,6 +693,7 @@ export const expenseCategoriesRelations = relations(expenseCategories, ({ many }
 
 export const expensesRelations = relations(expenses, ({ one, many }) => ({
   costCenter: one(costCenters, { fields: [expenses.costCenterId], references: [costCenters.id] }),
+  vendor: one(vendors, { fields: [expenses.vendorId], references: [vendors.id] }),
   category: one(expenseCategories, { fields: [expenses.categoryId], references: [expenseCategories.id] }),
   submittedBy: one(users, { fields: [expenses.submittedById], references: [users.id] }),
   approvedBy: one(users, { fields: [expenses.approvedById], references: [users.id] }),
@@ -621,6 +704,7 @@ export const expensesRelations = relations(expenses, ({ one, many }) => ({
 export const recurringExpenseTemplatesRelations = relations(recurringExpenseTemplates, ({ one, many }) => ({
   tenant: one(tenants, { fields: [recurringExpenseTemplates.tenantId], references: [tenants.id] }),
   costCenter: one(costCenters, { fields: [recurringExpenseTemplates.costCenterId], references: [costCenters.id] }),
+  vendor: one(vendors, { fields: [recurringExpenseTemplates.vendorId], references: [vendors.id] }),
   category: one(expenseCategories, { fields: [recurringExpenseTemplates.categoryId], references: [expenseCategories.id] }),
   createdBy: one(users, { fields: [recurringExpenseTemplates.createdById], references: [users.id] }),
 }));
@@ -704,6 +788,8 @@ export type CostCenter = typeof costCenters.$inferSelect;
 export type InsertCostCenter = typeof costCenters.$inferInsert;
 export type Campus = CostCenter;
 export type InsertCampus = InsertCostCenter;
+export type Vendor = typeof vendors.$inferSelect;
+export type InsertVendor = typeof vendors.$inferInsert;
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type ExpenseCategory = typeof expenseCategories.$inferSelect;
@@ -761,6 +847,13 @@ export type InvoiceLine = typeof invoiceLines.$inferSelect;
 export type InsertInvoiceLine = typeof invoiceLines.$inferInsert;
 export type PaymentAllocation = typeof paymentAllocations.$inferSelect;
 export type InsertPaymentAllocation = typeof paymentAllocations.$inferInsert;
+
+export type TenantIntegration = typeof tenantIntegrations.$inferSelect;
+export type InsertTenantIntegration = typeof tenantIntegrations.$inferInsert;
+export type IntegrationMapping = typeof integrationMappings.$inferSelect;
+export type InsertIntegrationMapping = typeof integrationMappings.$inferInsert;
+export type IntegrationEvent = typeof integrationEvents.$inferSelect;
+export type InsertIntegrationEvent = typeof integrationEvents.$inferInsert;
 
 export type InvoiceWithDetails = Invoice & {
   customerName?: string | null;
