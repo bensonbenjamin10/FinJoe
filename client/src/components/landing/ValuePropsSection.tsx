@@ -1,7 +1,7 @@
 import { COPY } from "@/lib/brand";
-import { MessageCircle, Receipt, BarChart3, Sparkles } from "lucide-react";
+import { Layers, ArrowLeftRight, ShieldCheck, Sparkles } from "lucide-react";
 
-const ICONS = [MessageCircle, Receipt, BarChart3, Sparkles];
+const ICONS = [Layers, ArrowLeftRight, ShieldCheck, Sparkles];
 
 export function ValuePropsSection() {
   return (
@@ -15,14 +15,14 @@ export function ValuePropsSection() {
           id="value-props-heading"
           className="font-display text-center text-2xl font-bold text-foreground sm:text-3xl md:text-4xl"
         >
-          Why Finance Joe?
+          {COPY.featuresSectionTitle}
         </h2>
-        <p className="mx-auto mt-4 max-w-2xl text-center text-muted-foreground">
-          {COPY.tagline}
+        <p className="mx-auto mt-4 max-w-2xl text-center text-muted-foreground md:text-lg md:leading-relaxed">
+          {COPY.featuresSectionSubtitle}
         </p>
         <div className="mt-12 grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
           {COPY.valueProps.map((prop, i) => {
-            const Icon = ICONS[i] ?? MessageCircle;
+            const Icon = ICONS[i] ?? Layers;
             return (
               <div
                 key={prop.title}

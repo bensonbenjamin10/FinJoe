@@ -23,21 +23,73 @@ export const BRAND = {
 } as const;
 
 export const COPY = {
-  tagline: "WhatsApp AI for expense and income management",
-  heroHeadline: "Finance Joe — Your AI Finance Assistant on WhatsApp",
+  heroBadge: "The intelligence layer for modern businesses",
+  tagline:
+    "FinJoe is building a complete intelligence layer for businesses—starting with finance, with more systems to follow.",
+  heroHeadline: "Finance intelligence at the core of your business",
   heroSubhead:
-    "Post expenses, receipts, and income. Get dashboards, planning, and accounting. All through WhatsApp.",
+    "Track every cash movement—in, out, and flow—with approvals traced and analysis that turns data into action. Delivered through WhatsApp and a powerful admin experience.",
   ctaLogin: "Log in to Admin",
   ctaGetStarted: "Get Started",
+  intelligenceSectionTitle: "Built into the business, not bolted on",
+  intelligenceSectionLead:
+    "We’re building an intelligence layer that sits at the center of how companies run: capturing money movement, enforcing accountability, and surfacing what to do next.",
+  intelligenceSectionPoints: [
+    "Finance is our first product segment—deep visibility into cash, receipts, and workflows.",
+    "Approvals and hand-offs stay traced so finance and leadership can trust the trail.",
+    "Analysis isn’t an afterthought—it’s core to how FinJoe recommends and explains next steps.",
+    "The same architecture will extend to other business systems over time.",
+  ],
+  intelligenceRoadmapHint: "Today: finance. Next: more of your operating stack.",
+  featuresSectionTitle: "What you get with FinJoe",
+  featuresSectionSubtitle:
+    "WhatsApp for capture and collaboration, plus admin tools for control—grounded in traceable flows and real insights.",
   valueProps: [
-    { title: "WhatsApp-first", description: "Use the app you already use every day. No new tools to learn." },
-    { title: "Expense & income tracking", description: "Post receipts, expenses, and income. Finance Joe organizes everything." },
-    { title: "Dashboards & reports", description: "Clear insights and planning at a glance." },
-    { title: "AI-powered insights", description: "Smart categorization and answers to your finance questions." },
+    {
+      title: "Intelligence layer, not another silo",
+      description:
+        "A unified approach to business intelligence—starting with finance and designed to grow into adjacent systems.",
+    },
+    {
+      title: "Cash in, out, and flow—continuously",
+      description:
+        "See how money enters, leaves, and moves across your organization so gaps and patterns stand out early.",
+    },
+    {
+      title: "Approvals you can trace",
+      description:
+        "Policies and sign-offs are recorded end to end—so audits and decisions rest on a clear, accountable trail.",
+    },
+    {
+      title: "Insights you can act on",
+      description:
+        "Analysis sits at the core: trends, anomalies, and recommendations—not just static charts.",
+    },
   ],
+  howItWorksTitle: "How FinJoe fits your organization",
+  howItWorksSubtitle:
+    "Connect your team on WhatsApp, run finance with rigor in the admin, and let intelligence compound from real operational data.",
   howItWorks: [
-    { step: 1, title: "Add your contacts", description: "Admins add WhatsApp contacts to Finance Joe." },
-    { step: 2, title: "Post via WhatsApp", description: "Users send expenses, receipts, and income to Finance Joe." },
-    { step: 3, title: "Get insights", description: "Dashboards, reports, and AI-powered planning." },
+    {
+      step: 1,
+      title: "Connect & configure",
+      description:
+        "Admins connect WhatsApp contacts, roles, and your Finance Joe workspace so capture and policy live in one place.",
+    },
+    {
+      step: 2,
+      title: "Capture, approve, trace",
+      description:
+        "Teams post income and expenses on WhatsApp; approvals and flows are tracked so nothing important slips through.",
+    },
+    {
+      step: 3,
+      title: "Analyze & decide",
+      description:
+        "Dashboards and AI surface patterns, risks, and opportunities—so leaders move from data to action faster.",
+    },
   ],
+  ctaTitle: "Ready to put finance intelligence at the center?",
+  ctaDescription:
+    "Sign up or log in to configure your organization, manage contacts and approvals, and unlock actionable insight from your cash flows.",
 } as const;

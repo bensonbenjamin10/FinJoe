@@ -15,10 +15,10 @@ export function HowItWorksSection() {
           id="how-it-works-heading"
           className="font-display text-center text-2xl font-bold text-foreground sm:text-3xl md:text-4xl"
         >
-          How It Works
+          {COPY.howItWorksTitle}
         </h2>
-        <p className="mx-auto mt-4 max-w-2xl text-center text-muted-foreground">
-          Three simple steps to get your organization on Finance Joe
+        <p className="mx-auto mt-4 max-w-2xl text-center text-muted-foreground md:text-lg md:leading-relaxed">
+          {COPY.howItWorksSubtitle}
         </p>
         <div className="mt-12 flex flex-col gap-8 md:flex-row md:items-stretch md:justify-center md:gap-4 lg:gap-8">
           {COPY.howItWorks.map((item, i) => {

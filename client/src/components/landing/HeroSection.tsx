@@ -14,7 +14,7 @@ export function HeroSection() {
         <div className="mx-auto max-w-4xl text-center">
           <div className="mb-6 inline-flex items-center gap-2 rounded-full border bg-background/80 px-4 py-1.5 text-sm text-muted-foreground backdrop-blur-sm">
             <Sparkles className="h-4 w-4 text-primary" />
-            <span>WhatsApp AI for finance</span>
+            <span>{COPY.heroBadge}</span>
           </div>
           <h1 className="font-display text-3xl font-bold tracking-tight text-foreground sm:text-4xl md:text-5xl lg:text-6xl">
             {COPY.heroHeadline}

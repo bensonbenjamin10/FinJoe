@@ -1,7 +1,7 @@
 {
   "name": "FinJoe - Finance Joe",
   "short_name": "FinJoe",
-  "description": "WhatsApp AI for expense and income management. Finance Joe knows everything about finance.",
+  "description": "Business intelligence layer starting with finance—cash flow, traced approvals, and actionable insights. WhatsApp capture and admin control.",
   "icons": [
     {
       "src": "/android-chrome-192x192.png",

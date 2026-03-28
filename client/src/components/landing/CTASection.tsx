@@ -1,5 +1,6 @@
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
+import { COPY } from "@/lib/brand";
 import { LogIn } from "lucide-react";
 
 export function CTASection() {
@@ -14,10 +15,10 @@ export function CTASection() {
             id="cta-heading"
             className="font-display text-2xl font-bold text-foreground sm:text-3xl"
           >
-            Ready to manage your finance with AI?
+            {COPY.ctaTitle}
           </h2>
-          <p className="mt-4 text-muted-foreground">
-            Log in to the admin dashboard to manage contacts, approve roles, and configure your organization&apos;s Finance Joe.
+          <p className="mt-4 text-muted-foreground md:text-lg md:leading-relaxed">
+            {COPY.ctaDescription}
           </p>
           <div className="mt-8 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
             <Link href="/login">

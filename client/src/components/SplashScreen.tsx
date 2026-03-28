@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import logoImage from "@assets/finjoe-logo.png";
 
 const MESSAGES = [
-  "Fetching your finance…",
-  "Analyzing transactions…",
-  "Building your insights…",
+  "Syncing cash in, out, and flow…",
+  "Tracing approvals and hand-offs…",
+  "Turning signals into next actions…",
 ] as const;
 
 export function SplashScreen() {
@@ -49,7 +49,7 @@ export function SplashScreen() {
               }}
             />
           </div>
-          <p className="text-xs text-muted-foreground/80">Finance Joe is getting things ready</p>
+          <p className="text-xs text-muted-foreground/80">FinJoe intelligence layer is starting up</p>
         </div>
       </div>
     </div>

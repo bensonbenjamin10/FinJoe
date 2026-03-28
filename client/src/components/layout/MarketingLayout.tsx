@@ -11,15 +11,13 @@ import {
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Menu, LogIn } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { COPY } from "@/lib/brand";
 import logoImage from "@assets/finjoe-logo.png";
 
 const NAV_LINKS = [
-  { href: "/#features", label: "Features" },
-  { href: "/#how-it-works", label: "How It Works" },
-  // Placeholders for future pages
-  // { href: "/pricing", label: "Pricing" },
-  // { href: "/about", label: "About" },
-  // { href: "/contact", label: "Contact" },
+  { href: "/#intelligence", label: "Intelligence" },
+  { href: "/#features", label: "Product" },
+  { href: "/#how-it-works", label: "How it works" },
 ];
 
 export function MarketingLayout({ children }: { children: React.ReactNode }) {
@@ -110,8 +108,8 @@ export function MarketingLayout({ children }: { children: React.ReactNode }) {
                 <img src={logoImage} alt="" className="h-8 w-auto" width={128} height={128} />
                 FinJoe
               </Link>
-              <p className="text-sm text-muted-foreground max-w-xs">
-                WhatsApp AI for expense and income management. Finance Joe knows everything about finance.
+              <p className="text-sm text-muted-foreground max-w-sm leading-relaxed">
+                {COPY.tagline}
               </p>
             </div>
             <div className="flex flex-col gap-4 md:flex-row md:gap-8">
