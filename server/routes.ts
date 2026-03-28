@@ -4,8 +4,10 @@ import multer from "multer";
 import passport from "passport";
 import { eq, and, desc, or, sql, inArray, isNull, gte, lte, aliasedTable } from "drizzle-orm";
 import { db, pool } from "./db.js";
-import { parseBankStatementCsv, isValidDateString } from "../lib/bank-statement-parser.js";
-import { analyzeImportSuggestions } from "../lib/import-analyzer.js";
+import { parseBankStatementCsv, isValidDateString, type ParsedExpenseRow, type ParsedIncomeRow } from "../lib/bank-statement-parser.js";
+import { runBankStatementImportAnalyze } from "../lib/bank-import-analyze.js";
+import { analyzeDataJoeDocument } from "../lib/data-joe-orchestrator.js";
+import { executeDataJoeImport } from "../lib/data-joe-execute.js";
 import { hashPassword, requireAdmin, requireTenantStaff, requireApprover, requireSuperAdmin, getTenantId } from "./auth.js";
 import { logger } from "./logger.js";
 import {
@@ -55,6 +57,7 @@ import {
 } from "../lib/notifications.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const upload25mb = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 const EXPORT_ROW_LIMIT = parseInt(process.env.EXPORT_ROW_LIMIT ?? "10000", 10) || 10000;
 
@@ -3166,115 +3169,6 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  // --- Bank import deduplication utilities ---
-  type DuplicateInfo = {
-    potentialDuplicate: boolean;
-    matchConfidence?: "exact" | "probable";
-    matchedExpenseId?: string;
-    matchedExpenseStatus?: string;
-    matchedExpenseSource?: string;
-  };
-
-  /** YYYY-MM-DD from a DB Date, or null if missing/invalid (avoids RangeError from toISOString). */
-  function safeDbDateKey(d: Date | null): string | null {
-    if (d == null || !(d instanceof Date) || Number.isNaN(d.getTime())) return null;
-    try {
-      return d.toISOString().slice(0, 10);
-    } catch {
-      return null;
-    }
-  }
-
-  function shiftDate(dateStr: string | null | undefined, days: number): string {
-    if (dateStr == null || !isValidDateString(dateStr)) return dateStr ?? "";
-    const d = new Date(dateStr + "T12:00:00Z");
-    if (Number.isNaN(d.getTime())) return dateStr;
-    d.setUTCDate(d.getUTCDate() + days);
-    try {
-      return d.toISOString().slice(0, 10);
-    } catch {
-      return dateStr;
-    }
-  }
-
-  function getDateRange(rows: Array<{ date: string | null }>): { minDate: string; maxDate: string } | null {
-    const dates = rows.map((r) => r.date).filter((s): s is string => isValidDateString(s));
-    if (dates.length === 0) return null;
-    dates.sort();
-    return { minDate: dates[0], maxDate: dates[dates.length - 1] };
-  }
-
-  function findDuplicateExpenses(
-    csvRows: Array<{ date: string | null; particulars: string; amount: number }>,
-    existingExpenses: Array<{ id: string; amount: number; expenseDate: Date | null; description: string | null; vendorName: string | null; status: string; source: string }>
-  ): DuplicateInfo[] {
-    const byDateAmount = new Map<string, typeof existingExpenses>();
-    for (const e of existingExpenses) {
-      const dk = safeDbDateKey(e.expenseDate);
-      const key = `${dk ?? "__no_date__"}|${e.amount}`;
-      const arr = byDateAmount.get(key);
-      if (arr) arr.push(e);
-      else byDateAmount.set(key, [e]);
-    }
-    return csvRows.map((row) => {
-      const rowDateKey = row.date && isValidDateString(row.date) ? row.date : "__no_date__";
-      const key = `${rowDateKey}|${row.amount}`;
-      const candidates = byDateAmount.get(key);
-      if (!candidates || candidates.length === 0) {
-        if (!row.date || !isValidDateString(row.date)) {
-          return { potentialDuplicate: false };
-        }
-        const fuzzyKey1 = `${shiftDate(row.date, 1)}|${row.amount}`;
-        const fuzzyKey2 = `${shiftDate(row.date, -1)}|${row.amount}`;
-        const fuzzyCandidates = [...(byDateAmount.get(fuzzyKey1) ?? []), ...(byDateAmount.get(fuzzyKey2) ?? [])];
-        if (fuzzyCandidates.length > 0) {
-          const textMatch = fuzzyCandidates.find((e) => textsOverlap(row.particulars, e.description, e.vendorName));
-          if (textMatch) return { potentialDuplicate: true, matchConfidence: "probable" as const, matchedExpenseId: textMatch.id, matchedExpenseStatus: textMatch.status, matchedExpenseSource: textMatch.source };
-        }
-        return { potentialDuplicate: false };
-      }
-      const exact = candidates.find((e) => textsOverlap(row.particulars, e.description, e.vendorName));
-      if (exact) return { potentialDuplicate: true, matchConfidence: "exact" as const, matchedExpenseId: exact.id, matchedExpenseStatus: exact.status, matchedExpenseSource: exact.source };
-      return { potentialDuplicate: true, matchConfidence: "probable" as const, matchedExpenseId: candidates[0].id, matchedExpenseStatus: candidates[0].status, matchedExpenseSource: candidates[0].source };
-    });
-  }
-
-  function findDuplicateIncome(
-    csvRows: Array<{ date: string | null; particulars: string; amount: number }>,
-    existingIncome: Array<{ id: string; amount: number; incomeDate: Date | null; particulars: string | null; source: string }>
-  ): DuplicateInfo[] {
-    const byDateAmount = new Map<string, typeof existingIncome>();
-    for (const e of existingIncome) {
-      const dk = safeDbDateKey(e.incomeDate);
-      const key = `${dk ?? "__no_date__"}|${e.amount}`;
-      const arr = byDateAmount.get(key);
-      if (arr) arr.push(e);
-      else byDateAmount.set(key, [e]);
-    }
-    return csvRows.map((row) => {
-      const rowDateKey = row.date && isValidDateString(row.date) ? row.date : "__no_date__";
-      const key = `${rowDateKey}|${row.amount}`;
-      const candidates = byDateAmount.get(key);
-      if (!candidates || candidates.length === 0) return { potentialDuplicate: false };
-      const exact = candidates.find((e) => e.particulars && row.particulars && (e.particulars.toLowerCase().includes(row.particulars.toLowerCase().slice(0, 20)) || row.particulars.toLowerCase().includes(e.particulars.toLowerCase().slice(0, 20))));
-      if (exact) return { potentialDuplicate: true, matchConfidence: "exact" as const, matchedExpenseId: exact.id, matchedExpenseStatus: "income", matchedExpenseSource: exact.source };
-      return { potentialDuplicate: true, matchConfidence: "probable" as const, matchedExpenseId: candidates[0].id, matchedExpenseStatus: "income", matchedExpenseSource: candidates[0].source };
-    });
-  }
-
-  function textsOverlap(particulars: string | undefined, description: string | null, vendorName: string | null): boolean {
-    if (!particulars) return false;
-    const p = particulars.toLowerCase();
-    if (description) {
-      const d = description.toLowerCase();
-      if (d.includes(p.slice(0, 20)) || p.includes(d.slice(0, 20))) return true;
-    }
-    if (vendorName) {
-      if (p.includes(vendorName.toLowerCase())) return true;
-    }
-    return false;
-  }
-
   // Expense/Income import from bank statement CSV
   app.post("/api/admin/expenses/import/preview", requireTenantStaff, upload.single("file"), async (req, res) => {
     try {
@@ -3335,89 +3229,8 @@ export async function registerRoutes(app: Express) {
       const file = (req as any).file;
       if (!file?.buffer) return res.status(400).json({ error: "No file uploaded" });
 
-      const expCats = await db.select({ id: expenseCategories.id, name: expenseCategories.name, slug: expenseCategories.slug }).from(expenseCategories).where(and(eq(expenseCategories.isActive, true), or(eq(expenseCategories.tenantId, tid), isNull(expenseCategories.tenantId))));
-      const incCats = await db.select({ id: incomeCategories.id, name: incomeCategories.name, slug: incomeCategories.slug }).from(incomeCategories).where(and(eq(incomeCategories.tenantId, tid), eq(incomeCategories.isActive, true)));
-      const expSlugs = expCats.map((c) => c.slug);
-      const incSlugs = incCats.length > 0 ? incCats.map((c) => c.slug) : ["other"];
-
-      const { expenses: expRows, income: incRows, skippedZero } = parseBankStatementCsv(file.buffer, expSlugs, incSlugs);
-
-      const totalExpAmount = expRows.reduce((s, r) => s + r.amount, 0);
-      const totalIncAmount = incRows.reduce((s, r) => s + r.amount, 0);
-
-      const { suggestedExpenseMappings, suggestedIncomeMappings, proposedNewCategories } = await analyzeImportSuggestions(
-        expRows,
-        incRows,
-        expCats,
-        incCats.length > 0 ? incCats : [{ id: "", name: "Other", slug: "other" }]
-      );
-
-      // Duplicate detection: query existing records in the CSV's date range
-      let expDuplicates: DuplicateInfo[] = [];
-      let incDuplicates: DuplicateInfo[] = [];
-      const expDateRange = getDateRange(expRows);
-      const incDateRange = getDateRange(incRows);
-      if (expDateRange && isValidDateString(expDateRange.minDate) && isValidDateString(expDateRange.maxDate)) {
-        const minD = new Date(expDateRange.minDate + "T00:00:00Z");
-        const maxD = new Date(expDateRange.maxDate + "T23:59:59Z");
-        if (Number.isNaN(minD.getTime()) || Number.isNaN(maxD.getTime())) {
-          logger.warn("Import analyze: invalid date range bounds, skipping expense duplicate scan", { expDateRange });
-        } else {
-        minD.setUTCDate(minD.getUTCDate() - 1);
-        maxD.setUTCDate(maxD.getUTCDate() + 1);
-        const existingExp = await db
-          .select({ id: expenses.id, amount: expenses.amount, expenseDate: expenses.expenseDate, description: expenses.description, vendorName: expenses.vendorName, status: expenses.status, source: expenses.source })
-          .from(expenses)
-          .where(and(eq(expenses.tenantId, tid), gte(expenses.expenseDate, minD), lte(expenses.expenseDate, maxD)));
-        expDuplicates = findDuplicateExpenses(expRows, existingExp);
-        }
-      }
-      if (incDateRange && isValidDateString(incDateRange.minDate) && isValidDateString(incDateRange.maxDate)) {
-        const minD = new Date(incDateRange.minDate + "T00:00:00Z");
-        const maxD = new Date(incDateRange.maxDate + "T23:59:59Z");
-        if (Number.isNaN(minD.getTime()) || Number.isNaN(maxD.getTime())) {
-          logger.warn("Import analyze: invalid date range bounds, skipping income duplicate scan", { incDateRange });
-        } else {
-        minD.setUTCDate(minD.getUTCDate() - 1);
-        maxD.setUTCDate(maxD.getUTCDate() + 1);
-        const existingInc = await db
-          .select({ id: incomeRecords.id, amount: incomeRecords.amount, incomeDate: incomeRecords.incomeDate, particulars: incomeRecords.particulars, source: incomeRecords.source })
-          .from(incomeRecords)
-          .where(and(eq(incomeRecords.tenantId, tid), gte(incomeRecords.incomeDate, minD), lte(incomeRecords.incomeDate, maxD)));
-        incDuplicates = findDuplicateIncome(incRows, existingInc);
-        }
-      }
-
-      res.json({
-        preview: expRows.map((r, i) => ({
-          date: r.date,
-          dateRaw: r.dateRaw ?? "",
-          particulars: r.particulars,
-          amount: r.amount,
-          majorHead: r.majorHead ?? "",
-          branch: r.branch ?? "",
-          categoryMatch: r.categoryMatch,
-          ...(expDuplicates[i] ?? {}),
-        })),
-        totalRows: expRows.length,
-        totalAmount: totalExpAmount,
-        incomePreview: incRows.map((r, i) => ({
-          date: r.date,
-          dateRaw: r.dateRaw ?? "",
-          particulars: r.particulars,
-          amount: r.amount,
-          majorHead: r.majorHead ?? "",
-          branch: r.branch ?? "",
-          categoryMatch: r.categoryMatch,
-          ...(incDuplicates[i] ?? {}),
-        })),
-        incomeTotalRows: incRows.length,
-        incomeTotalAmount: totalIncAmount,
-        skippedZero,
-        suggestedExpenseMappings,
-        suggestedIncomeMappings,
-        proposedNewCategories,
-      });
+      const result = await runBankStatementImportAnalyze(db, tid, file.buffer);
+      res.json(result);
     } catch (e) {
       logger.error("Import analyze error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to analyze CSV" });
@@ -3633,6 +3446,146 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("Import template error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to generate template" });
+    }
+  });
+
+  app.post("/api/admin/datajoe/analyze", requireTenantStaff, upload25mb.single("file"), async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const file = (req as any).file;
+      if (!file?.buffer) return res.status(400).json({ error: "No file uploaded" });
+
+      const password = typeof req.body?.password === "string" ? req.body.password : undefined;
+      const filename = file.originalname || "upload";
+
+      const expCats = await db
+        .select({ id: expenseCategories.id, name: expenseCategories.name, slug: expenseCategories.slug })
+        .from(expenseCategories)
+        .where(and(eq(expenseCategories.isActive, true), or(eq(expenseCategories.tenantId, tid), isNull(expenseCategories.tenantId))));
+      const incCats = await db
+        .select({ id: incomeCategories.id, name: incomeCategories.name, slug: incomeCategories.slug })
+        .from(incomeCategories)
+        .where(and(eq(incomeCategories.tenantId, tid), eq(incomeCategories.isActive, true)));
+
+      const result = await analyzeDataJoeDocument(db, tid, file.buffer, filename, password, expCats, incCats);
+
+      if (result.mode === "legacy_bank_csv") {
+        return res.json({ mode: "legacy_bank_csv", ...result.result });
+      }
+      if (result.mode === "universal" && result.needsPassword) {
+        return res.json({ mode: "universal", needsPassword: true });
+      }
+      if (result.mode === "error") {
+        return res.status(400).json({ error: result.error });
+      }
+      if (result.mode === "universal") {
+        const er = result.expenseRows;
+        const ir = result.incomeRows;
+        const totalExp = er.reduce((s, r) => s + r.amount, 0);
+        const totalInc = ir.reduce((s, r) => s + r.amount, 0);
+        return res.json({
+          mode: "universal",
+          documentType: result.documentType,
+          destination: result.destination,
+          summary: result.summary,
+          preview: er.map((r) => ({
+            date: r.date,
+            dateRaw: r.dateRaw ?? "",
+            particulars: r.particulars,
+            amount: r.amount,
+            majorHead: r.majorHead ?? "",
+            branch: r.branch ?? "",
+            categoryMatch: r.categoryMatch,
+          })),
+          totalRows: er.length,
+          totalAmount: totalExp,
+          incomePreview: ir.map((r) => ({
+            date: r.date,
+            dateRaw: r.dateRaw ?? "",
+            particulars: r.particulars,
+            amount: r.amount,
+            majorHead: r.majorHead ?? "",
+            branch: r.branch ?? "",
+            categoryMatch: r.categoryMatch,
+          })),
+          incomeTotalRows: ir.length,
+          incomeTotalAmount: totalInc,
+          skippedZero: result.skippedZero ?? 0,
+          suggestedExpenseMappings: result.suggestedExpenseMappings,
+          suggestedIncomeMappings: result.suggestedIncomeMappings,
+          proposedNewCategories: result.proposedNewCategories,
+          parsedExpenseRows: er,
+          parsedIncomeRows: ir,
+        });
+      }
+      res.status(500).json({ error: "Unexpected analyze result" });
+    } catch (e) {
+      logger.error("datajoe analyze error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to analyze document" });
+    }
+  });
+
+  app.post("/api/admin/datajoe/execute", requireTenantStaff, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+
+      const body = req.body as {
+        destination?: string;
+        expenseRows?: ParsedExpenseRow[];
+        incomeRows?: ParsedIncomeRow[];
+        expenseOverrides?: Record<string, string>;
+        incomeOverrides?: Record<string, string>;
+        costCenterOverrides?: Record<string, string | null>;
+        incomeCostCenterOverrides?: Record<string, string | null>;
+        skipExpenseIndices?: number[];
+        skipIncomeIndices?: number[];
+      };
+
+      if (!body.destination || !["bank_transactions", "expenses", "income_records", "mixed"].includes(body.destination)) {
+        return res.status(400).json({ error: "invalid destination" });
+      }
+      if (!Array.isArray(body.expenseRows) || !Array.isArray(body.incomeRows)) {
+        return res.status(400).json({ error: "expenseRows and incomeRows required" });
+      }
+
+      if (body.destination !== "bank_transactions") {
+        const approverOk =
+          user.role === "super_admin" || user.role === "admin" || user.role === "finance";
+        if (!approverOk) return res.status(403).json({ error: "Admin or finance role required to post to books" });
+      }
+
+      const out = await executeDataJoeImport(db, tid, {
+        destination: body.destination as "bank_transactions" | "expenses" | "income_records" | "mixed",
+        expenseRows: body.expenseRows,
+        incomeRows: body.incomeRows,
+        expenseOverrides: body.expenseOverrides ?? {},
+        incomeOverrides: body.incomeOverrides ?? {},
+        costCenterOverrides: body.costCenterOverrides ?? {},
+        incomeCostCenterOverrides: body.incomeCostCenterOverrides ?? {},
+        skipExpenseIndices: body.skipExpenseIndices ?? [],
+        skipIncomeIndices: body.skipIncomeIndices ?? [],
+      });
+
+      if (body.destination === "bank_transactions") {
+        return res.json({ imported: 0, incomeImported: 0, bankOnly: out.bankOnly ?? 0 });
+      }
+      res.json({
+        imported: out.imported,
+        incomeImported: out.incomeImported,
+        skippedExpenses: 0,
+        skippedIncome: 0,
+      });
+    } catch (e) {
+      logger.error("datajoe execute error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: (e as Error).message || "Failed to import" });
     }
   });
 

@@ -54,6 +54,7 @@ import {
   Repeat,
   Zap,
   GitCompareArrows,
+  Upload,
   FileSpreadsheet,
   FileText,
   Users,
@@ -132,6 +133,11 @@ export function AdminShell({ children }: AdminShellProps) {
       ? `/admin/finjoe?tenantId=${encodeURIComponent(urlTenantId)}`
       : "/admin/finjoe";
 
+  const dataHandlingHref =
+    isSuperAdmin && urlTenantId
+      ? `/admin/data-handling?tenantId=${encodeURIComponent(urlTenantId)}`
+      : "/admin/data-handling";
+
   /** Deep-link to dashboard users (scalable path; same destination as legacy `/admin/team`). */
   const teamHref = finjoePathWithTenant(FINJOE_PATHS.peopleUsers, tenantId, isSuperAdmin);
 
@@ -151,6 +157,7 @@ export function AdminShell({ children }: AdminShellProps) {
     { href: "/admin/recurring-income-templates", label: "Recurring Income", icon: Repeat },
     { href: "/admin/invoicing", label: "Invoicing", icon: FileText },
     { href: "/admin/reconciliation", label: "Reconciliation", icon: GitCompareArrows },
+    { href: dataHandlingHref, label: "Data Handling", icon: Upload },
     ...(isSuperAdmin
       ? [
           { href: "/admin/cron", label: "Cron Jobs", icon: Zap },

@@ -139,7 +139,7 @@ function buildMajorHeadCounts(
  * Try to directly match Major Head values to existing categories by name or slug.
  * Returns pre-resolved mappings for rows where Major Head matches, so AI can focus on the rest.
  */
-function preMappFromMajorHead(
+export function preMappFromMajorHead(
   expenseRows: ParsedExpenseRow[],
   incomeRows: ParsedIncomeRow[],
   expenseCategories: CategoryInfo[],
@@ -177,7 +177,7 @@ function preMappFromMajorHead(
   return { expMappings, incMappings };
 }
 
-type PatternRule = { pattern: string; slug: string; type: "expense" | "income"; matchType: "prefix" | "substring" };
+export type PatternRule = { pattern: string; slug: string; type: "expense" | "income"; matchType: "prefix" | "substring" };
 
 function matchesRule(particulars: string, rule: PatternRule): boolean {
   const pat = rule.pattern.toLowerCase().replace(/\*$/, "").trim();
@@ -191,7 +191,7 @@ function matchesRule(particulars: string, rule: PatternRule): boolean {
  * Apply pattern rules to rows. First matching rule wins.
  * Rules should be ordered by specificity (more specific first).
  */
-function applyPatternRules(
+export function applyPatternRules(
   expenseRows: ParsedExpenseRow[],
   incomeRows: ParsedIncomeRow[],
   rules: PatternRule[],
@@ -245,7 +245,7 @@ function applyPatternRules(
 /**
  * Derive rowIndices for proposed new categories by matching pattern against rows.
  */
-function deriveRowIndicesForProposed(
+export function deriveRowIndicesForProposed(
   proposed: Array<{ pattern: string; matchType: "prefix" | "substring"; type: "expense" | "income" }>,
   expenseRows: ParsedExpenseRow[],
   incomeRows: ParsedIncomeRow[]

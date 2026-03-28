@@ -22,6 +22,7 @@ import AdminTenants from "@/pages/admin-tenants";
 import AdminTenantUsers from "@/pages/admin-tenant-users";
 import AdminAccountSettings from "@/pages/admin-account-settings";
 import AdminReconciliation from "@/pages/admin-reconciliation";
+import AdminDataHandling from "@/pages/admin-data-handling";
 import AdminReports from "@/pages/admin-reports";
 import AcceptInvite from "@/pages/accept-invite";
 import AdminInvoiceNew from "@/pages/admin-invoice-new";
@@ -129,6 +130,13 @@ function Router() {
           <ProtectedRoute>
             <AdminShell>
               <AdminReconciliation />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/data-handling">
+          <ProtectedRoute>
+            <AdminShell>
+              <AdminDataHandling />
             </AdminShell>
           </ProtectedRoute>
         </Route>

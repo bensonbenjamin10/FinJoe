@@ -1,5 +1,5 @@
-import { useState, useRef } from "react";
-import { useSearchParams } from "wouter";
+import { useState } from "react";
+import { Link, useSearchParams } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -25,7 +25,6 @@ import {
 } from "@/components/ui/table";
 import {
   GitCompareArrows,
-  Upload,
   Loader2,
   Sparkles,
   Zap,
@@ -111,8 +110,6 @@ export default function AdminReconciliation() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [matchDialog, setMatchDialog] = useState<BankTransaction | null>(null);
   const [matchSearchQuery, setMatchSearchQuery] = useState("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
   const queryParams = new URLSearchParams({ startDate, endDate });
   if (tenantId) queryParams.append("tenantId", tenantId);
 
@@ -256,37 +253,11 @@ export default function AdminReconciliation() {
     onError: () => toast({ title: "Unmatch failed", variant: "destructive" }),
   });
 
-  const importMutation = useMutation({
-    mutationFn: async (file: File) => {
-      const formData = new FormData();
-      formData.append("file", file);
-      if (tenantId) formData.append("tenantId", tenantId);
-      const res = await fetch(`/api/admin/reconciliation/import?${tenantId ? `tenantId=${tenantId}` : ""}`, {
-        method: "POST",
-        credentials: "include",
-        body: formData,
-      });
-      if (!res.ok) throw new Error("Import failed");
-      return res.json();
-    },
-    onSuccess: (data) => {
-      toast({ title: "Bank statement imported", description: `${data.imported} transactions imported.` });
-      invalidateAll();
-    },
-    onError: () => toast({ title: "Import failed", variant: "destructive" }),
-  });
-
   function invalidateAll() {
     queryClient.invalidateQueries({ queryKey: ["/api/admin/reconciliation/summary"] });
     queryClient.invalidateQueries({ queryKey: ["/api/admin/reconciliation/bank-transactions"] });
     queryClient.invalidateQueries({ queryKey: ["/api/admin/reconciliation/unmatched-expenses"] });
     queryClient.invalidateQueries({ queryKey: ["/api/admin/reconciliation/unmatched-income"] });
-  }
-
-  function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) importMutation.mutate(file);
-    e.target.value = "";
   }
 
   function applyAiSuggestion(s: AiSuggestion) {
@@ -328,18 +299,11 @@ export default function AdminReconciliation() {
             Match bank statement entries against expenses and income records
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <input type="file" accept=".csv" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={importMutation.isPending}
-          >
-            {importMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Upload className="h-4 w-4 mr-1" />}
-            Upload Bank Statement
-          </Button>
-        </div>
+        <Button variant="outline" size="sm" asChild>
+          <Link href={`/admin/data-handling?tab=recon${tenantId ? `&tenantId=${encodeURIComponent(tenantId)}` : ""}`}>
+            Import bank CSV (Data Handling)
+          </Link>
+        </Button>
       </div>
 
       {/* Filters */}
