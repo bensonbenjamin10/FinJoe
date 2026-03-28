@@ -30,7 +30,18 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/use-auth";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { useState } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Building2,
   LayoutDashboard,
@@ -59,6 +70,33 @@ export function AdminShell({ children }: AdminShellProps) {
   const [location] = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user, logout, isTenantAdmin } = useAuth();
+  const { toast } = useToast();
+  const [switchOpen, setSwitchOpen] = useState(false);
+  const [wantsSalesHelp, setWantsSalesHelp] = useState(false);
+
+  const switchMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/auth/switch-to-real-data", { wantsSalesHelp });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error || "Switch failed");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(["/api/auth/me"], data);
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      setSwitchOpen(false);
+      toast({
+        title: "Switched to your workspace",
+        description: "You're now on your organization's empty account — configure it when you're ready.",
+      });
+      window.location.reload();
+    },
+    onError: (e: Error) => {
+      toast({ title: "Could not switch", description: e.message, variant: "destructive" });
+    },
+  });
   const isSuperAdmin = user?.role === "super_admin";
   const urlTenantId = searchParams.get("tenantId");
   const tenantId = isSuperAdmin ? (urlTenantId || user?.tenantId || null) : user?.tenantId ?? null;
@@ -206,6 +244,43 @@ export function AdminShell({ children }: AdminShellProps) {
         </SidebarFooter>
       </Sidebar>
       <SidebarInset>
+        {user?.isDemoTenant && user?.realTenantId && (
+          <div className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-sm">
+            <p className="text-amber-950 dark:text-amber-100 max-w-[min(100%,42rem)]">
+              You&apos;re viewing <strong>demo data</strong> (ACME sandbox). Switch to your real workspace when ready.
+            </p>
+            <Button size="sm" variant="secondary" className="shrink-0" onClick={() => setSwitchOpen(true)}>
+              Switch to your data
+            </Button>
+          </div>
+        )}
+        <Dialog open={switchOpen} onOpenChange={setSwitchOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Switch to your real data?</DialogTitle>
+              <DialogDescription>
+                Your production workspace starts empty. We can help you connect WhatsApp, branches, and categories.
+              </DialogDescription>
+            </DialogHeader>
+            <label className="flex items-center gap-2 py-2 cursor-pointer text-sm">
+              <input
+                type="checkbox"
+                checked={wantsSalesHelp}
+                onChange={(e) => setWantsSalesHelp(e.target.checked)}
+                className="rounded border-input"
+              />
+              Have the sales team contact me for onboarding help
+            </label>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button variant="outline" onClick={() => setSwitchOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={() => switchMutation.mutate()} disabled={switchMutation.isPending}>
+                {switchMutation.isPending ? "Switching…" : "Use my workspace"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         <header className="sticky top-0 z-30 flex h-14 items-center gap-4 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60 md:px-6">
           <SidebarTrigger className="md:hidden" />
         </header>

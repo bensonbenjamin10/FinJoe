@@ -118,7 +118,30 @@ export async function getCredentialsForTenant(tenantId: string): Promise<WabaPro
   }
 
   const defaultTenantId = await getDefaultTenantId();
-  if (tenantId !== defaultTenantId) return null;
+  if (tenantId !== defaultTenantId) {
+    const [demoTenant] = await db
+      .select({ isDemo: tenants.isDemo })
+      .from(tenants)
+      .where(eq(tenants.id, tenantId))
+      .limit(1);
+    if (demoTenant?.isDemo) {
+      const accountSid = process.env.TWILIO_ACCOUNT_SID;
+      const authToken = process.env.TWILIO_AUTH_TOKEN;
+      const from = process.env.TWILIO_FINJOE_WHATSAPP_FROM || process.env.TWILIO_WHATSAPP_FROM;
+      if (accountSid && authToken && from) {
+        const whatsappFrom = from.startsWith("whatsapp:") ? from : `whatsapp:${from}`;
+        const smsFromOverride = (await getFinJoeSmsFrom(tenantId)) ?? process.env.TWILIO_SMS_FROM;
+        const smsFrom = await resolveSmsFromAsync(whatsappFrom, smsFromOverride);
+        return {
+          provider: "twilio",
+          whatsappFrom,
+          smsFrom,
+          config: { accountSid, authToken },
+        };
+      }
+    }
+    return null;
+  }
 
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;

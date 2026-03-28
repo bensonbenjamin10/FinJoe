@@ -25,6 +25,8 @@ export const tenants = pgTable("tenants", {
   phone: text("phone"),
   address: text("address"),
   contactEmail: text("contact_email"),
+  /** Sandbox tenant with seeded demo data (ACME-style) for trials */
+  isDemo: boolean("is_demo").notNull().default(false),
   isActive: boolean("is_active").notNull().default(true),
   taxRegime: text("tax_regime").notNull().default("flat_percent"),
   taxRegimeConfig: jsonb("tax_regime_config").$type<Record<string, unknown>>().default({}),
@@ -75,12 +77,16 @@ export const campuses = costCenters;
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id").references(() => tenants.id),
+  /** When set, user can switch from demo tenant to this empty production tenant */
+  realTenantId: varchar("real_tenant_id").references(() => tenants.id),
   email: text("email").notNull(),
   passwordHash: text("password_hash").notNull(),
   name: text("name").notNull(),
   role: text("role").notNull().default("admin"),
   costCenterId: varchar("cost_center_id").references(() => costCenters.id),
   isActive: boolean("is_active").notNull().default(true),
+  /** Set when user requests sales help before switching off demo */
+  salesAssistanceRequested: boolean("sales_assistance_requested").notNull().default(false),
   inviteTokenHash: text("invite_token_hash"),
   inviteTokenExpiresAt: timestamp("invite_token_expires_at"),
   createdById: varchar("created_by_id"),
@@ -590,6 +596,7 @@ export const campusesRelations = costCentersRelations;
 
 export const usersRelations = relations(users, ({ one, many }) => ({
   tenant: one(tenants, { fields: [users.tenantId], references: [tenants.id] }),
+  realTenant: one(tenants, { fields: [users.realTenantId], references: [tenants.id] }),
   costCenter: one(costCenters, { fields: [users.costCenterId], references: [costCenters.id] }),
   finJoeContacts: many(finJoeContacts),
 }));

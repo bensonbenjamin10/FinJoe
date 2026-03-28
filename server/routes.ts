@@ -43,6 +43,7 @@ import { getMISReport, getMISCellTransactions } from "./mis-report.js";
 import { registerPaymentRoutes } from "./payments-routes.js";
 import { registerInvoicingRoutes } from "./invoicing-routes.js";
 import { seedMISCategoriesForTenant } from "./seed-mis-categories.js";
+import { provisionDemoTenantData, normalizePhoneForContact } from "./demo-seeder.js";
 import { generateInviteToken, hashInviteToken } from "./invite-tokens.js";
 import { supportedRegimes } from "../lib/invoicing/ports/tax-regime-registry.js";
 import { getMedia } from "../lib/media-storage.js";
@@ -165,10 +166,15 @@ export async function registerRoutes(app: Express) {
     });
   });
 
-  app.get("/api/auth/me", (req, res) => {
+  app.get("/api/auth/me", async (req, res) => {
     if (!req.isAuthenticated()) return res.status(401).json({ error: "Not authenticated" });
     const { passwordHash, inviteTokenHash, inviteTokenExpiresAt, ...u } = req.user as any;
-    res.json(u);
+    let isDemoTenant = false;
+    if (u.tenantId) {
+      const [t] = await db.select({ isDemo: tenants.isDemo }).from(tenants).where(eq(tenants.id, u.tenantId)).limit(1);
+      isDemoTenant = !!t?.isDemo;
+    }
+    res.json({ ...u, isDemoTenant });
   });
 
   app.get("/api/setup/status", async (_req, res) => {
@@ -305,6 +311,209 @@ export async function registerRoutes(app: Express) {
     } catch (e: any) {
       logger.error("Signup error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Sign-up failed. Please try again." });
+    }
+  });
+
+  /** Public: digits for wa.me demo link (Railway / Twilio demo number) */
+  app.get("/api/public/onboarding-config", (_req, res) => {
+    const raw =
+      process.env.FINJOE_DEMO_WHATSAPP_NUMBER ||
+      process.env.TWILIO_FINJOE_WHATSAPP_FROM ||
+      process.env.TWILIO_WHATSAPP_FROM ||
+      "";
+    const digits = raw.replace(/\D/g, "");
+    res.json({
+      demoWhatsAppDigits: digits.length >= 10 ? digits : null,
+      demoWaMeMessage: "Hello, Finjoe",
+    });
+  });
+
+  /**
+   * Agentic onboarding: create empty real tenant + seeded demo tenant, log user into demo.
+   */
+  app.post("/api/auth/agent-provision", async (req, res) => {
+    try {
+      const { adminName, adminEmail, orgName, phone } = req.body || {};
+      if (!orgName || !adminName || !adminEmail || !phone) {
+        return res.status(400).json({ error: "Organization name, your name, email, and phone are required" });
+      }
+      const emailLower = String(adminEmail).toLowerCase().trim();
+      const nameTrim = String(adminName).trim();
+      const orgTrim = String(orgName).trim();
+      const phoneNorm = normalizePhoneForContact(String(phone));
+      if (phoneNorm.length < 12) {
+        return res.status(400).json({ error: "Please enter a valid phone number (with country code if outside India)" });
+      }
+
+      const [existingUser] = await db.select().from(users).where(eq(users.email, emailLower)).limit(1);
+      if (existingUser) {
+        return res.status(400).json({ error: "An account with this email already exists" });
+      }
+
+      let baseSlug = orgTrim.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+      if (!baseSlug) baseSlug = "org";
+      let slug = baseSlug;
+      let suffix = 1;
+      while (true) {
+        const [existing] = await db.select().from(tenants).where(eq(tenants.slug, slug)).limit(1);
+        if (!existing) break;
+        suffix++;
+        slug = `${baseSlug}-${suffix}`;
+      }
+
+      const [realTenant] = await db
+        .insert(tenants)
+        .values({
+          name: orgTrim,
+          slug,
+          contactEmail: emailLower,
+          isActive: true,
+          isDemo: false,
+        })
+        .returning();
+
+      if (!realTenant) return res.status(500).json({ error: "Failed to create organization" });
+
+      let demoSlug = `acme-demo-${slug}`;
+      let d = 1;
+      while (true) {
+        const [ex] = await db.select().from(tenants).where(eq(tenants.slug, demoSlug)).limit(1);
+        if (!ex) break;
+        demoSlug = `acme-demo-${slug}-${d++}`;
+      }
+
+      const [demoTenant] = await db
+        .insert(tenants)
+        .values({
+          name: `ACME Business (Demo for ${orgTrim})`,
+          slug: demoSlug,
+          industry: "Professional Services",
+          contactEmail: emailLower,
+          isActive: true,
+          isDemo: true,
+        })
+        .returning();
+
+      if (!demoTenant) {
+        await db.delete(tenants).where(eq(tenants.id, realTenant.id));
+        return res.status(500).json({ error: "Failed to create demo workspace" });
+      }
+
+      try {
+        await seedMISCategoriesForTenant(realTenant.id);
+      } catch (seedErr) {
+        logger.error("seedMIS real tenant", { err: String(seedErr), tenantId: realTenant.id });
+      }
+      try {
+        await seedMISCategoriesForTenant(demoTenant.id);
+      } catch (seedErr) {
+        logger.error("seedMIS demo tenant", { err: String(seedErr), tenantId: demoTenant.id });
+      }
+
+      const randomPassword = crypto.randomBytes(24).toString("base64url");
+      const [adminUser] = await db
+        .insert(users)
+        .values({
+          email: emailLower,
+          passwordHash: await hashPassword(randomPassword),
+          name: nameTrim,
+          role: "admin",
+          tenantId: demoTenant.id,
+          realTenantId: realTenant.id,
+          isActive: true,
+        })
+        .returning();
+
+      if (!adminUser) {
+        await db.delete(tenants).where(eq(tenants.id, realTenant.id));
+        await db.delete(tenants).where(eq(tenants.id, demoTenant.id));
+        return res.status(500).json({ error: "Failed to create account" });
+      }
+
+      try {
+        await provisionDemoTenantData({
+          demoTenantId: demoTenant.id,
+          adminUserId: adminUser.id,
+          contactPhone: phoneNorm,
+          orgLabel: orgTrim,
+        });
+      } catch (provErr) {
+        logger.error("Demo provision failed", { err: String(provErr), tenantId: demoTenant.id });
+        await db.delete(users).where(eq(users.id, adminUser.id));
+        await db.delete(tenants).where(eq(tenants.id, realTenant.id));
+        await db.delete(tenants).where(eq(tenants.id, demoTenant.id));
+        return res.status(500).json({ error: "Could not prepare demo data. Please try again." });
+      }
+
+      req.login(adminUser, (loginErr) => {
+        if (loginErr) {
+          logger.error("Auto-login after agent-provision failed", { err: String(loginErr) });
+          const { passwordHash, inviteTokenHash, inviteTokenExpiresAt, ...u } = adminUser;
+          return res.status(201).json({ ...u, loginFailed: true, isDemoTenant: true });
+        }
+        const { passwordHash, inviteTokenHash, inviteTokenExpiresAt, ...u } = adminUser;
+        res.status(201).json({ ...u, isDemoTenant: true });
+      });
+    } catch (e: any) {
+      logger.error("agent-provision error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Provisioning failed" });
+    }
+  });
+
+  /** Leave demo tenant and use empty real tenant; optional sales flag */
+  app.post("/api/auth/switch-to-real-data", async (req, res) => {
+    try {
+      if (!req.isAuthenticated()) return res.status(401).json({ error: "Unauthorized" });
+      const wantsSalesHelp = !!(req.body && (req.body as { wantsSalesHelp?: boolean }).wantsSalesHelp);
+
+      const sessionUser = req.user as Express.User & { id: string };
+      const [full] = await db.select().from(users).where(eq(users.id, sessionUser.id)).limit(1);
+      if (!full?.realTenantId) {
+        return res.status(400).json({ error: "You are not in a demo workspace or already switched." });
+      }
+      if (wantsSalesHelp) {
+        logger.info("User requested sales onboarding assistance", { userId: full.id, email: full.email });
+      }
+
+      const demoTenantId = full.tenantId!;
+      const realId = full.realTenantId;
+
+      await db
+        .update(users)
+        .set({
+          tenantId: realId,
+          realTenantId: null,
+          salesAssistanceRequested: wantsSalesHelp,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, full.id));
+
+      const phoneRows = await db
+        .select({ phone: finJoeContacts.phone })
+        .from(finJoeContacts)
+        .where(and(eq(finJoeContacts.tenantId, demoTenantId), eq(finJoeContacts.studentId, full.id)))
+        .limit(1);
+      const ph = phoneRows[0]?.phone;
+      if (ph) {
+        await db
+          .update(finJoeContacts)
+          .set({ tenantId: realId, updatedAt: new Date() })
+          .where(and(eq(finJoeContacts.tenantId, demoTenantId), eq(finJoeContacts.phone, ph)));
+      }
+
+      const [updated] = await db.select().from(users).where(eq(users.id, full.id)).limit(1);
+      if (updated) {
+        req.login(updated, (err) => {
+          if (err) logger.error("Session refresh after switch", { err: String(err) });
+          const { passwordHash, inviteTokenHash, inviteTokenExpiresAt, ...u } = updated as any;
+          res.json({ ...u, isDemoTenant: false });
+        });
+      } else {
+        res.status(500).json({ error: "Update failed" });
+      }
+    } catch (e: any) {
+      logger.error("switch-to-real-data", { err: String(e) });
+      res.status(500).json({ error: "Could not switch workspace" });
     }
   });
 

@@ -7,6 +7,7 @@ import {
   finJoeMessages,
   finJoeMedia,
   finJoeOutboundIdempotency,
+  tenants,
 } from "../../shared/schema.js";
 import { eq, and, sql } from "drizzle-orm";
 import { sendFinJoeWhatsApp, sendTypingIndicator, normalizePhone } from "./twilio.js";
@@ -173,6 +174,18 @@ async function getOrCreateContact(phone: string, tenantId: string) {
   return contact;
 }
 
+/** Route platform demo number to the correct seeded demo tenant by caller phone */
+async function resolveDemoTenantForInboundPhone(fromRaw: string): Promise<string | null> {
+  const normalized = normalizePhone(fromRaw);
+  const [row] = await db
+    .select({ tenantId: finJoeContacts.tenantId })
+    .from(finJoeContacts)
+    .innerJoin(tenants, eq(finJoeContacts.tenantId, tenants.id))
+    .where(and(eq(tenants.isDemo, true), eq(finJoeContacts.phone, normalized)))
+    .limit(1);
+  return row?.tenantId ?? null;
+}
+
 /** Process incoming webhook - store message, media, reply */
 export async function handleWebhook(req: Request, res: Response) {
   const params = (req.body || {}) as Record<string, string>;
@@ -185,7 +198,9 @@ export async function handleWebhook(req: Request, res: Response) {
   });
 
   // Resolve tenant and credentials from To number (needed for validation)
-  const { tenantId, credentials } = await resolveTenantAndProvider(to);
+  const resolved = await resolveTenantAndProvider(to);
+  let tenantId = resolved.tenantId;
+  const credentials = resolved.credentials;
 
   const webhookUrl =
     process.env.FINJOE_WEBHOOK_URL || "https://finjoe.app/webhook/finjoe";
@@ -215,6 +230,12 @@ export async function handleWebhook(req: Request, res: Response) {
     logger.warn("Webhook missing From or MessageSid", { traceId });
     res.status(400).send("Bad Request");
     return;
+  }
+
+  const demoTenantOverride = await resolveDemoTenantForInboundPhone(from);
+  if (demoTenantOverride) {
+    tenantId = demoTenantOverride;
+    logger.info("Demo tenant routing from phone", { traceId, tenantId });
   }
 
   logger.info("Webhook received", { traceId, from, bodyLength: body?.length ?? 0, numMedia });

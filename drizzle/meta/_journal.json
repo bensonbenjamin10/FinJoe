@@ -64,6 +64,13 @@
       "when": 1774117940000,
       "tag": "0008_cost_center_billing_gst",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1774117950000,
+      "tag": "0009_agentic_demo",
+      "breakpoints": true
     }
   ]
 }

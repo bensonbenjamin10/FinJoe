@@ -10,6 +10,7 @@ import {
   expenses,
   costCenters,
   expenseCategories,
+  tenants,
 } from "../../../shared/schema.js";
 import { eq, and, desc, or } from "drizzle-orm";
 import { sendWith24hRouting, getExpenseApprovalTemplateConfig, notifySubmitterForApprovalRejection } from "../send.js";
@@ -143,7 +144,12 @@ export async function processWithAgent(
   const body = (messageBody || "").trim();
   const ctx = { traceId, conversationId, messageId };
 
-  const { context: systemContext, costCenterLabel, dataCollectionSettings } = await fetchSystemContext(tenantId);
+  const { context: systemContextBase, costCenterLabel, dataCollectionSettings } = await fetchSystemContext(tenantId);
+  const [tenantRow] = await db.select({ isDemo: tenants.isDemo }).from(tenants).where(eq(tenants.id, tenantId)).limit(1);
+  const systemContext =
+    tenantRow?.isDemo === true
+      ? `${systemContextBase}\n\n[ DEMO MODE — ACME sandbox: The user is exploring FinJoe with rich sample data (multi-branch, GST, petty cash). Act as an enthusiastic product tutor. On greetings like "Hello", "Hi", or "Hello, Finjoe", welcome them and suggest 3 quick tries: (1) ask about expenses or revenue for a branch, (2) send a receipt photo to simulate capture, (3) mention they can open the web dashboard to review approvals. Stay concise.]`
+      : systemContextBase;
   const { campuses, categories, incomeCategories } = await fetchSystemData(tenantId);
   const validCampusIds = campuses.map((c) => c.id);
   const validCategoryIds = categories.map((c) => c.id);

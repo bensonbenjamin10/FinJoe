@@ -105,6 +105,8 @@ declare global {
       tenantId?: string | null;
       campusId?: string | null;
       costCenterId?: string | null;
+      realTenantId?: string | null;
+      salesAssistanceRequested?: boolean;
       isActive: boolean;
     }
   }

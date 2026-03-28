@@ -9,6 +9,9 @@ export interface User {
   role: string;
   tenantId?: string | null;
   campusId?: string | null;
+  realTenantId?: string | null;
+  /** Present when /api/auth/me joins tenant row */
+  isDemoTenant?: boolean;
   isActive: boolean;
 }
 

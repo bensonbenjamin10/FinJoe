@@ -1,316 +1,275 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLocation, Link } from "wouter";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { useMutation } from "@tanstack/react-query";
-import { queryClient } from "@/lib/queryClient";
-import { Loader2, Building2, UserPlus, ArrowLeft } from "lucide-react";
-import { Progress } from "@/components/ui/progress";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import { Loader2, MessageCircle, Send, Sparkles, ExternalLink } from "lucide-react";
+import { cn } from "@/lib/utils";
 
-const INDUSTRIES = [
-  "Education",
-  "Healthcare",
-  "Retail",
-  "Manufacturing",
-  "Non-Profit",
-  "Professional Services",
-  "Real Estate",
-  "Technology",
-  "Hospitality",
-  "Other",
-] as const;
+type ChatMsg = { role: "finjoe" | "user"; text: string };
 
-function getPasswordStrength(password: string) {
-  if (!password) return { score: 0, label: "", color: "" };
-
-  let score = 0;
-  if (password.length >= 8) score++;
-  if (password.length >= 12) score++;
-  if (/[a-z]/.test(password) && /[A-Z]/.test(password)) score++;
-  if (/\d/.test(password)) score++;
-  if (/[^a-zA-Z0-9]/.test(password)) score++;
-
-  return [
-    { score: 0, label: "Too weak", color: "text-destructive" },
-    { score: 1, label: "Weak", color: "text-destructive" },
-    { score: 2, label: "Fair", color: "text-amber-600" },
-    { score: 3, label: "Good", color: "text-primary" },
-    { score: 4, label: "Strong", color: "text-primary" },
-    { score: 5, label: "Very strong", color: "text-primary" },
-  ][score];
-}
+type Step = "welcome" | "name" | "email" | "org" | "phone" | "done";
 
 export default function Signup() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const bottomRef = useRef<HTMLDivElement>(null);
 
-  const [form, setForm] = useState({
-    orgName: "",
-    industry: "",
-    phone: "",
-    address: "",
-    adminName: "",
-    adminEmail: "",
-    adminPassword: "",
-    confirmPassword: "",
+  const [messages, setMessages] = useState<ChatMsg[]>([
+    {
+      role: "finjoe",
+      text: "Hi — I'm FinJoe, your finance copilot. I'll set up a full **ACME Business** demo (multi-crore sample data) so you can explore the dashboard and WhatsApp. Ready?",
+    },
+  ]);
+  const [step, setStep] = useState<Step>("welcome");
+  const [input, setInput] = useState("");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [orgName, setOrgName] = useState("");
+  const [phone, setPhone] = useState("");
+
+  const { data: onboardingConfig } = useQuery<{
+    demoWhatsAppDigits: string | null;
+    demoWaMeMessage: string;
+  }>({
+    queryKey: ["/api/public/onboarding-config"],
+    queryFn: async () => {
+      const res = await fetch("/api/public/onboarding-config");
+      if (!res.ok) throw new Error("config");
+      return res.json();
+    },
   });
 
-  const [passwordStrength, setPasswordStrength] = useState(getPasswordStrength(""));
+  const waMeUrl =
+    onboardingConfig?.demoWhatsAppDigits &&
+    `https://wa.me/${onboardingConfig.demoWhatsAppDigits}?text=${encodeURIComponent(onboardingConfig.demoWaMeMessage || "Hello, Finjoe")}`;
 
   useEffect(() => {
-    setPasswordStrength(getPasswordStrength(form.adminPassword));
-  }, [form.adminPassword]);
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, step]);
 
-  const update = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setForm((f) => ({ ...f, [field]: e.target.value }));
-
-  const signupMutation = useMutation({
-    mutationFn: async (data: typeof form) => {
-      const response = await fetch("/api/auth/signup", {
-        method: "POST",
-        body: JSON.stringify({
-          orgName: data.orgName,
-          industry: data.industry || undefined,
-          phone: data.phone || undefined,
-          address: data.address || undefined,
-          adminName: data.adminName,
-          adminEmail: data.adminEmail,
-          adminPassword: data.adminPassword,
-        }),
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
+  const provisionMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/auth/agent-provision", {
+        adminName: name.trim(),
+        adminEmail: email.trim(),
+        orgName: orgName.trim(),
+        phone: phone.trim(),
       });
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || "Sign-up failed");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error || "Provisioning failed");
       }
-      return response.json();
+      return res.json();
     },
-    onSuccess: (data) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      toast({ title: "Welcome to FinJoe!", description: "Your organization has been created." });
-      if (data.loginFailed) {
-        setTimeout(() => setLocation("/login"), 1500);
-      } else {
-        setTimeout(() => setLocation("/admin/dashboard"), 1500);
-      }
+      setMessages((m) => [
+        ...m,
+        {
+          role: "finjoe",
+          text: "Your demo workspace is ready — you're signed in. Open WhatsApp below, then head to the dashboard when you like.",
+        },
+      ]);
+      setStep("done");
+      toast({ title: "Welcome to FinJoe", description: "Demo data is ready." });
     },
-    onError: (error: Error) => {
-      toast({
-        title: "Sign-up Failed",
-        description: error.message,
-        variant: "destructive",
-      });
+    onError: (e: Error) => {
+      setMessages((m) => [
+        ...m,
+        { role: "finjoe", text: `Something went wrong: ${e.message}. You can adjust your details and try again.` },
+      ]);
+      setStep("phone");
+      toast({ title: "Could not finish setup", description: e.message, variant: "destructive" });
     },
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const pushUser = (text: string) => setMessages((m) => [...m, { role: "user", text }]);
+  const pushFinjoe = (text: string) => setMessages((m) => [...m, { role: "finjoe", text }]);
 
-    if (!form.orgName.trim()) {
-      toast({ title: "Missing Field", description: "Organization name is required", variant: "destructive" });
-      return;
-    }
-    if (!form.adminName.trim()) {
-      toast({ title: "Missing Field", description: "Your name is required", variant: "destructive" });
-      return;
-    }
-    if (!form.adminEmail.trim()) {
-      toast({ title: "Missing Field", description: "Email is required", variant: "destructive" });
-      return;
-    }
-    if (form.adminPassword.length < 8) {
-      toast({ title: "Weak Password", description: "Password must be at least 8 characters", variant: "destructive" });
-      return;
-    }
-    if (passwordStrength.score < 2) {
-      toast({ title: "Weak Password", description: "Please choose a stronger password", variant: "destructive" });
-      return;
-    }
-    if (form.adminPassword !== form.confirmPassword) {
-      toast({ title: "Password Mismatch", description: "Passwords do not match", variant: "destructive" });
+  const handleSend = () => {
+    const v = input.trim();
+    if (!v) return;
+
+    if (step === "welcome") {
+      pushUser(v);
+      pushFinjoe("Great. What's your full name?");
+      setInput("");
+      setStep("name");
       return;
     }
 
-    signupMutation.mutate(form);
+    if (step === "name") {
+      pushUser(v);
+      setName(v);
+      pushFinjoe("Thanks. What's your work email? (We'll use it for your account.)");
+      setInput("");
+      setStep("email");
+      return;
+    }
+
+    if (step === "email") {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
+        toast({ title: "Invalid email", description: "Please enter a valid email address.", variant: "destructive" });
+        return;
+      }
+      pushUser(v);
+      setEmail(v);
+      pushFinjoe("What's your company or organization name?");
+      setInput("");
+      setStep("org");
+      return;
+    }
+
+    if (step === "org") {
+      pushUser(v);
+      setOrgName(v);
+      pushFinjoe("Last one — your WhatsApp number (with country code, e.g. +91…). We use it to link your demo chat.");
+      setInput("");
+      setStep("phone");
+      return;
+    }
+
+    if (step === "phone") {
+      pushUser(v);
+      setPhone(v);
+      setInput("");
+      pushFinjoe("Generating your demo… this can take a few seconds.");
+      provisionMutation.mutate();
+    }
   };
 
+  const placeholder =
+    step === "welcome"
+      ? 'Say "yes" to continue…'
+      : step === "name"
+        ? "Your full name"
+        : step === "email"
+          ? "you@company.com"
+          : step === "org"
+            ? "Company name"
+            : step === "phone"
+              ? "+91 98765 43210"
+              : "";
+
+  const inputDisabled = step === "done" || provisionMutation.isPending;
+  const showWhatsAppCta = step === "done" && !provisionMutation.isPending;
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/5 via-background to-primary/10 px-4 py-8 md:py-12">
-      <Card className="w-full max-w-2xl shadow-lg">
-        <CardHeader className="text-center space-y-4 px-6 pt-8 md:px-8 md:pt-10">
-          <div className="flex justify-center">
-            <div className="w-16 h-16 md:w-20 md:h-20 rounded-full bg-primary/10 flex items-center justify-center">
-              <Building2 className="w-8 h-8 md:w-10 md:h-10 text-primary" />
-            </div>
-          </div>
-          <CardTitle className="font-display text-2xl md:text-3xl">
-            Create Your Organization
-          </CardTitle>
-          <CardDescription className="text-base md:text-lg max-w-md mx-auto">
-            Set up your FinJoe account in under a minute. Manage expenses and income via WhatsApp AI.
-          </CardDescription>
-        </CardHeader>
-
-        <CardContent className="px-6 pb-8 md:px-8 md:pb-10">
-          <form onSubmit={handleSubmit} className="space-y-8">
-            {/* Organization Section */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-                <Building2 className="h-4 w-4" />
-                Organization Details
+    <div className="min-h-screen flex flex-col bg-gradient-to-br from-primary/5 via-background to-primary/10">
+      <div className="container max-w-2xl flex-1 flex flex-col py-8 px-4">
+        <Card className="shadow-lg border-primary/20 flex-1 flex flex-col min-h-[70vh]">
+          <CardHeader className="border-b bg-card/80">
+            <div className="flex items-center gap-2">
+              <div className="h-10 w-10 rounded-full bg-primary/15 flex items-center justify-center">
+                <Sparkles className="h-5 w-5 text-primary" />
               </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor="orgName">Organization Name *</Label>
-                  <Input
-                    id="orgName"
-                    value={form.orgName}
-                    onChange={update("orgName")}
-                    placeholder="Acme Corp"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="industry">Industry</Label>
-                  <Select
-                    value={form.industry}
-                    onValueChange={(v) => setForm((f) => ({ ...f, industry: v }))}
-                  >
-                    <SelectTrigger id="industry">
-                      <SelectValue placeholder="Select industry" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {INDUSTRIES.map((ind) => (
-                        <SelectItem key={ind} value={ind}>
-                          {ind}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="phone">Phone</Label>
-                  <Input
-                    id="phone"
-                    type="tel"
-                    value={form.phone}
-                    onChange={update("phone")}
-                    placeholder="+91 98765 43210"
-                  />
-                </div>
-                <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor="address">Address</Label>
-                  <Input
-                    id="address"
-                    value={form.address}
-                    onChange={update("address")}
-                    placeholder="123 Main St, City, Country"
-                  />
-                </div>
+              <div>
+                <CardTitle className="text-xl">FinJoe onboarding</CardTitle>
+                <CardDescription>Chat with FinJoe — no long forms</CardDescription>
               </div>
             </div>
-
-            <Separator />
-
-            {/* Admin Account Section */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-                <UserPlus className="h-4 w-4" />
-                Admin Account
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor="adminName">Full Name *</Label>
-                  <Input
-                    id="adminName"
-                    value={form.adminName}
-                    onChange={update("adminName")}
-                    placeholder="Your full name"
-                    required
-                  />
-                </div>
-                <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor="adminEmail">Email *</Label>
-                  <Input
-                    id="adminEmail"
-                    type="email"
-                    value={form.adminEmail}
-                    onChange={update("adminEmail")}
-                    placeholder="you@yourorg.com"
-                    required
-                  />
-                  <p className="text-sm text-muted-foreground">
-                    This will be your login email
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="adminPassword">Password *</Label>
-                  <Input
-                    id="adminPassword"
-                    type="password"
-                    value={form.adminPassword}
-                    onChange={update("adminPassword")}
-                    placeholder="Min. 8 characters"
-                    required
-                    minLength={8}
-                  />
-                  {form.adminPassword && (
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground">Strength:</span>
-                        <span className={`font-medium ${passwordStrength.color}`}>
-                          {passwordStrength.label}
-                        </span>
-                      </div>
-                      <Progress value={(passwordStrength.score / 5) * 100} className="h-2" />
-                    </div>
+          </CardHeader>
+          <CardContent className="flex-1 flex flex-col pt-4 gap-4">
+            <div className="flex-1 space-y-4 overflow-y-auto max-h-[50vh] pr-1">
+              {messages.map((msg, i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    "flex",
+                    msg.role === "user" ? "justify-end" : "justify-start"
                   )}
+                >
+                  <div
+                    className={cn(
+                      "rounded-2xl px-4 py-2.5 max-w-[90%] text-sm leading-relaxed",
+                      msg.role === "user"
+                        ? "bg-primary text-primary-foreground rounded-br-md"
+                        : "bg-muted text-foreground rounded-bl-md"
+                    )}
+                  >
+                    {msg.text.split("**").map((part, j) =>
+                      j % 2 === 1 ? (
+                        <strong key={j}>{part}</strong>
+                      ) : (
+                        <span key={j}>{part}</span>
+                      )
+                    )}
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="confirmPassword">Confirm Password *</Label>
-                  <Input
-                    id="confirmPassword"
-                    type="password"
-                    value={form.confirmPassword}
-                    onChange={update("confirmPassword")}
-                    placeholder="Re-enter password"
-                    required
-                  />
+              ))}
+              {provisionMutation.isPending && (
+                <div className="flex justify-start">
+                  <div className="rounded-2xl px-4 py-2 bg-muted text-sm flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Provisioning demo data…
+                  </div>
                 </div>
-              </div>
+              )}
+              <div ref={bottomRef} />
             </div>
 
-            <Button
-              type="submit"
-              className="w-full min-h-[48px]"
-              size="lg"
-              disabled={signupMutation.isPending}
-            >
-              {signupMutation.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Creating Your Organization...
-                </>
-              ) : (
-                "Create My Organization"
-              )}
-            </Button>
-          </form>
+            {showWhatsAppCta && waMeUrl && (
+              <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-3">
+                <p className="text-sm font-medium flex items-center gap-2">
+                  <MessageCircle className="h-4 w-4" />
+                  Try FinJoe on WhatsApp
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Opens WhatsApp with a pre-filled message to our demo number. FinJoe will recognize your demo and guide you.
+                </p>
+                <Button className="w-full gap-2" asChild>
+                  <a href={waMeUrl} target="_blank" rel="noopener noreferrer">
+                    <ExternalLink className="h-4 w-4" />
+                    Launch WhatsApp
+                  </a>
+                </Button>
+              </div>
+            )}
+            {showWhatsAppCta && !waMeUrl && (
+              <p className="text-xs text-muted-foreground text-center">
+                Configure <code className="text-[10px]">FINJOE_DEMO_WHATSAPP_NUMBER</code> or Twilio WhatsApp env for the launch link.
+              </p>
+            )}
+            {showWhatsAppCta && (
+              <Button variant="outline" className="w-full" onClick={() => setLocation("/admin/dashboard")}>
+                Go to dashboard
+              </Button>
+            )}
 
-          <div className="mt-6 text-center text-sm text-muted-foreground">
-            Already have an account?{" "}
-            <Link href="/login" className="font-medium text-primary hover:underline">
-              Log in
-            </Link>
-          </div>
-        </CardContent>
-      </Card>
+            <div className="flex gap-2 pt-2 border-t">
+              <div className="flex-1 space-y-1">
+                <Label htmlFor="chat-input" className="sr-only">
+                  Message
+                </Label>
+                <Input
+                  id="chat-input"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), handleSend())}
+                  placeholder={placeholder}
+                  disabled={inputDisabled}
+                  className="min-h-11"
+                />
+              </div>
+              <Button type="button" onClick={handleSend} disabled={inputDisabled || !input.trim()} className="shrink-0">
+                {provisionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              </Button>
+            </div>
+
+            <p className="text-center text-sm text-muted-foreground">
+              Already have an account?{" "}
+              <Link href="/login" className="text-primary font-medium hover:underline">
+                Log in
+              </Link>
+            </p>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
