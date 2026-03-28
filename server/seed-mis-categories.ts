@@ -110,6 +110,12 @@ export interface SeedResult {
   incomeTypesSeeded: number;
 }
 
+/** Postgres unique_violation — Drizzle/pg may surface code on error or nested cause */
+function isUniqueViolation(e: unknown): boolean {
+  const err = e as { code?: string; cause?: { code?: string } };
+  return err?.code === "23505" || err?.cause?.code === "23505";
+}
+
 export async function seedMISCategoriesForTenant(tenantId: string): Promise<SeedResult> {
   const result: SeedResult = { expenses: 0, income: 0, subCategories: 0, incomeTypesSeeded: 0 };
 
@@ -122,8 +128,8 @@ export async function seedMISCategoriesForTenant(tenantId: string): Promise<Seed
         displayOrder: it.displayOrder,
       });
       result.incomeTypesSeeded++;
-    } catch (e: any) {
-      if (e?.code !== "23505") throw e;
+    } catch (e: unknown) {
+      if (!isUniqueViolation(e)) throw e;
     }
   }
 
@@ -135,18 +141,22 @@ export async function seedMISCategoriesForTenant(tenantId: string): Promise<Seed
       .limit(1);
     if (existing) continue;
 
-    await db.insert(expenseCategories).values({
-      tenantId,
-      name: cat.name,
-      slug: cat.slug,
-      cashflowLabel: cat.cashflowLabel,
-      cashflowSection: cat.cashflowSection,
-      pnlSection: cat.pnlSection,
-      drilldownMode: cat.drilldownMode,
-      displayOrder: cat.displayOrder,
-      isActive: true,
-    });
-    result.expenses++;
+    try {
+      await db.insert(expenseCategories).values({
+        tenantId,
+        name: cat.name,
+        slug: cat.slug,
+        cashflowLabel: cat.cashflowLabel,
+        cashflowSection: cat.cashflowSection,
+        pnlSection: cat.pnlSection,
+        drilldownMode: cat.drilldownMode,
+        displayOrder: cat.displayOrder,
+        isActive: true,
+      });
+      result.expenses++;
+    } catch (e: unknown) {
+      if (!isUniqueViolation(e)) throw e;
+    }
   }
 
   for (const cat of MIS_INCOME_CATEGORIES) {
@@ -189,19 +199,23 @@ export async function seedMISCategoriesForTenant(tenantId: string): Promise<Seed
         .limit(1);
       if (existing) continue;
 
-      await db.insert(expenseCategories).values({
-        tenantId,
-        name: sub.name,
-        slug: sub.slug,
-        cashflowLabel: sub.name,
-        cashflowSection: "none",
-        pnlSection: "excluded",
-        drilldownMode: "none",
-        parentId: parent.id,
-        displayOrder: sub.displayOrder,
-        isActive: true,
-      });
-      result.subCategories++;
+      try {
+        await db.insert(expenseCategories).values({
+          tenantId,
+          name: sub.name,
+          slug: sub.slug,
+          cashflowLabel: sub.name,
+          cashflowSection: "none",
+          pnlSection: "excluded",
+          drilldownMode: "none",
+          parentId: parent.id,
+          displayOrder: sub.displayOrder,
+          isActive: true,
+        });
+        result.subCategories++;
+      } catch (e: unknown) {
+        if (!isUniqueViolation(e)) throw e;
+      }
     }
   }
 

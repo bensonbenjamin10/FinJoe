@@ -404,11 +404,7 @@ export async function registerRoutes(app: Express) {
       } catch (seedErr) {
         logger.error("seedMIS real tenant", { err: String(seedErr), tenantId: realTenant.id });
       }
-      try {
-        await seedMISCategoriesForTenant(demoTenant.id);
-      } catch (seedErr) {
-        logger.error("seedMIS demo tenant", { err: String(seedErr), tenantId: demoTenant.id });
-      }
+      // Demo tenant MIS + bulk data: single pass in provisionDemoTenantData (avoids double seed)
 
       const randomPassword = crypto.randomBytes(24).toString("base64url");
       const [adminUser] = await db

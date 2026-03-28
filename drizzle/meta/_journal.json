@@ -71,6 +71,13 @@
       "when": 1774117950000,
       "tag": "0009_agentic_demo",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1774117960000,
+      "tag": "0010_expense_categories_tenant_slug_unique",
+      "breakpoints": true
     }
   ]
 }
