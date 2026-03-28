@@ -33,6 +33,7 @@ import { toShortExpenseId } from "../../../lib/expense-id.js";
 import { getMedia } from "../../../lib/media-storage.js";
 import { parseExpenseQuery, parseDateToISO } from "../../../lib/expense-query-ai.js";
 import { embedQuery } from "../../../lib/expense-embeddings.js";
+import { parseExpenseTaxFields } from "../../../lib/expense-tax-fields.js";
 import { normalizePhone } from "../twilio.js";
 import { getPredictions } from "../../../server/analytics.js";
 
@@ -408,7 +409,7 @@ async function executeFunctionCall(
       if (!pending || pending.type !== "expense") {
         return { success: false, error: "Nothing to confirm. Please provide the expense details again." };
       }
-      const d = pending.data as {
+      const d = pending.data as Record<string, unknown> & {
         amount: number;
         expenseDate: string;
         categoryId: string;
@@ -420,6 +421,7 @@ async function executeFunctionCall(
         gstin?: string | null;
         taxType?: string | null;
       };
+      const confirmTax = parseExpenseTaxFields(d);
       let expense: { id: string } | null = null;
       try {
         expense = await finJoeData.createExpense({
@@ -434,6 +436,9 @@ async function executeFunctionCall(
           vendorName: d.vendorName ?? null,
           gstin: d.gstin ?? null,
           taxType: d.taxType ?? null,
+          baseAmount: confirmTax.baseAmount ?? null,
+          taxAmount: confirmTax.taxAmount ?? null,
+          taxRate: confirmTax.taxRate ?? null,
           submittedByContactPhone: contactPhone,
         });
       } catch (err) {
@@ -499,6 +504,7 @@ async function executeFunctionCall(
       }
       const today = new Date().toISOString().slice(0, 10);
       const parsedInvoiceDate = args.invoiceDate ? parseDateToISO(String(args.invoiceDate)) : null;
+      const taxFromArgs = parseExpenseTaxFields(args as Record<string, unknown>);
       const expenseData = {
         amount: amount ?? 0,
         expenseDate: parseDateToISO(String(args.invoiceDate ?? today)) ?? today,
@@ -510,6 +516,7 @@ async function executeFunctionCall(
         vendorName: args.vendorName ? String(args.vendorName) : null,
         gstin: args.gstin ? String(args.gstin) : null,
         taxType: args.taxType ? String(args.taxType) : null,
+        ...taxFromArgs,
       };
 
       const validation = validateExpenseData(expenseData, execCtx.categories, execCtx.campuses, requireAuditAbove);
@@ -550,6 +557,7 @@ async function executeFunctionCall(
         description: expenseData.description ?? undefined,
         gstin: expenseData.gstin ?? undefined,
         taxType: expenseData.taxType ?? undefined,
+        ...taxFromArgs,
       };
 
       let expense: { id: string } | null = null;
@@ -566,6 +574,9 @@ async function executeFunctionCall(
           vendorName: expenseData.vendorName,
           gstin: expenseData.gstin,
           taxType: expenseData.taxType,
+          baseAmount: taxFromArgs.baseAmount ?? null,
+          taxAmount: taxFromArgs.taxAmount ?? null,
+          taxRate: taxFromArgs.taxRate ?? null,
           submittedByContactPhone: contactPhone,
         });
       } catch (err) {
@@ -728,6 +739,7 @@ async function executeFunctionCall(
         }
         const rawDate = String(r.invoiceDate ?? r.expenseDate ?? today);
         const expenseDate = parseDateToISO(rawDate) ?? today;
+        const rowTax = parseExpenseTaxFields(r);
         const expenseData = {
           amount,
           expenseDate,
@@ -737,8 +749,9 @@ async function executeFunctionCall(
           invoiceNumber: null as string | null,
           invoiceDate: r.invoiceDate ? (parseDateToISO(String(r.invoiceDate)) ?? today) : null,
           vendorName: (r.vendorName ?? r.name) ? String(r.vendorName ?? r.name) : null,
-          gstin: null as string | null,
-          taxType: null as string | null,
+          gstin: r.gstin != null && String(r.gstin).trim() !== "" ? String(r.gstin) : null,
+          taxType: r.taxType != null && String(r.taxType).trim() !== "" ? String(r.taxType) : null,
+          ...rowTax,
         };
         const validation = validateExpenseData(expenseData, execCtx.categories, execCtx.campuses, requireAuditAbove);
         if (!validation.valid) {
@@ -749,6 +762,9 @@ async function executeFunctionCall(
           vendorName: expenseData.vendorName ?? undefined,
           description: expenseData.description ?? undefined,
           invoiceDate: expenseData.invoiceDate ?? undefined,
+          gstin: expenseData.gstin ?? undefined,
+          taxType: expenseData.taxType ?? undefined,
+          ...rowTax,
         };
         expenseItems.push({
           amount: expenseData.amount,
@@ -775,8 +791,11 @@ async function executeFunctionCall(
             invoiceNumber: null,
             invoiceDate: item.invoiceDate,
             vendorName: item.vendorName,
-            gstin: null,
-            taxType: null,
+            gstin: item.extracted.gstin != null ? String(item.extracted.gstin) : null,
+            taxType: item.extracted.taxType != null ? String(item.extracted.taxType) : null,
+            baseAmount: item.extracted.baseAmount ?? null,
+            taxAmount: item.extracted.taxAmount ?? null,
+            taxRate: item.extracted.taxRate ?? null,
             submittedByContactPhone: contactPhone,
           });
           if (expense?.id) {
@@ -877,6 +896,7 @@ async function executeFunctionCall(
         taxType: args.taxType ? String(args.taxType) : undefined,
         categoryId: pendingCategoryId,
         campusId: pendingCampusId !== undefined ? pendingCampusId : undefined,
+        ...parseExpenseTaxFields(args as Record<string, unknown>),
       };
       return {
         success: true,
@@ -1005,6 +1025,9 @@ async function executeFunctionCall(
         vendorName?: string | null;
         gstin?: string | null;
         taxType?: string | null;
+        baseAmount?: number | null;
+        taxAmount?: number | null;
+        taxRate?: number | null;
       } = {};
       const amt = typeof args.amount === "number" ? Math.round(args.amount) : parseAmount(args.amount);
       if (amt !== undefined) updates.amount = amt;
@@ -1018,8 +1041,23 @@ async function executeFunctionCall(
       if (campusId !== undefined) updates.costCenterId = campusId;
       if (args.gstin !== undefined) updates.gstin = args.gstin ? String(args.gstin) : null;
       if (args.taxType !== undefined) updates.taxType = args.taxType ? String(args.taxType) : null;
+      if (args.baseAmount !== undefined) {
+        updates.baseAmount =
+          args.baseAmount === null ? null : parseExpenseTaxFields({ baseAmount: args.baseAmount }).baseAmount ?? null;
+      }
+      if (args.taxAmount !== undefined) {
+        updates.taxAmount =
+          args.taxAmount === null ? null : parseExpenseTaxFields({ taxAmount: args.taxAmount }).taxAmount ?? null;
+      }
+      if (args.taxRate !== undefined) {
+        updates.taxRate = args.taxRate === null ? null : parseExpenseTaxFields({ taxRate: args.taxRate }).taxRate ?? null;
+      }
       if (Object.keys(updates).length === 0) {
-        return { success: false, error: "No fields to update. Specify at least one: amount, vendorName, invoiceNumber, invoiceDate, description, categoryId, campusId, gstin, taxType." };
+        return {
+          success: false,
+          error:
+            "No fields to update. Specify at least one: amount, vendorName, invoiceNumber, invoiceDate, description, categoryId, campusId, gstin, taxType, baseAmount, taxAmount, taxRate.",
+        };
       }
       const validationData = { ...updates, categoryId: updates.categoryId, campusId: updates.costCenterId };
       if (validationData.categoryId && !validCategoryIds.includes(validationData.categoryId)) {

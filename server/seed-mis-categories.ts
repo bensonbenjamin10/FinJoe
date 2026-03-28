@@ -167,17 +167,21 @@ export async function seedMISCategoriesForTenant(tenantId: string): Promise<Seed
       .limit(1);
     if (existing) continue;
 
-    await db.insert(incomeCategories).values({
-      tenantId,
-      name: cat.name,
-      slug: cat.slug,
-      incomeType: cat.incomeType,
-      misClassification: cat.misClassification,
-      revenueGroup: cat.revenueGroup,
-      displayOrder: cat.displayOrder,
-      isActive: true,
-    });
-    result.income++;
+    try {
+      await db.insert(incomeCategories).values({
+        tenantId,
+        name: cat.name,
+        slug: cat.slug,
+        incomeType: cat.incomeType,
+        misClassification: cat.misClassification,
+        revenueGroup: cat.revenueGroup,
+        displayOrder: cat.displayOrder,
+        isActive: true,
+      });
+      result.income++;
+    } catch (e: unknown) {
+      if (!isUniqueViolation(e)) throw e;
+    }
   }
 
   for (const [parentSlug, children] of Object.entries(MIS_SUB_CATEGORIES)) {

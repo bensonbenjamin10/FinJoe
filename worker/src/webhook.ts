@@ -9,7 +9,7 @@ import {
   finJoeOutboundIdempotency,
   tenants,
 } from "../../shared/schema.js";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, desc } from "drizzle-orm";
 import { sendFinJoeWhatsApp, sendTypingIndicator, normalizePhone } from "./twilio.js";
 import { processWithAgent } from "./agent/agent.js";
 import { getOrCreateConversation } from "./conversation.js";
@@ -182,6 +182,7 @@ async function resolveDemoTenantForInboundPhone(fromRaw: string): Promise<string
     .from(finJoeContacts)
     .innerJoin(tenants, eq(finJoeContacts.tenantId, tenants.id))
     .where(and(eq(tenants.isDemo, true), eq(finJoeContacts.phone, normalized)))
+    .orderBy(desc(finJoeContacts.createdAt))
     .limit(1);
   return row?.tenantId ?? null;
 }

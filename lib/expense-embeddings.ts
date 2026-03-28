@@ -29,6 +29,9 @@ export function buildExpenseSearchText(params: {
   categoryName?: string | null;
   amount?: number;
   invoiceNumber?: string | null;
+  baseAmount?: number | null;
+  taxAmount?: number | null;
+  taxRate?: number | null;
 }): string {
   const parts: string[] = [];
   if (params.vendorName) parts.push(`Vendor: ${params.vendorName}`);
@@ -37,6 +40,9 @@ export function buildExpenseSearchText(params: {
   if (params.categoryName) parts.push(`Category: ${params.categoryName}`);
   if (params.amount != null) parts.push(`Amount: Rs ${params.amount}`);
   if (params.invoiceNumber) parts.push(`Invoice: ${params.invoiceNumber}`);
+  if (params.baseAmount != null) parts.push(`Taxable: Rs ${params.baseAmount}`);
+  if (params.taxAmount != null) parts.push(`Tax: Rs ${params.taxAmount}`);
+  if (params.taxRate != null) parts.push(`GST rate: ${params.taxRate}%`);
   return parts.join(". ") || "Expense record";
 }
 
@@ -51,6 +57,9 @@ export async function embedExpenseText(params: {
   categoryName?: string | null;
   amount?: number;
   invoiceNumber?: string | null;
+  baseAmount?: number | null;
+  taxAmount?: number | null;
+  taxRate?: number | null;
 }): Promise<number[] | null> {
   const gemini = getGemini();
   if (!gemini) return null;

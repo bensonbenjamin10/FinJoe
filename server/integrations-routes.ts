@@ -452,7 +452,7 @@ export function registerIntegrationsRoutes(app: Express) {
         )
         .limit(1);
 
-      let customerId = custMap?.externalId ?? null;
+      let customerId: string | null = custMap?.externalId ?? null;
       if (!customerId) {
         const c = await zohoBooksPost<{ contact?: { contact_id?: string } }>("/contacts", tok.accessToken, tok.organizationId, {
           contact_name: `FinJoe income — ${customerName}`,

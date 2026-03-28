@@ -98,9 +98,9 @@ export type CreateExpenseInput = {
   vendorName?: string | null;
   gstin?: string | null;
   taxType?: string | null;
-  /** Tax base in paise (optional). */
+  /** Taxable value in rupees, integer (same convention as amount). */
   baseAmount?: number | null;
-  /** Tax amount in paise (optional). */
+  /** Total tax in rupees, integer (optional). */
   taxAmount?: number | null;
   /** Whole percent 0–100 (optional). */
   taxRate?: number | null;
@@ -240,6 +240,9 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           categoryName,
           amount: data.amount,
           invoiceNumber: data.invoiceNumber,
+          baseAmount: data.baseAmount ?? null,
+          taxAmount: data.taxAmount ?? null,
+          taxRate: data.taxRate ?? null,
         });
         if (embedding) {
           const vectorStr = "[" + embedding.join(",") + "]";
@@ -365,6 +368,9 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
             categoryName: category?.name ?? null,
             amount: (detail.amount ?? updates.amount) as number,
             invoiceNumber: (detail.invoiceNumber ?? updates.invoiceNumber) as string | null,
+            baseAmount: (detail.baseAmount ?? updates.baseAmount) as number | null | undefined,
+            taxAmount: (detail.taxAmount ?? updates.taxAmount) as number | null | undefined,
+            taxRate: (detail.taxRate ?? updates.taxRate) as number | null | undefined,
           });
           if (embedding) {
             const vectorStr = "[" + embedding.join(",") + "]";

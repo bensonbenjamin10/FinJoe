@@ -25,7 +25,7 @@ function safeDbDateKey(d: Date | null): string | null {
   }
 }
 
-function shiftDate(dateStr: string | null | undefined, days: number): string {
+export function shiftDate(dateStr: string | null | undefined, days: number): string {
   if (dateStr == null || !isValidDateString(dateStr)) return dateStr ?? "";
   const d = new Date(dateStr + "T12:00:00Z");
   if (Number.isNaN(d.getTime())) return dateStr;
@@ -44,7 +44,7 @@ function getDateRange(rows: Array<{ date: string | null }>): { minDate: string; 
   return { minDate: dates[0], maxDate: dates[dates.length - 1] };
 }
 
-function textsOverlap(particulars: string | undefined, description: string | null, vendorName: string | null): boolean {
+export function textsOverlap(particulars: string | undefined, description: string | null, vendorName: string | null): boolean {
   if (!particulars) return false;
   const p = particulars.toLowerCase();
   if (description) {

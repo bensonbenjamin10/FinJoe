@@ -1,11 +1,11 @@
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import crypto from "node:crypto";
 import multer from "multer";
 import passport from "passport";
 import { eq, and, desc, or, sql, inArray, isNull, gte, lte, aliasedTable } from "drizzle-orm";
 import { db, pool } from "./db.js";
 import { parseBankStatementCsv, isValidDateString, type ParsedExpenseRow, type ParsedIncomeRow } from "../lib/bank-statement-parser.js";
-import { runBankStatementImportAnalyze } from "../lib/bank-import-analyze.js";
+import { runBankStatementImportAnalyze, shiftDate, textsOverlap } from "../lib/bank-import-analyze.js";
 import { analyzeDataJoeDocument } from "../lib/data-joe-orchestrator.js";
 import { executeDataJoeImport } from "../lib/data-joe-execute.js";
 import { hashPassword, requireAdmin, requireTenantStaff, requireApprover, requireSuperAdmin, getTenantId } from "./auth.js";
@@ -20,8 +20,10 @@ import {
   finJoeContacts,
   finJoeConversations,
   finJoeMessages,
-  finJoeMedia,
+  finJoeOutboundIdempotency,
+  finJoeTasks,
   finJoeRoleChangeRequests,
+  finJoeMedia,
   finjoeSettings,
   platformSettings,
   incomeCategories,
@@ -134,6 +136,23 @@ function escapeCsv(s: string): string {
     return `"${s.replace(/"/g, '""')}"`;
   }
   return s;
+}
+
+const AGENT_PROVISION_WINDOW_MS = 60_000;
+const AGENT_PROVISION_MAX_PER_WINDOW = 5;
+const agentProvisionHitsByIp = new Map<string, number[]>();
+
+function rateLimitAgentProvision(req: Request, res: Response, next: NextFunction) {
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  const now = Date.now();
+  const arr = (agentProvisionHitsByIp.get(ip) ?? []).filter((t) => now - t < AGENT_PROVISION_WINDOW_MS);
+  if (arr.length >= AGENT_PROVISION_MAX_PER_WINDOW) {
+    res.setHeader("Retry-After", "60");
+    return res.status(429).json({ error: "Too many signup attempts. Please wait a minute and try again." });
+  }
+  arr.push(now);
+  agentProvisionHitsByIp.set(ip, arr);
+  next();
 }
 
 export async function registerRoutes(app: Express) {
@@ -335,7 +354,7 @@ export async function registerRoutes(app: Express) {
   /**
    * Agentic onboarding: create empty real tenant + seeded demo tenant, log user into demo.
    */
-  app.post("/api/auth/agent-provision", async (req, res) => {
+  app.post("/api/auth/agent-provision", rateLimitAgentProvision, async (req, res) => {
     try {
       const { adminName, adminEmail, orgName, phone } = req.body || {};
       if (!orgName || !adminName || !adminEmail || !phone) {
@@ -352,6 +371,18 @@ export async function registerRoutes(app: Express) {
       const [existingUser] = await db.select().from(users).where(eq(users.email, emailLower)).limit(1);
       if (existingUser) {
         return res.status(400).json({ error: "An account with this email already exists" });
+      }
+
+      const [dupDemoPhone] = await db
+        .select({ id: finJoeContacts.id })
+        .from(finJoeContacts)
+        .innerJoin(tenants, eq(finJoeContacts.tenantId, tenants.id))
+        .where(and(eq(tenants.isDemo, true), eq(finJoeContacts.phone, phoneNorm)))
+        .limit(1);
+      if (dupDemoPhone) {
+        return res.status(400).json({
+          error: "This phone number is already used for a demo signup. Try a different number or sign in.",
+        });
       }
 
       let baseSlug = orgTrim.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
@@ -478,27 +509,72 @@ export async function registerRoutes(app: Express) {
       const demoTenantId = full.tenantId!;
       const realId = full.realTenantId;
 
-      await db
-        .update(users)
-        .set({
-          tenantId: realId,
-          realTenantId: null,
-          salesAssistanceRequested: wantsSalesHelp,
-          updatedAt: new Date(),
-        })
-        .where(eq(users.id, full.id));
-
       const phoneRows = await db
         .select({ phone: finJoeContacts.phone })
         .from(finJoeContacts)
         .where(and(eq(finJoeContacts.tenantId, demoTenantId), eq(finJoeContacts.studentId, full.id)))
         .limit(1);
       const ph = phoneRows[0]?.phone;
-      if (ph) {
-        await db
-          .update(finJoeContacts)
-          .set({ tenantId: realId, updatedAt: new Date() })
-          .where(and(eq(finJoeContacts.tenantId, demoTenantId), eq(finJoeContacts.phone, ph)));
+
+      try {
+        await seedMISCategoriesForTenant(realId);
+      } catch (seedErr) {
+        logger.error("seedMIS on switch-to-real", { err: String(seedErr), tenantId: realId });
+        return res.status(503).json({
+          error: "Your workspace could not be prepared. Please try again in a few minutes.",
+        });
+      }
+
+      try {
+        await db.transaction(async (tx) => {
+          if (ph) {
+            const convRows = await tx
+              .select({ id: finJoeConversations.id })
+              .from(finJoeConversations)
+              .where(and(eq(finJoeConversations.tenantId, demoTenantId), eq(finJoeConversations.contactPhone, ph)));
+            const convIds = convRows.map((r) => r.id);
+            if (convIds.length > 0) {
+              await tx
+                .update(finJoeOutboundIdempotency)
+                .set({ tenantId: realId, updatedAt: new Date() })
+                .where(
+                  and(
+                    eq(finJoeOutboundIdempotency.tenantId, demoTenantId),
+                    inArray(finJoeOutboundIdempotency.conversationId, convIds),
+                  ),
+                );
+              await tx
+                .update(finJoeTasks)
+                .set({ tenantId: realId, updatedAt: new Date() })
+                .where(and(eq(finJoeTasks.tenantId, demoTenantId), inArray(finJoeTasks.conversationId, convIds)));
+            }
+            await tx
+              .update(finJoeConversations)
+              .set({ tenantId: realId, updatedAt: new Date() })
+              .where(and(eq(finJoeConversations.tenantId, demoTenantId), eq(finJoeConversations.contactPhone, ph)));
+            await tx
+              .update(finJoeContacts)
+              .set({ tenantId: realId, updatedAt: new Date() })
+              .where(and(eq(finJoeContacts.tenantId, demoTenantId), eq(finJoeContacts.phone, ph)));
+            await tx
+              .update(finJoeRoleChangeRequests)
+              .set({ tenantId: realId })
+              .where(and(eq(finJoeRoleChangeRequests.tenantId, demoTenantId), eq(finJoeRoleChangeRequests.contactPhone, ph)));
+          }
+
+          await tx
+            .update(users)
+            .set({
+              tenantId: realId,
+              realTenantId: null,
+              salesAssistanceRequested: wantsSalesHelp,
+              updatedAt: new Date(),
+            })
+            .where(eq(users.id, full.id));
+        });
+      } catch (txErr) {
+        logger.error("switch-to-real-data transaction", { err: String(txErr), userId: full.id });
+        return res.status(500).json({ error: "Could not switch workspace. Please try again." });
       }
 
       const [updated] = await db.select().from(users).where(eq(users.id, full.id)).limit(1);

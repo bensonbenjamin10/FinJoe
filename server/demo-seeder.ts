@@ -115,14 +115,29 @@ export async function provisionDemoTenantData(params: ProvisionDemoParams): Prom
 
   const centers = [ccHo!, ccNorth!, ccSouth!, ccEast!];
 
-  await db.insert(finjoeSettings).values({
-    tenantId: demoTenantId,
+  const settingsRow = {
     costCenterLabel: "Branch",
     costCenterType: "branch",
     fyStartMonth: 4,
     requireConfirmationBeforePost: false,
     askOptionalFields: false,
-  });
+  } as const;
+  const [existingFjSettings] = await db
+    .select({ id: finjoeSettings.id })
+    .from(finjoeSettings)
+    .where(eq(finjoeSettings.tenantId, demoTenantId))
+    .limit(1);
+  if (existingFjSettings) {
+    await db
+      .update(finjoeSettings)
+      .set({ ...settingsRow, updatedAt: new Date() })
+      .where(eq(finjoeSettings.tenantId, demoTenantId));
+  } else {
+    await db.insert(finjoeSettings).values({
+      tenantId: demoTenantId,
+      ...settingsRow,
+    });
+  }
 
   const expCats = await db
     .select({ id: expenseCategories.id, slug: expenseCategories.slug })

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
 import { Loader2, MessageCircle, Send, Sparkles, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -54,15 +54,32 @@ export default function Signup() {
 
   const provisionMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/auth/agent-provision", {
-        adminName: name.trim(),
-        adminEmail: email.trim(),
-        orgName: orgName.trim(),
-        phone: phone.trim(),
+      const res = await fetch("/api/auth/agent-provision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          adminName: name.trim(),
+          adminEmail: email.trim(),
+          orgName: orgName.trim(),
+          phone: phone.trim(),
+        }),
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err as { error?: string }).error || "Provisioning failed");
+        let message = "Provisioning failed. Please try again.";
+        try {
+          const err = (await res.json()) as { error?: string };
+          if (typeof err.error === "string" && err.error.length > 0 && err.error.length < 400) {
+            message = err.error;
+          } else if (res.status >= 500) {
+            message = "Something went wrong on our side. Please try again shortly.";
+          } else if (res.status === 429) {
+            message = "Too many attempts. Please wait a minute and try again.";
+          }
+        } catch {
+          if (res.status >= 500) message = "Something went wrong on our side. Please try again shortly.";
+        }
+        throw new Error(message);
       }
       return res.json();
     },

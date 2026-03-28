@@ -76,7 +76,8 @@ export async function runBackfillEmbeddings(
     const remainingBudget = Math.min(BATCH_SIZE, limit === Infinity ? BATCH_SIZE : limit - processed - errors);
     const failedIdArray = Array.from(failedIds);
     const batchResult = await pool.query(
-      `SELECT e.id, e.tenant_id, e.vendor_name, e.description, e.particulars, e.amount, e.invoice_number, ec.name as category_name
+      `SELECT e.id, e.tenant_id, e.vendor_name, e.description, e.particulars, e.amount, e.invoice_number,
+              e.base_amount, e.tax_amount, e.tax_rate, ec.name as category_name
        FROM expenses e
        LEFT JOIN expense_categories ec ON e.category_id = ec.id
        WHERE e.embedding IS NULL
@@ -99,6 +100,9 @@ export async function runBackfillEmbeddings(
           categoryName: row.category_name as string | null,
           amount: row.amount as number,
           invoiceNumber: row.invoice_number as string | null,
+          baseAmount: row.base_amount as number | null,
+          taxAmount: row.tax_amount as number | null,
+          taxRate: row.tax_rate as number | null,
         });
 
         if (embedding) {

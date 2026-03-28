@@ -89,8 +89,8 @@ export async function buildAccountingExport(db: any, opts: AccountingExportOptio
   if (includeExpenses) {
     const conds = [
       eq(expenses.tenantId, tenantId),
-      sql`${expenses.expense_date}::date >= ${fromDate}::date`,
-      sql`${expenses.expense_date}::date <= ${toDate}::date`,
+      sql`${expenses.expenseDate}::date >= ${fromDate}::date`,
+      sql`${expenses.expenseDate}::date <= ${toDate}::date`,
     ];
     if (approvedOnly) {
       conds.push(sql`${expenses.status} IN ('approved', 'paid')`);
@@ -172,8 +172,8 @@ export async function buildAccountingExport(db: any, opts: AccountingExportOptio
       .where(
         and(
           eq(incomeRecords.tenantId, tenantId),
-          sql`${incomeRecords.income_date}::date >= ${fromDate}::date`,
-          sql`${incomeRecords.income_date}::date <= ${toDate}::date`,
+          sql`${incomeRecords.incomeDate}::date >= ${fromDate}::date`,
+          sql`${incomeRecords.incomeDate}::date <= ${toDate}::date`,
         ),
       )
       .orderBy(desc(incomeRecords.incomeDate));

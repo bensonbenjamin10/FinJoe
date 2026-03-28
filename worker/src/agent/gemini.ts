@@ -1,4 +1,5 @@
 import { GoogleGenAI, Type, type FunctionDeclaration } from "@google/genai";
+import { parseExpenseTaxFields } from "../../../lib/expense-tax-fields.js";
 import { logger, serializeError } from "../logger.js";
 
 // Use gemini-2.5-flash by default; gemini-3 requires thought_signature which the SDK may not expose
@@ -154,6 +155,9 @@ const FINJOE_FUNCTION_DECLARATIONS = [
         description: { type: Type.STRING, description: "Description (optional)" },
         gstin: { type: Type.STRING, description: "GSTIN 15 chars if applicable" },
         taxType: { type: Type.STRING, description: "no_gst, gst_itc, gst_rcm, or gst_no_itc" },
+        baseAmount: { type: Type.NUMBER, description: "Taxable value in rupees (integer), optional" },
+        taxAmount: { type: Type.NUMBER, description: "Total tax in rupees (integer), optional" },
+        taxRate: { type: Type.NUMBER, description: "GST rate as whole percent 0-100, optional" },
       },
       required: ["amount"],
     },
@@ -175,6 +179,9 @@ const FINJOE_FUNCTION_DECLARATIONS = [
               vendorName: { type: Type.STRING, description: "Vendor name (optional)" },
               description: { type: Type.STRING, description: "Description (optional)" },
               invoiceDate: { type: Type.STRING, description: "YYYY-MM-DD (optional, use today if missing)" },
+              baseAmount: { type: Type.NUMBER, description: "Taxable value rupees (optional)" },
+              taxAmount: { type: Type.NUMBER, description: "Tax rupees (optional)" },
+              taxRate: { type: Type.NUMBER, description: "GST % whole number (optional)" },
             },
             required: ["amount"],
           },
@@ -226,6 +233,9 @@ const FINJOE_FUNCTION_DECLARATIONS = [
         description: { type: Type.STRING },
         gstin: { type: Type.STRING },
         taxType: { type: Type.STRING },
+        baseAmount: { type: Type.NUMBER },
+        taxAmount: { type: Type.NUMBER },
+        taxRate: { type: Type.NUMBER },
         categoryId: { type: Type.STRING, description: "Expense category ID or slug if already known" },
         campusId: { type: Type.STRING, description: "Cost center ID, slug, or name if already known" },
         missingFields: {
@@ -314,6 +324,9 @@ const FINJOE_FUNCTION_DECLARATIONS = [
         campusId: { type: Type.STRING, description: "Campus ID (optional)" },
         gstin: { type: Type.STRING, description: "GSTIN (optional)" },
         taxType: { type: Type.STRING, description: "Tax type (optional)" },
+        baseAmount: { type: Type.NUMBER, description: "Taxable value rupees (optional)" },
+        taxAmount: { type: Type.NUMBER, description: "Tax rupees (optional)" },
+        taxRate: { type: Type.NUMBER, description: "GST % whole number (optional)" },
       },
       required: ["expenseId"],
     },
@@ -619,6 +632,12 @@ export interface ExtractedExpense {
   description?: string;
   gstin?: string;
   taxType?: string;
+  /** Taxable value in rupees (integer), if printed on receipt */
+  baseAmount?: number;
+  /** Tax in rupees (integer), if printed */
+  taxAmount?: number;
+  /** GST rate as whole percent 0–100 (e.g. 18) */
+  taxRate?: number;
 }
 
 export type ExtractedExpenseRow = {
@@ -626,6 +645,9 @@ export type ExtractedExpenseRow = {
   description?: string;
   vendorName?: string;
   campus?: string;
+  baseAmount?: number;
+  taxAmount?: number;
+  taxRate?: number;
 };
 
 export type ExtractionResult =
@@ -925,6 +947,9 @@ const EXTRACTED_EXPENSE_JSON_SCHEMA = {
       enum: ["no_gst", "gst_itc", "gst_rcm", "gst_no_itc"],
       description: "Tax type",
     },
+    baseAmount: { type: "number", description: "Taxable value in rupees (integer) if printed" },
+    taxAmount: { type: "number", description: "Total tax in rupees (integer) if printed" },
+    taxRate: { type: "number", description: "GST rate as whole percent e.g. 18" },
   },
   required: [],
   additionalProperties: false,
@@ -948,6 +973,9 @@ const EXTRACTION_RESULT_JSON_SCHEMA = {
         description: { type: "string" },
         gstin: { type: "string" },
         taxType: { type: "string", enum: ["no_gst", "gst_itc", "gst_rcm", "gst_no_itc"] },
+        baseAmount: { type: "number" },
+        taxAmount: { type: "number" },
+        taxRate: { type: "number" },
       },
       description: "Use when type is single",
     },
@@ -962,6 +990,9 @@ const EXTRACTION_RESULT_JSON_SCHEMA = {
           vendorName: { type: "string" },
           name: { type: "string", description: "Payee/vendor from Name column" },
           campus: { type: "string", description: "e.g. HO, Chennai, Hyderabad" },
+          baseAmount: { type: "number" },
+          taxAmount: { type: "number" },
+          taxRate: { type: "number" },
         },
         required: ["amount"],
       },
@@ -984,18 +1015,22 @@ export async function extractExpenseFromImage(
   if (!gemini) return {};
 
   const ctxBlock = systemContext ? `\n${systemContext}\n` : "";
-  const prompt = `${ctxBlock}Extract expense/invoice data from this image. Include only fields you can clearly identify. Use null for missing values. Amount should be in rupees (integer).
+  const prompt = `${ctxBlock}Extract expense/invoice data from this image. Include only fields you can clearly identify. Use null for missing values. Amount should be in rupees (integer). If the receipt shows taxable value, CGST/SGST/IGST or total tax, or GST rate, fill baseAmount, taxAmount, and taxRate (whole percent) when possible.
 ${textContext ? `Additional context from user: "${textContext}"` : ""}`;
 
-  const parseJsonToExtracted = (json: Record<string, unknown>): ExtractedExpense => ({
-    amount: typeof json.amount === "number" ? Math.round(json.amount) : undefined,
-    vendorName: typeof json.vendorName === "string" ? json.vendorName : undefined,
-    invoiceNumber: typeof json.invoiceNumber === "string" ? json.invoiceNumber : undefined,
-    invoiceDate: typeof json.invoiceDate === "string" ? json.invoiceDate : undefined,
-    description: typeof json.description === "string" ? json.description : undefined,
-    gstin: typeof json.gstin === "string" ? json.gstin : undefined,
-    taxType: ["no_gst", "gst_itc", "gst_rcm", "gst_no_itc"].includes(String(json.taxType)) ? String(json.taxType) : undefined,
-  });
+  const parseJsonToExtracted = (json: Record<string, unknown>): ExtractedExpense => {
+    const tax = parseExpenseTaxFields(json);
+    return {
+      amount: typeof json.amount === "number" ? Math.round(json.amount) : undefined,
+      vendorName: typeof json.vendorName === "string" ? json.vendorName : undefined,
+      invoiceNumber: typeof json.invoiceNumber === "string" ? json.invoiceNumber : undefined,
+      invoiceDate: typeof json.invoiceDate === "string" ? json.invoiceDate : undefined,
+      description: typeof json.description === "string" ? json.description : undefined,
+      gstin: typeof json.gstin === "string" ? json.gstin : undefined,
+      taxType: ["no_gst", "gst_itc", "gst_rcm", "gst_no_itc"].includes(String(json.taxType)) ? String(json.taxType) : undefined,
+      ...tax,
+    };
+  };
 
   const doExtractStructured = async (model: string): Promise<ExtractedExpense> => {
     const response = await gemini.models.generateContent({
@@ -1023,7 +1058,7 @@ ${textContext ? `Additional context from user: "${textContext}"` : ""}`;
   };
 
   const doExtractFallback = async (model: string): Promise<ExtractedExpense> => {
-    const legacyPrompt = `${prompt}\n\nReturn ONLY a JSON object with: amount, vendorName, invoiceNumber, invoiceDate, description, gstin, taxType. Use null for missing. No other text.`;
+    const legacyPrompt = `${prompt}\n\nReturn ONLY a JSON object with: amount, vendorName, invoiceNumber, invoiceDate, description, gstin, taxType, baseAmount, taxAmount, taxRate. Use null for missing. baseAmount/taxAmount are rupees (integers); taxRate is whole percent (e.g. 18). No other text.`;
     const response = await gemini.models.generateContent({
       model,
       contents: [
@@ -1084,30 +1119,36 @@ export async function extractExpenseOrExpensesFromImage(
 
   const ctxBlock = systemContext ? `\n${systemContext}\n` : "";
   const prompt = `${ctxBlock}Extract expense data from this image.
-- If this is a SINGLE invoice or receipt: return { "type": "single", "expense": { amount, vendorName?, invoiceNumber?, invoiceDate?, description?, gstin?, taxType? } }. Amount in rupees (integer). Use null for missing.
-- If this is a TABLE (spreadsheet, list of rows with columns like Sl.No, Name, Particulars, Amount, Campus): return { "type": "bulk", "expenses": [ { "amount": N, "description"?, "vendorName"?, "campus"? }, ... ] }. Map: Name→vendorName, Particulars→description. Each row must have amount. Amount can be number or string (e.g. "1,90,000.00"). Campus can be HO, Chennai, Hyderabad, Bangalore, etc.
+- If this is a SINGLE invoice or receipt: return { "type": "single", "expense": { amount, vendorName?, invoiceNumber?, invoiceDate?, description?, gstin?, taxType?, baseAmount?, taxAmount?, taxRate? } }. Amount in rupees (integer). If taxable value, tax amount, or GST % is visible, include baseAmount, taxAmount, and/or taxRate (whole percent). Use null for missing.
+- If this is a TABLE (spreadsheet, list of rows with columns like Sl.No, Name, Particulars, Amount, Campus): return { "type": "bulk", "expenses": [ { "amount": N, "description"?, "vendorName"?, "campus"?, "baseAmount"?, "taxAmount"?, "taxRate"? }, ... ] }. Map: Name→vendorName, Particulars→description. Each row must have amount. Amount can be number or string (e.g. "1,90,000.00"). Campus can be HO, Chennai, Hyderabad, Bangalore, etc.
 ${textContext ? `Additional context from user: "${textContext}"` : ""}`;
 
   const parseRow = (r: Record<string, unknown>): ExtractedExpenseRow | null => {
     const amount = parseAmount(r.amount);
     if (amount == null) return null;
+    const tax = parseExpenseTaxFields(r);
     return {
       amount,
       description: typeof r.description === "string" ? r.description : typeof r.particulars === "string" ? r.particulars : undefined,
       vendorName: typeof r.vendorName === "string" ? r.vendorName : typeof r.name === "string" ? r.name : undefined,
       campus: typeof r.campus === "string" ? r.campus : undefined,
+      ...tax,
     };
   };
 
-  const parseToExtracted = (json: Record<string, unknown>): ExtractedExpense => ({
-    amount: parseAmount(json.amount),
-    vendorName: typeof json.vendorName === "string" ? json.vendorName : undefined,
-    invoiceNumber: typeof json.invoiceNumber === "string" ? json.invoiceNumber : undefined,
-    invoiceDate: typeof json.invoiceDate === "string" ? json.invoiceDate : undefined,
-    description: typeof json.description === "string" ? json.description : undefined,
-    gstin: typeof json.gstin === "string" ? json.gstin : undefined,
-    taxType: ["no_gst", "gst_itc", "gst_rcm", "gst_no_itc"].includes(String(json.taxType)) ? String(json.taxType) : undefined,
-  });
+  const parseToExtracted = (json: Record<string, unknown>): ExtractedExpense => {
+    const tax = parseExpenseTaxFields(json);
+    return {
+      amount: parseAmount(json.amount),
+      vendorName: typeof json.vendorName === "string" ? json.vendorName : undefined,
+      invoiceNumber: typeof json.invoiceNumber === "string" ? json.invoiceNumber : undefined,
+      invoiceDate: typeof json.invoiceDate === "string" ? json.invoiceDate : undefined,
+      description: typeof json.description === "string" ? json.description : undefined,
+      gstin: typeof json.gstin === "string" ? json.gstin : undefined,
+      taxType: ["no_gst", "gst_itc", "gst_rcm", "gst_no_itc"].includes(String(json.taxType)) ? String(json.taxType) : undefined,
+      ...tax,
+    };
+  };
 
   const doExtract = async (model: string): Promise<ExtractionResult> => {
     const response = await gemini.models.generateContent({
