@@ -200,7 +200,14 @@ export async function registerRoutes(app: Express) {
           return res.status(500).json({ error: "Login failed" });
         }
         logger.info("Login success", { requestId: req.requestId, userId: user.id, email: user.email });
-        const { passwordHash, ...u } = user;
+        const {
+          passwordHash,
+          inviteTokenHash: _ih,
+          inviteTokenExpiresAt: _ie,
+          passwordResetTokenHash: _prh,
+          passwordResetExpiresAt: _pre,
+          ...u
+        } = user as any;
         res.json(u);
       });
     })(req, res, next);
@@ -523,10 +530,24 @@ export async function registerRoutes(app: Express) {
       req.login(adminUser, (loginErr) => {
         if (loginErr) {
           logger.error("Auto-login after agent-provision failed", { err: String(loginErr) });
-          const { passwordHash, inviteTokenHash, inviteTokenExpiresAt, ...u } = adminUser;
+          const {
+            passwordHash,
+            inviteTokenHash,
+            inviteTokenExpiresAt,
+            passwordResetTokenHash: _prh,
+            passwordResetExpiresAt: _pre,
+            ...u
+          } = adminUser as any;
           return res.status(201).json({ ...u, loginFailed: true, isDemoTenant: true });
         }
-        const { passwordHash, inviteTokenHash, inviteTokenExpiresAt, ...u } = adminUser;
+        const {
+          passwordHash,
+          inviteTokenHash,
+          inviteTokenExpiresAt,
+          passwordResetTokenHash: _prh,
+          passwordResetExpiresAt: _pre,
+          ...u
+        } = adminUser as any;
         res.status(201).json({ ...u, isDemoTenant: true });
       });
     } catch (e: any) {
@@ -606,7 +627,14 @@ export async function registerRoutes(app: Express) {
       if (updated) {
         req.login(updated, (err) => {
           if (err) logger.error("Session refresh after switch", { err: String(err) });
-          const { passwordHash, inviteTokenHash, inviteTokenExpiresAt, ...u } = updated as any;
+          const {
+            passwordHash,
+            inviteTokenHash,
+            inviteTokenExpiresAt,
+            passwordResetTokenHash: _prh,
+            passwordResetExpiresAt: _pre,
+            ...u
+          } = updated as any;
           res.json({ ...u, isDemoTenant: false });
         });
       } else {
