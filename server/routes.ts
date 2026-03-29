@@ -366,7 +366,8 @@ export async function registerRoutes(app: Express) {
       const nameTrim = String(adminName).trim();
       const orgTrim = String(orgName).trim();
       const phoneNorm = normalizePhoneForContact(String(phone));
-      if (phoneNorm.length < 12) {
+      // E.164 must be + followed by 7–15 digits (ITU-T standard)
+      if (!/^\+\d{7,15}$/.test(phoneNorm)) {
         return res.status(400).json({ error: "Please enter a valid phone number (with country code if outside India)" });
       }
 
@@ -854,8 +855,10 @@ export async function registerRoutes(app: Express) {
       const { phone, role, name, campusId, costCenterId, studentId } = req.body;
       const ccId = costCenterId ?? campusId;
       if (!phone || !role) return res.status(400).json({ error: "phone and role required" });
-      const digits = phone.replace(/\D/g, "");
-      const normalized = digits.length === 10 ? `91${digits}` : digits.startsWith("91") ? digits : `91${digits}`;
+      const normalized = normalizePhoneForContact(String(phone));
+      if (!/^\+\d{7,15}$/.test(normalized)) {
+        return res.status(400).json({ error: "Please enter a valid phone number (with country code if outside India)" });
+      }
       const validRoles = ["cost_center_coordinator", "campus_coordinator", "head_office", "finance", "admin", "vendor", "faculty", "student", "guest"];
       if (!validRoles.includes(role)) return res.status(400).json({ error: `role must be one of: ${validRoles.join(", ")}` });
 
@@ -885,7 +888,7 @@ export async function registerRoutes(app: Express) {
         .insert(finJoeContacts)
         .values({
           tenantId,
-          phone: normalized.length > 10 ? normalized : `91${normalized}`,
+          phone: normalized,
           role,
           name: name || null,
           costCenterId: ccId || null,

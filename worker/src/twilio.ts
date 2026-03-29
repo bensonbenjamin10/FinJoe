@@ -65,23 +65,30 @@ export function splitMessage(text: string, limit = WHATSAPP_CHAR_LIMIT): string[
   return chunks;
 }
 
-/** Normalize phone to 12 digits (91 + 10 digits) for storage */
+/**
+ * Normalize any phone number to E.164 format for storage (e.g. "+919876543210", "+12125551234").
+ * Accepts: Twilio "whatsapp:+..." prefix, leading zeros, with/without country code.
+ * For bare 10-digit numbers (no country code prefix), assumes India (+91).
+ */
 export function normalizePhone(from: string): string {
-  let digits = from.replace(/\D/g, "");
+  // Strip Twilio prefix and all non-digit/non-plus characters except a leading +
+  let raw = from.replace(/^whatsapp:/i, "").trim();
+  // If it already looks like valid E.164, return it as-is
+  if (/^\+\d{7,15}$/.test(raw)) return raw;
+  // Remove non-digits
+  let digits = raw.replace(/\D/g, "");
+  // Strip leading zeros (e.g. 0091... → 91...)
   while (digits.startsWith("0") && digits.length > 10) digits = digits.substring(1);
-  if (digits.startsWith("91") && digits.length > 10) {
-    digits = digits.substring(2);
-  }
-  return "91" + digits;
+  // 10-digit bare number → assume India
+  if (digits.length === 10) return `+91${digits}`;
+  // Already has a country code (length > 10)
+  return `+${digits}`;
 }
 
-/** Format phone for Twilio WhatsApp API */
+/** Format a stored E.164 phone number for the Twilio WhatsApp API */
 export function formatForWhatsApp(phone: string): string {
-  let digits = phone.replace(/\D/g, "");
-  if (digits.startsWith("91") && digits.length > 10) {
-    digits = digits.substring(2);
-  }
-  return `whatsapp:+91${digits}`;
+  const e164 = normalizePhone(phone);
+  return `whatsapp:${e164}`;
 }
 
 /** Twilio error codes that are permanent and should not be retried */

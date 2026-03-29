@@ -22,12 +22,14 @@
     "cron:recurring-expenses": "node scripts/run-recurring-expenses.mjs",
     "create-templates": "node scripts/create-finjoe-templates.mjs",
     "backfill:embeddings": "tsx scripts/backfill-expense-embeddings.ts",
-    "db:migrate-vendors": "node scripts/migrate-vendors.mjs"
+    "db:migrate-vendors": "node scripts/migrate-vendors.mjs",
+    "db:ensure-super-admin": "tsx scripts/ensure-super-admin.ts"
   },
   "dependencies": {
     "@google/genai": "^1.44.0",
     "@pdfsmaller/pdf-decrypt": "^1.0.1",
     "@radix-ui/react-alert-dialog": "^1.1.7",
+    "@radix-ui/react-checkbox": "^1.1.4",
     "@radix-ui/react-dialog": "^1.1.7",
     "@radix-ui/react-dropdown-menu": "^2.1.16",
     "@radix-ui/react-label": "^2.1.3",

@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient } from "@/lib/queryClient";
 import { Loader2, MessageCircle, Send, Sparkles, ExternalLink } from "lucide-react";
@@ -13,6 +14,21 @@ import { cn } from "@/lib/utils";
 type ChatMsg = { role: "finjoe" | "user"; text: string };
 
 type Step = "welcome" | "name" | "email" | "org" | "phone" | "done";
+
+const COUNTRY_CODES = [
+  { code: "+91", flag: "🇮🇳", label: "India (+91)" },
+  { code: "+1", flag: "🇺🇸", label: "US / Canada (+1)" },
+  { code: "+44", flag: "🇬🇧", label: "UK (+44)" },
+  { code: "+971", flag: "🇦🇪", label: "UAE (+971)" },
+  { code: "+65", flag: "🇸🇬", label: "Singapore (+65)" },
+  { code: "+61", flag: "🇦🇺", label: "Australia (+61)" },
+  { code: "+49", flag: "🇩🇪", label: "Germany (+49)" },
+  { code: "+33", flag: "🇫🇷", label: "France (+33)" },
+  { code: "+81", flag: "🇯🇵", label: "Japan (+81)" },
+  { code: "+86", flag: "🇨🇳", label: "China (+86)" },
+  { code: "+55", flag: "🇧🇷", label: "Brazil (+55)" },
+  { code: "+27", flag: "🇿🇦", label: "South Africa (+27)" },
+] as const;
 
 export default function Signup() {
   const [, setLocation] = useLocation();
@@ -31,6 +47,7 @@ export default function Signup() {
   const [email, setEmail] = useState("");
   const [orgName, setOrgName] = useState("");
   const [phone, setPhone] = useState("");
+  const [countryCode, setCountryCode] = useState("+91");
 
   const { data: onboardingConfig } = useQuery<{
     demoWhatsAppDigits: string | null;
@@ -152,8 +169,11 @@ export default function Signup() {
     }
 
     if (step === "phone") {
-      pushUser(v);
-      setPhone(v);
+      // Strip any leading zeros or accidental country code the user may have typed
+      const localDigits = v.replace(/\D/g, "").replace(/^0+/, "");
+      const fullPhone = `${countryCode}${localDigits}`;
+      pushUser(fullPhone);
+      setPhone(fullPhone);
       setInput("");
       pushFinjoe("Generating your demo… this can take a few seconds.");
       provisionMutation.mutate();
@@ -170,7 +190,7 @@ export default function Signup() {
           : step === "org"
             ? "Company name"
             : step === "phone"
-              ? "+91 98765 43210"
+              ? "98765 43210"
               : "";
 
   const inputDisabled = step === "done" || provisionMutation.isPending;
@@ -259,6 +279,25 @@ export default function Signup() {
             )}
 
             <div className="flex gap-2 pt-2 border-t">
+              {step === "phone" && (
+                <Select value={countryCode} onValueChange={setCountryCode} disabled={inputDisabled}>
+                  <SelectTrigger className="w-[130px] shrink-0 min-h-11">
+                    <SelectValue>
+                      {(() => {
+                        const c = COUNTRY_CODES.find((c) => c.code === countryCode);
+                        return c ? `${c.flag} ${c.code}` : countryCode;
+                      })()}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {COUNTRY_CODES.map((c) => (
+                      <SelectItem key={c.code} value={c.code}>
+                        {c.flag} {c.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
               <div className="flex-1 space-y-1">
                 <Label htmlFor="chat-input" className="sr-only">
                   Message
@@ -271,6 +310,7 @@ export default function Signup() {
                   placeholder={placeholder}
                   disabled={inputDisabled}
                   className="min-h-11"
+                  inputMode={step === "phone" ? "numeric" : "text"}
                 />
               </div>
               <Button type="button" onClick={handleSend} disabled={inputDisabled || !input.trim()} className="shrink-0">

@@ -146,22 +146,25 @@ export async function downloadMedia(
   return downloadTwilioMedia(mediaUrl, contentType, accountSid, authToken);
 }
 
-/** Format phone for Twilio WhatsApp API */
+/** Format a stored E.164 phone number for the Twilio WhatsApp API */
 function formatForWhatsApp(phone: string): string {
-  let digits = phone.replace(/\D/g, "");
-  if (digits.startsWith("91") && digits.length > 10) {
-    digits = digits.substring(2);
-  }
-  return `whatsapp:+91${digits}`;
+  const e164 = normalizeE164(phone);
+  return `whatsapp:${e164}`;
 }
 
-/** Format phone for Twilio SMS API (no whatsapp: prefix) */
+/** Format a stored E.164 phone number for the Twilio SMS API */
 export function formatForSms(phone: string): string {
-  let digits = phone.replace(/\D/g, "");
-  if (digits.startsWith("91") && digits.length > 10) {
-    digits = digits.substring(2);
-  }
-  return `+91${digits}`;
+  return normalizeE164(phone);
+}
+
+/** Resolve stored phone (E.164 or legacy 91+digits) to E.164 string */
+function normalizeE164(phone: string): string {
+  let raw = phone.replace(/^whatsapp:/i, "").trim();
+  if (/^\+\d{7,15}$/.test(raw)) return raw;
+  let digits = raw.replace(/\D/g, "");
+  while (digits.startsWith("0") && digits.length > 10) digits = digits.substring(1);
+  if (digits.length === 10) return `+91${digits}`;
+  return `+${digits}`;
 }
 
 /** Send SMS message (fallback when outside WhatsApp 24h window) */
