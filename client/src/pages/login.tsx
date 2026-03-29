@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { Link } from "wouter";
 import { Loader2, LogIn } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
@@ -152,8 +153,13 @@ export default function Login() {
             </form>
           </Form>
 
-          <div className="mt-6 text-center text-sm text-muted-foreground">
-            Need access? Contact your organization admin.
+          <div className="mt-6 text-center text-sm text-muted-foreground space-y-2">
+            <div>
+              <Link href="/forgot-password" className="text-primary underline-offset-4 hover:underline">
+                Forgot password?
+              </Link>
+            </div>
+            <div>Need access? Contact your organization admin.</div>
           </div>
         </CardContent>
       </Card>

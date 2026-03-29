@@ -2,6 +2,9 @@
  * Reusable MIS category seeding for any tenant.
  * Called automatically on tenant creation and available as a standalone endpoint.
  *
+ * **Idempotent:** skips rows that already exist (slug + tenant) and treats Postgres
+ * unique violations (23505) as success for income_types inserts.
+ *
  * Each category now includes MIS classification metadata (cashflowSection,
  * pnlSection, drilldownMode) so the MIS engine reads config from the DB
  * instead of hardcoded slug arrays.

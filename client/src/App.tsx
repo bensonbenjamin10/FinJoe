@@ -27,6 +27,8 @@ import AdminReconciliation from "@/pages/admin-reconciliation";
 import AdminDataHandling from "@/pages/admin-data-handling";
 import AdminReports from "@/pages/admin-reports";
 import AcceptInvite from "@/pages/accept-invite";
+import ForgotPassword from "@/pages/forgot-password";
+import ResetPassword from "@/pages/reset-password";
 import AdminInvoiceNew from "@/pages/admin-invoice-new";
 import AdminInvoicing from "@/pages/admin-invoicing";
 import AdminInvoiceDetail from "@/pages/admin-invoice-detail";
@@ -45,6 +47,8 @@ function Router() {
         <Route path="/setup" component={Setup} />
         <Route path="/signup" component={Signup} />
         <Route path="/accept-invite" component={AcceptInvite} />
+        <Route path="/forgot-password" component={ForgotPassword} />
+        <Route path="/reset-password" component={ResetPassword} />
         <Route path="/login" component={Login} />
         <Route path="/admin/super/users">
           <ProtectedRoute requireRoles={["super_admin"]}>

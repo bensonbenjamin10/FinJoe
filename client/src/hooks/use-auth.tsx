@@ -12,6 +12,8 @@ export interface User {
   realTenantId?: string | null;
   /** Present when /api/auth/me joins tenant row */
   isDemoTenant?: boolean;
+  /** ISO date when demo workspace expires (demo tenants only) */
+  demoExpiresAt?: string | null;
   isActive: boolean;
 }
 

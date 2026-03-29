@@ -11,6 +11,7 @@ import { runWeeklyInsights } from "../worker/src/weekly-insights.js";
 import { generateExpensesFromTemplates, generateIncomeFromTemplates } from "../lib/finjoe-data.js";
 import { runBackfillEmbeddings } from "../lib/backfill-embeddings.js";
 import { db, pool } from "./db.js";
+import { deactivateExpiredDemoTenants } from "./lib/demo-expiry.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -128,6 +129,22 @@ app.get("/cron/weekly-insights", async (req, res) => {
   }
 });
 
+// Cron: deactivate expired demo tenants (schedule e.g. hourly with CRON_SECRET)
+app.get("/cron/demo-expiry", async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.query?.secret !== secret) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  try {
+    const result = await deactivateExpiredDemoTenants();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error("Demo expiry cron error", { err: String(err) });
+    res.status(500).json({ error: "Failed to run demo expiry" });
+  }
+});
+
 app.use(express.json({ limit: "25mb" }));
 app.use(express.urlencoded({ extended: false }));
 
@@ -155,3 +172,9 @@ const port = parseInt(process.env.PORT || "5000", 10);
 server.listen(port, "0.0.0.0", () => {
   logger.info("FinJoe serving", { port });
 });
+
+const DEMO_EXPIRY_INTERVAL_MS = 60 * 60 * 1000;
+setInterval(() => {
+  deactivateExpiredDemoTenants().catch((e) => logger.error("demo expiry interval", { err: String(e) }));
+}, DEMO_EXPIRY_INTERVAL_MS);
+void deactivateExpiredDemoTenants().catch((e) => logger.error("demo expiry on startup", { err: String(e) }));

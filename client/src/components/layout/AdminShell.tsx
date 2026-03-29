@@ -295,6 +295,24 @@ export function AdminShell({ children }: AdminShellProps) {
             </Button>
           </div>
         )}
+        {user?.isDemoTenant && user?.demoExpiresAt && (() => {
+          const end = new Date(user.demoExpiresAt).getTime();
+          const daysLeft = Math.ceil((end - Date.now()) / (24 * 60 * 60 * 1000));
+          if (Number.isNaN(end) || daysLeft > 14) return null;
+          return (
+            <div
+              className={`border-b px-4 py-2 text-sm ${
+                daysLeft <= 3
+                  ? "bg-destructive/15 border-destructive/30 text-destructive"
+                  : "bg-orange-500/10 border-orange-500/25 text-orange-950 dark:text-orange-100"
+              }`}
+            >
+              {daysLeft <= 0
+                ? "Your demo workspace has expired or will be deactivated soon. Switch to your real workspace or contact support."
+                : `Demo workspace expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"}. Switch when you’re ready.`}
+            </div>
+          );
+        })()}
         <Dialog open={switchOpen} onOpenChange={setSwitchOpen}>
           <DialogContent>
             <DialogHeader>

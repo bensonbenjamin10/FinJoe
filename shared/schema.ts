@@ -27,6 +27,8 @@ export const tenants = pgTable("tenants", {
   contactEmail: text("contact_email"),
   /** Sandbox tenant with seeded demo data (ACME-style) for trials */
   isDemo: boolean("is_demo").notNull().default(false),
+  /** When set, demo workspace is deactivated by cron after this time */
+  demoExpiresAt: timestamp("demo_expires_at"),
   isActive: boolean("is_active").notNull().default(true),
   taxRegime: text("tax_regime").notNull().default("flat_percent"),
   taxRegimeConfig: jsonb("tax_regime_config").$type<Record<string, unknown>>().default({}),
@@ -104,6 +106,8 @@ export const users = pgTable("users", {
   salesAssistanceRequested: boolean("sales_assistance_requested").notNull().default(false),
   inviteTokenHash: text("invite_token_hash"),
   inviteTokenExpiresAt: timestamp("invite_token_expires_at"),
+  passwordResetTokenHash: text("password_reset_token_hash"),
+  passwordResetExpiresAt: timestamp("password_reset_expires_at"),
   createdById: varchar("created_by_id"),
   updatedById: varchar("updated_by_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

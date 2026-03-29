@@ -52,6 +52,8 @@ import { registerIntegrationsRoutes } from "./integrations-routes.js";
 import { seedMISCategoriesForTenant } from "./seed-mis-categories.js";
 import { provisionDemoTenantData, normalizePhoneForContact } from "./demo-seeder.js";
 import { generateInviteToken, hashInviteToken } from "./invite-tokens.js";
+import { copyFinjoeSettingsDemoToReal, migrateFinJoeGraphDemoToReal } from "./lib/demo-real-switch.js";
+import { deactivateExpiredDemoTenants } from "./lib/demo-expiry.js";
 import { supportedRegimes } from "../lib/invoicing/ports/tax-regime-registry.js";
 import { getMedia } from "../lib/media-storage.js";
 import {
@@ -157,6 +159,27 @@ function rateLimitAgentProvision(req: Request, res: Response, next: NextFunction
   next();
 }
 
+const FORGOT_PASSWORD_WINDOW_MS = 60_000;
+const FORGOT_PASSWORD_MAX_PER_WINDOW = 5;
+const forgotPasswordHitsByIp = new Map<string, number[]>();
+
+function rateLimitForgotPassword(req: Request, res: Response, next: NextFunction) {
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  const now = Date.now();
+  const arr = (forgotPasswordHitsByIp.get(ip) ?? []).filter((t) => now - t < FORGOT_PASSWORD_WINDOW_MS);
+  if (arr.length >= FORGOT_PASSWORD_MAX_PER_WINDOW) {
+    res.setHeader("Retry-After", "60");
+    return res.status(429).json({ error: "Too many requests. Please wait a minute." });
+  }
+  arr.push(now);
+  forgotPasswordHitsByIp.set(ip, arr);
+  next();
+}
+
+function authAppOrigin(): string {
+  return (process.env.PUBLIC_APP_URL || process.env.APP_ORIGIN || "http://localhost:5173").replace(/\/$/, "");
+}
+
 export async function registerRoutes(app: Express) {
   const http = await import("http");
   const server = http.createServer(app);
@@ -193,13 +216,28 @@ export async function registerRoutes(app: Express) {
 
   app.get("/api/auth/me", async (req, res) => {
     if (!req.isAuthenticated()) return res.status(401).json({ error: "Not authenticated" });
-    const { passwordHash, inviteTokenHash, inviteTokenExpiresAt, ...u } = req.user as any;
+    const {
+      passwordHash,
+      inviteTokenHash,
+      inviteTokenExpiresAt,
+      passwordResetTokenHash: _prh,
+      passwordResetExpiresAt: _pre,
+      ...u
+    } = req.user as any;
     let isDemoTenant = false;
+    let demoExpiresAt: string | null = null;
     if (u.tenantId) {
-      const [t] = await db.select({ isDemo: tenants.isDemo }).from(tenants).where(eq(tenants.id, u.tenantId)).limit(1);
+      const [t] = await db
+        .select({ isDemo: tenants.isDemo, demoExpiresAt: tenants.demoExpiresAt })
+        .from(tenants)
+        .where(eq(tenants.id, u.tenantId))
+        .limit(1);
       isDemoTenant = !!t?.isDemo;
+      if (isDemoTenant && t?.demoExpiresAt) {
+        demoExpiresAt = t.demoExpiresAt instanceof Date ? t.demoExpiresAt.toISOString() : String(t.demoExpiresAt);
+      }
     }
-    res.json({ ...u, isDemoTenant });
+    res.json({ ...u, isDemoTenant, demoExpiresAt });
   });
 
   app.get("/api/setup/status", async (_req, res) => {
@@ -420,6 +458,8 @@ export async function registerRoutes(app: Express) {
         demoSlug = `acme-demo-${slug}-${d++}`;
       }
 
+      const demoExpiryDays = Math.min(365, Math.max(1, parseInt(process.env.FINJOE_DEMO_EXPIRY_DAYS || "30", 10) || 30));
+      const demoExpiresAt = new Date(Date.now() + demoExpiryDays * 24 * 60 * 60 * 1000);
       const [demoTenant] = await db
         .insert(tenants)
         .values({
@@ -429,6 +469,7 @@ export async function registerRoutes(app: Express) {
           contactEmail: emailLower,
           isActive: true,
           isDemo: true,
+          demoExpiresAt,
         })
         .returning();
 
@@ -512,13 +553,6 @@ export async function registerRoutes(app: Express) {
       const demoTenantId = full.tenantId!;
       const realId = full.realTenantId;
 
-      const phoneRows = await db
-        .select({ phone: finJoeContacts.phone })
-        .from(finJoeContacts)
-        .where(and(eq(finJoeContacts.tenantId, demoTenantId), eq(finJoeContacts.studentId, full.id)))
-        .limit(1);
-      const ph = phoneRows[0]?.phone;
-
       try {
         await seedMISCategoriesForTenant(realId);
       } catch (seedErr) {
@@ -529,57 +563,39 @@ export async function registerRoutes(app: Express) {
       }
 
       try {
+        await copyFinjoeSettingsDemoToReal(demoTenantId, realId);
+      } catch (copyErr) {
+        logger.error("copyFinjoeSettings on switch-to-real", { err: String(copyErr), demoTenantId, realId });
+        return res.status(503).json({
+          error: "Your workspace could not be prepared. Please try again in a few minutes.",
+        });
+      }
+
+      try {
         await db.transaction(async (tx) => {
-          if (ph) {
-            await tx.execute(sql`ALTER TABLE fin_joe_conversations DROP CONSTRAINT IF EXISTS fin_joe_conversations_contact_fkey`);
-            await tx.execute(sql`ALTER TABLE fin_joe_role_change_requests DROP CONSTRAINT IF EXISTS fin_joe_role_change_requests_contact_fkey`);
-
-            const convRows = await tx
-              .select({ id: finJoeConversations.id })
-              .from(finJoeConversations)
-              .where(and(eq(finJoeConversations.tenantId, demoTenantId), eq(finJoeConversations.contactPhone, ph)));
-            const convIds = convRows.map((r) => r.id);
-            if (convIds.length > 0) {
-              await tx
-                .update(finJoeOutboundIdempotency)
-                .set({ tenantId: realId, updatedAt: new Date() })
-                .where(
-                  and(
-                    eq(finJoeOutboundIdempotency.tenantId, demoTenantId),
-                    inArray(finJoeOutboundIdempotency.conversationId, convIds),
-                  ),
-                );
-              await tx
-                .update(finJoeTasks)
-                .set({ tenantId: realId, updatedAt: new Date() })
-                .where(and(eq(finJoeTasks.tenantId, demoTenantId), inArray(finJoeTasks.conversationId, convIds)));
-            }
-            await tx
-              .update(finJoeContacts)
-              .set({ tenantId: realId, updatedAt: new Date() })
-              .where(and(eq(finJoeContacts.tenantId, demoTenantId), eq(finJoeContacts.phone, ph)));
-            await tx
-              .update(finJoeConversations)
-              .set({ tenantId: realId, updatedAt: new Date() })
-              .where(and(eq(finJoeConversations.tenantId, demoTenantId), eq(finJoeConversations.contactPhone, ph)));
-            await tx
-              .update(finJoeRoleChangeRequests)
-              .set({ tenantId: realId })
-              .where(and(eq(finJoeRoleChangeRequests.tenantId, demoTenantId), eq(finJoeRoleChangeRequests.contactPhone, ph)));
-
-            await tx.execute(sql`ALTER TABLE fin_joe_conversations ADD CONSTRAINT fin_joe_conversations_contact_fkey FOREIGN KEY (tenant_id, contact_phone) REFERENCES fin_joe_contacts(tenant_id, phone)`);
-            await tx.execute(sql`ALTER TABLE fin_joe_role_change_requests ADD CONSTRAINT fin_joe_role_change_requests_contact_fkey FOREIGN KEY (tenant_id, contact_phone) REFERENCES fin_joe_contacts(tenant_id, phone)`);
-          }
+          await migrateFinJoeGraphDemoToReal(tx, demoTenantId, realId);
 
           await tx
             .update(users)
             .set({
               tenantId: realId,
               realTenantId: null,
+              updatedAt: new Date(),
+            })
+            .where(eq(users.tenantId, demoTenantId));
+
+          await tx
+            .update(users)
+            .set({
               salesAssistanceRequested: wantsSalesHelp,
               updatedAt: new Date(),
             })
             .where(eq(users.id, full.id));
+
+          await tx
+            .update(tenants)
+            .set({ isActive: false, updatedAt: new Date() })
+            .where(eq(tenants.id, demoTenantId));
         });
       } catch (txErr) {
         logger.error("switch-to-real-data transaction", { err: String(txErr), userId: full.id });
@@ -601,9 +617,6 @@ export async function registerRoutes(app: Express) {
       res.status(500).json({ error: "Could not switch workspace" });
     }
   });
-
-  const publicAppOrigin = () =>
-    (process.env.PUBLIC_APP_URL || process.env.APP_ORIGIN || "http://localhost:5173").replace(/\/$/, "");
 
   const TENANT_USER_ROLES = ["admin", "finance", "campus_coordinator", "head_office"] as const;
 
@@ -661,6 +674,100 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("Invite accept error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to complete invitation" });
+    }
+  });
+
+  app.post("/api/auth/forgot-password", rateLimitForgotPassword, async (req, res) => {
+    try {
+      const emailRaw = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+      if (!emailRaw || !emailRaw.includes("@")) {
+        return res.status(400).json({ error: "Valid email is required" });
+      }
+      const [user] = await db.select().from(users).where(eq(users.email, emailRaw)).limit(1);
+      if (!user) {
+        return res.json({ ok: true, message: "If an account exists for this email, we sent a reset link." });
+      }
+      const rawToken = crypto.randomBytes(32).toString("hex");
+      const tokenHash = hashInviteToken(rawToken);
+      const expires = new Date(Date.now() + 60 * 60 * 1000);
+      await db
+        .update(users)
+        .set({
+          passwordResetTokenHash: tokenHash,
+          passwordResetExpiresAt: expires,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, user.id));
+      const link = `${authAppOrigin()}/reset-password?token=${encodeURIComponent(rawToken)}`;
+      const html = `<p>Reset your FinJoe password using the link below. It expires in one hour.</p><p><a href="${link}">${link}</a></p>`;
+      const sent = await sendFinJoeEmail([user.email], "Reset your FinJoe password", html, { tenantId: user.tenantId ?? undefined }, req.requestId);
+      if (!sent) {
+        logger.info("Password reset email not sent (configure Resend); reset link for dev", { email: user.email, link });
+      }
+      res.json({ ok: true, message: "If an account exists for this email, we sent a reset link." });
+    } catch (e) {
+      logger.error("forgot-password error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Could not process request" });
+    }
+  });
+
+  app.get("/api/auth/reset-password/validate", async (req, res) => {
+    try {
+      const token = typeof req.query?.token === "string" ? req.query.token : "";
+      if (!token || token.length < 16) return res.status(400).json({ valid: false, error: "Invalid token" });
+      const hash = hashInviteToken(token);
+      const [row] = await db
+        .select({ email: users.email, passwordResetExpiresAt: users.passwordResetExpiresAt })
+        .from(users)
+        .where(eq(users.passwordResetTokenHash, hash))
+        .limit(1);
+      if (!row?.passwordResetExpiresAt || row.passwordResetExpiresAt < new Date()) {
+        return res.json({ valid: false, error: "Expired or invalid link" });
+      }
+      res.json({ valid: true, email: row.email });
+    } catch (e) {
+      logger.error("reset-password validate error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ valid: false, error: "Validation failed" });
+    }
+  });
+
+  app.post("/api/auth/reset-password", async (req, res) => {
+    try {
+      const { token, password } = req.body || {};
+      if (!token || typeof token !== "string" || !password || typeof password !== "string") {
+        return res.status(400).json({ error: "token and password required" });
+      }
+      if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+      const hash = hashInviteToken(token);
+      const [row] = await db.select().from(users).where(eq(users.passwordResetTokenHash, hash)).limit(1);
+      if (!row || !row.passwordResetExpiresAt || row.passwordResetExpiresAt < new Date()) {
+        return res.status(400).json({ error: "Invalid or expired reset link" });
+      }
+      const [updated] = await db
+        .update(users)
+        .set({
+          passwordHash: await hashPassword(password),
+          passwordResetTokenHash: null,
+          passwordResetExpiresAt: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, row.id))
+        .returning();
+      if (!updated) return res.status(500).json({ error: "Failed to update password" });
+      req.login(updated, (loginErr) => {
+        if (loginErr) {
+          logger.error("Login after reset-password failed", { requestId: req.requestId, err: String(loginErr) });
+          const { passwordHash, inviteTokenHash, inviteTokenExpiresAt, passwordResetTokenHash: _a, passwordResetExpiresAt: _b, ...u } =
+            updated as any;
+          return res.status(201).json({ ...u, loginFailed: true });
+        }
+        const { passwordHash, inviteTokenHash, inviteTokenExpiresAt, passwordResetTokenHash: _a, passwordResetExpiresAt: _b, ...u } =
+          updated as any;
+        res.status(201).json(u);
+      });
+    } catch (e) {
+      logger.error("reset-password error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to reset password" });
     }
   });
 
@@ -822,8 +929,31 @@ export async function registerRoutes(app: Express) {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
+      const qTenant = typeof req.query?.tenantId === "string" && req.query.tenantId ? req.query.tenantId : null;
+
+      if (user.role === "super_admin") {
+        const tenantFilter = qTenant;
+        const conditions = tenantFilter ? eq(users.tenantId, tenantFilter) : isNotNull(users.tenantId);
+        const rows = await db
+          .select({
+            id: users.id,
+            email: users.email,
+            name: users.name,
+            role: users.role,
+            isActive: users.isActive,
+            createdAt: users.createdAt,
+            tenantId: users.tenantId,
+            tenantName: tenants.name,
+          })
+          .from(users)
+          .leftJoin(tenants, eq(users.tenantId, tenants.id))
+          .where(conditions)
+          .orderBy(tenants.name, users.name);
+        return res.json(rows);
+      }
+
       const conditions = [eq(users.isActive, true)];
-      if (user.role !== "super_admin" && tenantId) conditions.push(eq(users.tenantId, tenantId));
+      if (tenantId) conditions.push(eq(users.tenantId, tenantId));
       const rows = await db
         .select({ id: users.id, name: users.name, email: users.email })
         .from(users)
@@ -3223,8 +3353,11 @@ export async function registerRoutes(app: Express) {
   // Cron trigger (admin-only, runs job logic directly on server)
   app.post("/api/admin/cron/trigger", requireAdmin, async (req, res) => {
     const { job } = req.body;
-    if (!job || typeof job !== "string") return res.status(400).json({ error: "job required (recurring-expenses, recurring-income, weekly-insights, backfill-embeddings)" });
-    const validJobs = ["recurring-expenses", "recurring-income", "weekly-insights", "backfill-embeddings"];
+    if (!job || typeof job !== "string")
+      return res.status(400).json({
+        error: "job required (recurring-expenses, recurring-income, weekly-insights, backfill-embeddings, demo-expiry)",
+      });
+    const validJobs = ["recurring-expenses", "recurring-income", "weekly-insights", "backfill-embeddings", "demo-expiry"];
     if (!validJobs.includes(job)) return res.status(400).json({ error: `job must be one of: ${validJobs.join(", ")}` });
 
     try {
@@ -3245,6 +3378,10 @@ export async function registerRoutes(app: Express) {
         }
         if (job === "backfill-embeddings") {
           const r = await runBackfillEmbeddings(pool);
+          return { ok: true, job, ...r };
+        }
+        if (job === "demo-expiry") {
+          const r = await deactivateExpiredDemoTenants();
           return { ok: true, job, ...r };
         }
         throw new Error("Unknown job");
@@ -4255,33 +4392,6 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  // Super Admin: All tenant users (cross-tenant list)
-  app.get("/api/admin/users", requireSuperAdmin, async (req, res) => {
-    try {
-      const tenantFilter = typeof req.query?.tenantId === "string" && req.query.tenantId ? req.query.tenantId : null;
-      const conditions = tenantFilter ? eq(users.tenantId, tenantFilter) : isNotNull(users.tenantId);
-      const rows = await db
-        .select({
-          id: users.id,
-          email: users.email,
-          name: users.name,
-          role: users.role,
-          isActive: users.isActive,
-          createdAt: users.createdAt,
-          tenantId: users.tenantId,
-          tenantName: tenants.name,
-        })
-        .from(users)
-        .leftJoin(tenants, eq(users.tenantId, tenants.id))
-        .where(conditions)
-        .orderBy(tenants.name, users.name);
-      res.json(rows);
-    } catch (e) {
-      logger.error("Admin users list error", { requestId: req.requestId, err: String(e) });
-      res.status(500).json({ error: "Failed to fetch users" });
-    }
-  });
-
   // Super Admin: Tenants
   app.get("/api/admin/tenants", requireSuperAdmin, async (req, res) => {
     try {
@@ -4510,7 +4620,7 @@ export async function registerRoutes(app: Express) {
   });
 
   async function sendInviteEmailToUser(tenantId: string, toEmail: string, rawToken: string, requestId?: string) {
-    const base = publicAppOrigin();
+    const base = authAppOrigin();
     const inviteUrl = `${base}/accept-invite?token=${encodeURIComponent(rawToken)}`;
     const html = `<p>You have been invited to FinJoe.</p><p><a href="${inviteUrl}">Set your password and sign in</a></p><p>This link expires in 7 days. If you did not expect this email, you can ignore it.</p>`;
     const ok = await sendFinJoeEmail([toEmail], "You're invited to FinJoe", html, { tenantId }, requestId);

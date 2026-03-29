@@ -39,6 +39,12 @@ const CRON_JOBS = [
     description: "Processes expenses without embeddings for RAG/semantic search.",
     schedule: "Daily 00:05 UTC",
   },
+  {
+    id: "demo-expiry",
+    name: "Demo workspace expiry",
+    description: "Deactivates demo tenants past their demo_expires_at (also runs hourly on the server).",
+    schedule: "Hourly (server interval) + /cron/demo-expiry",
+  },
 ] as const;
 
 type JobId = (typeof CRON_JOBS)[number]["id"];
@@ -64,6 +70,7 @@ type TriggerResult = {
   skipped?: boolean;
   total?: number;
   remaining?: number;
+  deactivated?: number;
 };
 
 export default function AdminCron() {
@@ -71,8 +78,10 @@ export default function AdminCron() {
   const [runningJob, setRunningJob] = useState<JobId | null>(null);
   const [lastResult, setLastResult] = useState<Record<JobId, TriggerResult | null>>({
     "recurring-expenses": null,
+    "recurring-income": null,
     "weekly-insights": null,
     "backfill-embeddings": null,
+    "demo-expiry": null,
   });
 
   const triggerMutation = useMutation({
@@ -89,15 +98,18 @@ export default function AdminCron() {
       setLastResult((prev) => ({ ...prev, [job]: data }));
       setRunningJob(null);
       queryClient.invalidateQueries({ queryKey: ["/api/admin/cron/history"] });
-      const msg = data.generated !== undefined
-        ? `Generated ${data.generated} expense(s)`
-        : data.messagesSent !== undefined
-          ? `Sent ${data.messagesSent} message(s)`
-          : data.processed !== undefined
-            ? `Processed ${data.processed} embedding(s)`
-            : data.skipped
-              ? "Skipped (no work needed)"
-              : "Completed";
+      const msg =
+        data.generated !== undefined
+          ? `Generated ${data.generated} expense(s)`
+          : data.messagesSent !== undefined
+            ? `Sent ${data.messagesSent} message(s)`
+            : data.processed !== undefined
+              ? `Processed ${data.processed} embedding(s)`
+              : data.deactivated !== undefined
+                ? `Deactivated ${data.deactivated} demo tenant(s)`
+                : data.skipped
+                  ? "Skipped (no work needed)"
+                  : "Completed";
       toast({ title: `${job} completed`, description: msg });
     },
     onError: (e: Error, job) => {
@@ -185,6 +197,9 @@ export default function AdminCron() {
                       )}
                       {result.skipped && result.processed === undefined && (
                         <span className="ml-2 text-muted-foreground">Skipped (no GEMINI_API_KEY or no expenses to process)</span>
+                      )}
+                      {result.deactivated !== undefined && (
+                        <span className="ml-2">Deactivated {result.deactivated} demo tenant(s)</span>
                       )}
                     </div>
                     {result.errors && result.errors.length > 0 && (
