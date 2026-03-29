@@ -552,13 +552,13 @@ export async function registerRoutes(app: Express) {
                 .where(and(eq(finJoeTasks.tenantId, demoTenantId), inArray(finJoeTasks.conversationId, convIds)));
             }
             await tx
-              .update(finJoeConversations)
-              .set({ tenantId: realId, updatedAt: new Date() })
-              .where(and(eq(finJoeConversations.tenantId, demoTenantId), eq(finJoeConversations.contactPhone, ph)));
-            await tx
               .update(finJoeContacts)
               .set({ tenantId: realId, updatedAt: new Date() })
               .where(and(eq(finJoeContacts.tenantId, demoTenantId), eq(finJoeContacts.phone, ph)));
+            await tx
+              .update(finJoeConversations)
+              .set({ tenantId: realId, updatedAt: new Date() })
+              .where(and(eq(finJoeConversations.tenantId, demoTenantId), eq(finJoeConversations.contactPhone, ph)));
             await tx
               .update(finJoeRoleChangeRequests)
               .set({ tenantId: realId })
