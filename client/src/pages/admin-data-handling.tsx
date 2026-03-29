@@ -362,7 +362,7 @@ export default function AdminDataHandling() {
     });
   };
 
-  const costCenterLabel = useCostCenterLabel();
+  const { costCenterLabel } = useCostCenterLabel(tenantId);
 
   const { data: categoriesForAdmin = [] } = useQuery<ExpenseCategory[]>({
     queryKey: ["/api/admin/expense-categories", tenantId],

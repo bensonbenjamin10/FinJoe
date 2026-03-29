@@ -531,6 +531,9 @@ export async function registerRoutes(app: Express) {
       try {
         await db.transaction(async (tx) => {
           if (ph) {
+            await tx.execute(sql`ALTER TABLE fin_joe_conversations DROP CONSTRAINT IF EXISTS fin_joe_conversations_contact_fkey`);
+            await tx.execute(sql`ALTER TABLE fin_joe_role_change_requests DROP CONSTRAINT IF EXISTS fin_joe_role_change_requests_contact_fkey`);
+
             const convRows = await tx
               .select({ id: finJoeConversations.id })
               .from(finJoeConversations)
@@ -563,6 +566,9 @@ export async function registerRoutes(app: Express) {
               .update(finJoeRoleChangeRequests)
               .set({ tenantId: realId })
               .where(and(eq(finJoeRoleChangeRequests.tenantId, demoTenantId), eq(finJoeRoleChangeRequests.contactPhone, ph)));
+
+            await tx.execute(sql`ALTER TABLE fin_joe_conversations ADD CONSTRAINT fin_joe_conversations_contact_fkey FOREIGN KEY (tenant_id, contact_phone) REFERENCES fin_joe_contacts(tenant_id, phone)`);
+            await tx.execute(sql`ALTER TABLE fin_joe_role_change_requests ADD CONSTRAINT fin_joe_role_change_requests_contact_fkey FOREIGN KEY (tenant_id, contact_phone) REFERENCES fin_joe_contacts(tenant_id, phone)`);
           }
 
           await tx
