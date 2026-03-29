@@ -22,12 +22,12 @@ import {
 import { seedMISCategoriesForTenant } from "./seed-mis-categories.js";
 import { logger } from "./logger.js";
 
-/** Normalize to FinJoe storage format (same as worker twilio.normalizePhone) */
+/** Normalize to FinJoe storage format — must match worker/src/twilio.ts normalizePhone exactly. */
 export function normalizePhoneForContact(raw: string): string {
   let digits = raw.replace(/\D/g, "");
   while (digits.startsWith("0") && digits.length > 10) digits = digits.substring(1);
   if (digits.startsWith("91") && digits.length > 10) digits = digits.substring(2);
-  return "91" + digits.slice(-10);
+  return "91" + digits;
 }
 
 function distributeTotal(target: number, n: number): number[] {

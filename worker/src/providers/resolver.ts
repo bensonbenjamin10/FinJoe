@@ -139,6 +139,26 @@ export async function getCredentialsForTenant(tenantId: string): Promise<WabaPro
           config: { accountSid, authToken },
         };
       }
+      // Demo tenants share the platform Twilio number. If env vars aren't set, fall back
+      // to the default tenant's WABA provider row (handles Railway/per-tenant credential setups).
+      const [defaultWabaRow] = await db
+        .select()
+        .from(tenantWabaProviders)
+        .where(and(eq(tenantWabaProviders.tenantId, defaultTenantId), eq(tenantWabaProviders.provider, "twilio"), eq(tenantWabaProviders.isActive, true)))
+        .limit(1);
+      if (defaultWabaRow) {
+        const config = defaultWabaRow.config as unknown as TwilioProviderConfig;
+        if (config?.accountSid && config?.authToken) {
+          const smsFromOverride = config.smsFrom ?? (await getFinJoeSmsFrom(defaultTenantId));
+          const smsFrom = await resolveSmsFromAsync(defaultWabaRow.whatsappFrom, smsFromOverride);
+          return {
+            provider: "twilio",
+            whatsappFrom: defaultWabaRow.whatsappFrom,
+            smsFrom,
+            config: { accountSid: config.accountSid, authToken: config.authToken, smsFrom: config.smsFrom },
+          };
+        }
+      }
     }
     return null;
   }

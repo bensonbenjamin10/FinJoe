@@ -24,7 +24,16 @@ export async function isWithin24hWindow(contactPhone: string, tenantId: string):
 /**
  * Check if the contact's last activity was outside the 24h window (before this incoming message).
  * Used to send re-engagement template when user messages after long silence.
+ * Returns false for brand-new contacts (no prior conversation) — re-engagement is not needed
+ * when a user is initiating contact for the very first time.
  */
 export async function wasOutside24hBeforeMessage(contactPhone: string, tenantId: string): Promise<boolean> {
-  return !(await isWithin24hWindow(contactPhone, tenantId));
+  const [conv] = await db
+    .select({ lastMessageAt: finJoeConversations.lastMessageAt })
+    .from(finJoeConversations)
+    .where(and(eq(finJoeConversations.contactPhone, contactPhone), eq(finJoeConversations.tenantId, tenantId)))
+    .orderBy(desc(finJoeConversations.lastMessageAt))
+    .limit(1);
+  if (!conv) return false;
+  return Date.now() - conv.lastMessageAt.getTime() >= TWENTY_FOUR_HOURS_MS;
 }
