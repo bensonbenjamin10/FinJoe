@@ -3,6 +3,7 @@ import { eq, and } from "drizzle-orm";
 import { db } from "./db.js";
 import { logger } from "./logger.js";
 import { requireTenantStaff, getTenantId } from "./auth.js";
+import { sendFinJoeEmail } from "../worker/src/email.js";
 import type { CreateInvoiceLineInput } from "../lib/invoicing/ports/types.js";
 import { createInvoiceService } from "../lib/invoicing/application/invoice-service.js";
 import { createPaymentAllocationService } from "../lib/invoicing/application/payment-allocation-service.js";
@@ -374,20 +375,17 @@ export function registerInvoicingRoutes(app: Express) {
       const payUrl = `${req.protocol}://${req.get("host")}/pay/${inv.id}`;
       const emailHtml = html.replace("</body>", `<div style="text-align:center;margin:32px 0;"><a href="${payUrl}" style="display:inline-block;padding:12px 32px;background:#0066FF;color:white;text-decoration:none;border-radius:6px;font-weight:600;">Pay Now</a></div></body>`);
 
-      const apiKey = process.env.RESEND_API_KEY;
-      if (!apiKey) return res.status(503).json({ error: "Email not configured (RESEND_API_KEY missing)" });
+      if (!process.env.RESEND_API_KEY) return res.status(503).json({ error: "Email not configured (RESEND_API_KEY missing)" });
 
-      const { Resend } = await import("resend");
-      const resend = new Resend(apiKey);
-      const from = process.env.RESEND_FROM || "FinJoe <onboarding@resend.dev>";
-      const { error: sendErr } = await resend.emails.send({
-        from,
-        to: [inv.customer.email],
-        subject: `Invoice ${inv.invoiceNumber}`,
-        html: emailHtml,
-      });
-      if (sendErr) {
-        logger.error("Invoice email send error", { err: (sendErr as any).message });
+      const sent = await sendFinJoeEmail(
+        [inv.customer.email],
+        `Invoice ${inv.invoiceNumber}`,
+        emailHtml,
+        { tenantId: tid },
+        req.requestId
+      );
+      if (!sent) {
+        logger.error("Invoice email send error", { tenantId: tid, invoiceId: inv.id });
         return res.status(502).json({ error: "Failed to send email" });
       }
       res.json({ ok: true, to: inv.customer.email });

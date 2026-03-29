@@ -30,6 +30,15 @@ type CachedSettings = {
 
 const settingsCache = new Map<string, CachedSettings>();
 
+/** Invalidate per-tenant settings cache (call after finjoe_settings update). */
+export function invalidateSendSettingsCache(tenantId?: string): void {
+  if (tenantId) {
+    settingsCache.delete(tenantId);
+  } else {
+    settingsCache.clear();
+  }
+}
+
 async function fetchFinJoeSettings(tenantId: string): Promise<CachedSettings | null> {
   const cached = settingsCache.get(tenantId);
   if (cached) return cached;
@@ -78,8 +87,10 @@ async function storeOutboundMessage(
 
 /**
  * Send message with 24h window routing: free-form within 24h, template outside.
- * Outside 24h: try WhatsApp template, then SMS fallback, then email for critical.
- * Success = any channel delivers. Stores all outbound messages for audit.
+ * Outside 24h: try WhatsApp template, then SMS fallback.
+ * Critical messages always also email notificationEmails (+ optional submitterEmail),
+ * regardless of whether the messaging channel succeeded.
+ * Stores all outbound messages for audit.
  */
 export async function sendWith24hRouting(
   to: string,
@@ -91,18 +102,18 @@ export async function sendWith24hRouting(
 ): Promise<boolean> {
   const conversation = await getOrCreateConversation(to, tenantId);
   const within24h = await isWithin24hWindow(to, tenantId);
+
+  let messagingDelivered = false;
+  let messagingSid: string | null = null;
+
   if (within24h) {
     const result = await sendFinJoeWhatsApp(to, freeFormMessage, traceId, tenantId);
     if (result) {
-      await storeOutboundMessage(conversation.id, freeFormMessage, (result as { sid?: string })?.sid);
-      return true;
+      messagingSid = (result as { sid?: string })?.sid ?? null;
+      messagingDelivered = true;
+      await storeOutboundMessage(conversation.id, freeFormMessage, messagingSid);
     }
-  }
-
-  let delivered = false;
-  let deliveredMessageSid: string | null = null;
-
-  if (!within24h) {
+  } else {
     if (templateConfig?.templateSid) {
       try {
         const result = await sendFinJoeWhatsAppTemplate(
@@ -113,24 +124,33 @@ export async function sendWith24hRouting(
           tenantId
         );
         if (result) {
-          deliveredMessageSid = (result as { sid?: string })?.sid ?? null;
-          delivered = true;
+          messagingSid = (result as { sid?: string })?.sid ?? null;
+          messagingDelivered = true;
         }
       } catch (err) {
         logger.warn("WhatsApp template send failed, trying SMS fallback", { traceId, to, err: String(err) });
       }
     }
 
-    if (!delivered) {
+    if (!messagingDelivered) {
       try {
         const smsResult = await sendFinJoeSms(to, freeFormMessage, traceId, tenantId);
-        if (smsResult) delivered = true;
+        if (smsResult) messagingDelivered = true;
       } catch (err) {
         logger.warn("SMS fallback failed", { traceId, to, err: String(err) });
       }
     }
+
+    if (messagingDelivered) {
+      await storeOutboundMessage(conversation.id, freeFormMessage, messagingSid);
+    } else {
+      logger.warn("Outside 24h window - no messaging channel delivered (template/SMS)", { traceId, to });
+    }
   }
 
+  // Critical emails always fire regardless of messaging channel outcome.
+  // notificationEmails is the tenant/platform finance inbox; submitterEmail is a CC for the submitter.
+  let emailDelivered = false;
   if (options?.critical) {
     const settings = await fetchFinJoeSettings(tenantId);
     const emails: string[] = [...(settings?.notificationEmails ?? [])];
@@ -140,25 +160,17 @@ export async function sendWith24hRouting(
     if (emails.length > 0) {
       const subject = freeFormMessage.length > 60 ? freeFormMessage.slice(0, 57) + "..." : freeFormMessage;
       const html = `<p>${freeFormMessage.replace(/\n/g, "<br>")}</p>`;
-      const emailSent = await sendFinJoeEmail(
+      emailDelivered = await sendFinJoeEmail(
         emails,
         `FinJoe: ${subject}`,
         html,
         { tenantId, idempotencyKey: traceId ? `finjoe-${traceId}` : undefined },
         traceId
       );
-      if (emailSent) delivered = true;
     }
   }
 
-  if (!delivered && !within24h) {
-    logger.warn("Outside 24h window - no channel delivered (template/SMS/email)", { traceId, to });
-  }
-
-  if (delivered) {
-    await storeOutboundMessage(conversation.id, freeFormMessage, deliveredMessageSid);
-  }
-  return delivered;
+  return messagingDelivered || emailDelivered;
 }
 
 /** Build expense approval template config from settings and expense data */

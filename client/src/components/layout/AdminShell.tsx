@@ -7,6 +7,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
@@ -45,6 +46,7 @@ import {
 import {
   Building2,
   LayoutDashboard,
+  LayoutGrid,
   MessageCircle,
   Settings,
   LogOut,
@@ -58,6 +60,7 @@ import {
   FileSpreadsheet,
   FileText,
   Users,
+  UserCog,
 } from "lucide-react";
 import type { Tenant } from "@shared/schema";
 import { FINJOE_PATHS, finjoePathWithTenant } from "@/lib/finjoe-routes";
@@ -144,11 +147,6 @@ export function AdminShell({ children }: AdminShellProps) {
   const navItems = [
     { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/admin/reports", label: "Reports", icon: FileSpreadsheet },
-    ...(isSuperAdmin
-      ? [
-          { href: "/admin/tenants", label: "Tenants", icon: Building2 },
-        ]
-      : []),
     ...(isTenantAdmin ? [{ href: teamHref, label: "Team", icon: Users }] : []),
     { href: finjoeHref, label: "FinJoe", icon: MessageCircle },
     { href: "/admin/expenses", label: "Expenses", icon: Receipt },
@@ -158,13 +156,17 @@ export function AdminShell({ children }: AdminShellProps) {
     { href: "/admin/invoicing", label: "Invoicing", icon: FileText },
     { href: "/admin/reconciliation", label: "Reconciliation", icon: GitCompareArrows },
     { href: dataHandlingHref, label: "Data Handling", icon: Upload },
-    ...(isSuperAdmin
-      ? [
-          { href: "/admin/cron", label: "Cron Jobs", icon: Zap },
-          { href: "/admin/account-settings", label: "Account Settings", icon: Settings },
-        ]
-      : []),
   ];
+
+  const platformNavItems = isSuperAdmin
+    ? [
+        { href: "/admin/super", label: "Overview", icon: LayoutGrid },
+        { href: "/admin/tenants", label: "Tenants", icon: Building2 },
+        { href: "/admin/super/users", label: "Users", icon: UserCog },
+        { href: "/admin/cron", label: "Cron Jobs", icon: Zap },
+        { href: "/admin/account-settings", label: "Account Settings", icon: Settings },
+      ]
+    : [];
 
   return (
     <SidebarProvider>
@@ -205,6 +207,38 @@ export function AdminShell({ children }: AdminShellProps) {
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
+          {isSuperAdmin && platformNavItems.length > 0 && (
+            <>
+              <SidebarSeparator />
+              <SidebarGroup>
+                <SidebarGroupLabel>Platform</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {platformNavItems.map((item) => {
+                      const locPath = location.split("?")[0];
+                      const itemPath = item.href.split("?")[0];
+                      const isActive =
+                        itemPath === "/admin/super"
+                          ? locPath === "/admin/super"
+                          : itemPath === "/admin/super/users"
+                            ? locPath === "/admin/super/users"
+                            : locPath === itemPath;
+                      return (
+                        <SidebarMenuItem key={item.href}>
+                          <SidebarMenuButton asChild isActive={isActive}>
+                            <Link href={item.href}>
+                              <item.icon className="h-4 w-4" />
+                              <span>{item.label}</span>
+                            </Link>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      );
+                    })}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            </>
+          )}
           {isSuperAdmin && tenants.length > 0 && (
             <>
               <SidebarSeparator />

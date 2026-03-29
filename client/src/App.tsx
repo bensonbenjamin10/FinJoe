@@ -21,6 +21,8 @@ import AdminCron from "@/pages/admin-cron";
 import AdminTenants from "@/pages/admin-tenants";
 import AdminTenantUsers from "@/pages/admin-tenant-users";
 import AdminAccountSettings from "@/pages/admin-account-settings";
+import AdminSuperHub from "@/pages/admin-super-hub";
+import AdminSuperUsers from "@/pages/admin-super-users";
 import AdminReconciliation from "@/pages/admin-reconciliation";
 import AdminDataHandling from "@/pages/admin-data-handling";
 import AdminReports from "@/pages/admin-reports";
@@ -44,6 +46,20 @@ function Router() {
         <Route path="/signup" component={Signup} />
         <Route path="/accept-invite" component={AcceptInvite} />
         <Route path="/login" component={Login} />
+        <Route path="/admin/super/users">
+          <ProtectedRoute requireRoles={["super_admin"]}>
+            <AdminShell>
+              <AdminSuperUsers />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/super">
+          <ProtectedRoute requireRoles={["super_admin"]}>
+            <AdminShell>
+              <AdminSuperHub />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
         <Route path="/admin/tenants/:id/users">
           <ProtectedRoute requireRoles={["super_admin"]}>
             <AdminShell>

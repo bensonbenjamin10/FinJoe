@@ -210,31 +210,66 @@ export async function notifySubmitterForApprovalRejectionFromExpense(
 
 /** Notify role request requester when their request is approved or rejected (e.g. via web admin). */
 export async function notifyRoleRequestRequester(
-  contactPhone: string,
+  contactPhone: string | null | undefined,
   type: "approved" | "rejected",
   requestId: string,
   tenantId: string,
   reason?: string,
   traceId?: string,
   requestedRole?: string | null,
-  campusName?: string | null
+  campusName?: string | null,
+  requesterEmail?: string | null
 ): Promise<boolean> {
   const shortId = toShortUuid(requestId);
   const truncatedReason = reason && reason.length > REASON_MAX_LENGTH ? reason.slice(0, REASON_MAX_LENGTH) + "…" : reason;
   const roleLabel = requestedRole ? requestedRole.replace(/_/g, " ") : null;
+
+  let parts: string[];
   if (type === "approved") {
-    const parts: string[] = [`Good news! Your role change request #${shortId} has been approved.`];
+    parts = [`Good news! Your role change request #${shortId} has been approved.`];
     if (roleLabel) parts.push(`Role: ${roleLabel}`);
     if (campusName) parts.push(`Campus: ${campusName}`);
     parts.push("You can now use FinJoe with your new role.");
-    return sendWith24hRouting(contactPhone, parts.join("\n"), null, traceId, tenantId, { critical: true });
   } else {
-    const parts: string[] = [`Your role change request #${shortId} has been rejected.`];
+    parts = [`Your role change request #${shortId} has been rejected.`];
     if (roleLabel) parts.push(`Requested role: ${roleLabel}`);
     if (campusName) parts.push(`Campus: ${campusName}`);
     if (truncatedReason) parts.push(`Reason: ${truncatedReason}`);
-    return sendWith24hRouting(contactPhone, parts.join("\n"), null, traceId, tenantId, { critical: true });
   }
+  const body = parts.join("\n");
+
+  if (contactPhone) {
+    return sendWith24hRouting(contactPhone, body, null, traceId, tenantId, {
+      critical: true,
+      submitterEmail: requesterEmail ?? null,
+    });
+  }
+
+  // Email-only fallback when requester has no phone
+  if (requesterEmail) {
+    const subject =
+      type === "approved"
+        ? `FinJoe: Role request #${shortId} approved`
+        : `FinJoe: Role request #${shortId} rejected`;
+    const html = `<p>${body.replace(/\n/g, "<br>")}</p>`;
+    try {
+      const sent = await sendFinJoeEmail(
+        [requesterEmail],
+        subject,
+        html,
+        { tenantId, idempotencyKey: traceId ? `finjoe-role-${traceId}` : undefined },
+        traceId
+      );
+      logger.info("Sent email-only role request notification", { traceId, requestId, type });
+      return sent;
+    } catch (err) {
+      logger.error("Failed to send email-only role request notification", { traceId, requestId, err: String(err) });
+      return false;
+    }
+  }
+
+  logger.info("No phone or email for role request requester - skipping notification", { traceId, requestId });
+  return false;
 }
 
 export type PayoutNotificationContext = {

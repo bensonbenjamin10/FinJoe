@@ -1349,16 +1349,22 @@ async function executeFunctionCall(
           tenantId: finJoeRoleChangeRequests.tenantId,
           requestedRole: finJoeRoleChangeRequests.requestedRole,
           costCenterId: finJoeRoleChangeRequests.costCenterId,
+          studentId: finJoeRoleChangeRequests.studentId,
         })
         .from(finJoeRoleChangeRequests)
         .where(eq(finJoeRoleChangeRequests.id, requestId))
         .limit(1);
       const result = await finJoeData.approveRoleRequest(requestId, contactStudentId);
       if (!result) return { success: false, error: `Could not approve role request #${requestId}. It may not be pending.` };
-      if (reqRow?.contactPhone && reqRow?.tenantId) {
+      if (reqRow?.tenantId) {
         const roleCampusName = reqRow.costCenterId ? (execCtx.campuses.find((c) => c.id === reqRow.costCenterId)?.name ?? null) : null;
         try {
-          await notifyRoleRequestRequester(reqRow.contactPhone, "approved", requestId, reqRow.tenantId, undefined, traceId, reqRow.requestedRole, roleCampusName);
+          let requesterEmail: string | null = null;
+          if (reqRow.studentId) {
+            const [u] = await db.select({ email: users.email }).from(users).where(eq(users.id, reqRow.studentId)).limit(1);
+            requesterEmail = u?.email ?? null;
+          }
+          await notifyRoleRequestRequester(reqRow.contactPhone, "approved", requestId, reqRow.tenantId, undefined, traceId, reqRow.requestedRole, roleCampusName, requesterEmail);
         } catch (notifyErr) {
           logger.error("Failed to notify role request requester of approval", { traceId, requestId, err: String(notifyErr) });
         }
@@ -1379,16 +1385,22 @@ async function executeFunctionCall(
           tenantId: finJoeRoleChangeRequests.tenantId,
           requestedRole: finJoeRoleChangeRequests.requestedRole,
           costCenterId: finJoeRoleChangeRequests.costCenterId,
+          studentId: finJoeRoleChangeRequests.studentId,
         })
         .from(finJoeRoleChangeRequests)
         .where(eq(finJoeRoleChangeRequests.id, requestId))
         .limit(1);
       const result = await finJoeData.rejectRoleRequest(requestId, contactStudentId, reason);
       if (!result) return { success: false, error: `Could not reject role request #${requestId}. It may not be pending.` };
-      if (reqRow?.contactPhone && reqRow?.tenantId) {
+      if (reqRow?.tenantId) {
         const roleCampusName = reqRow.costCenterId ? (execCtx.campuses.find((c) => c.id === reqRow.costCenterId)?.name ?? null) : null;
         try {
-          await notifyRoleRequestRequester(reqRow.contactPhone, "rejected", requestId, reqRow.tenantId, reason, traceId, reqRow.requestedRole, roleCampusName);
+          let requesterEmail: string | null = null;
+          if (reqRow.studentId) {
+            const [u] = await db.select({ email: users.email }).from(users).where(eq(users.id, reqRow.studentId)).limit(1);
+            requesterEmail = u?.email ?? null;
+          }
+          await notifyRoleRequestRequester(reqRow.contactPhone, "rejected", requestId, reqRow.tenantId, reason, traceId, reqRow.requestedRole, roleCampusName, requesterEmail);
         } catch (notifyErr) {
           logger.error("Failed to notify role request requester of rejection", { traceId, requestId, err: String(notifyErr) });
         }

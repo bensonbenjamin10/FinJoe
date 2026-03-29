@@ -2,7 +2,7 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import crypto from "node:crypto";
 import multer from "multer";
 import passport from "passport";
-import { eq, and, desc, or, sql, inArray, isNull, gte, lte, aliasedTable } from "drizzle-orm";
+import { eq, and, desc, or, sql, inArray, isNull, isNotNull, gte, lte, aliasedTable, count } from "drizzle-orm";
 import { db, pool } from "./db.js";
 import { parseBankStatementCsv, isValidDateString, type ParsedExpenseRow, type ParsedIncomeRow } from "../lib/bank-statement-parser.js";
 import { runBankStatementImportAnalyze, shiftDate, textsOverlap } from "../lib/bank-import-analyze.js";
@@ -39,6 +39,8 @@ import { logCronRun } from "../lib/cron-logger.js";
 import { createTemplatesInTwilio, submitTemplatesForApproval } from "../lib/twilio-content-create.js";
 import { fetchApprovedTemplatesFromTwilio, fetchTemplateStatusesFromTwilio } from "../lib/twilio-content-sync.js";
 import { sendFinJoeEmail } from "../worker/src/email.js";
+import { invalidateSendSettingsCache } from "../worker/src/send.js";
+import { invalidatePlatformSettingsCache } from "../worker/src/platform-settings.js";
 import { sendFinJoeSms, sendFinJoeWhatsAppTemplate } from "../worker/src/twilio.js";
 import { getCredentialsForTenant } from "../worker/src/providers/resolver.js";
 import { getAnalytics, getPredictions } from "./analytics.js";
@@ -1008,16 +1010,25 @@ export async function registerRoutes(app: Express) {
         tenantId = defaultTenant?.id ?? "default";
       }
       const [reqRow] = await db
-        .select({ contactPhone: finJoeRoleChangeRequests.contactPhone, tenantId: finJoeRoleChangeRequests.tenantId })
+        .select({
+          contactPhone: finJoeRoleChangeRequests.contactPhone,
+          tenantId: finJoeRoleChangeRequests.tenantId,
+          studentId: finJoeRoleChangeRequests.studentId,
+        })
         .from(finJoeRoleChangeRequests)
         .where(eq(finJoeRoleChangeRequests.id, req.params.id))
         .limit(1);
       const finJoeData = createFinJoeData(db, tenantId);
       const result = await finJoeData.approveRoleRequest(req.params.id, user.id, "admin");
       if (!result) return res.status(404).json({ error: "Role request not found or not pending" });
-      if (reqRow?.contactPhone && reqRow?.tenantId) {
+      if (reqRow?.tenantId) {
         try {
-          await notifyRoleRequestRequester(reqRow.contactPhone, "approved", req.params.id, reqRow.tenantId, undefined, req.requestId);
+          let requesterEmail: string | null = null;
+          if (reqRow.studentId) {
+            const [u] = await db.select({ email: users.email }).from(users).where(eq(users.id, reqRow.studentId)).limit(1);
+            requesterEmail = u?.email ?? null;
+          }
+          await notifyRoleRequestRequester(reqRow.contactPhone, "approved", req.params.id, reqRow.tenantId, undefined, req.requestId, undefined, undefined, requesterEmail);
         } catch (notifyErr) {
           logger.error("Failed to notify role request requester for approval", { requestId: req.requestId, err: String(notifyErr) });
         }
@@ -1041,16 +1052,25 @@ export async function registerRoutes(app: Express) {
       }
       const { reason } = req.body;
       const [reqRow] = await db
-        .select({ contactPhone: finJoeRoleChangeRequests.contactPhone, tenantId: finJoeRoleChangeRequests.tenantId })
+        .select({
+          contactPhone: finJoeRoleChangeRequests.contactPhone,
+          tenantId: finJoeRoleChangeRequests.tenantId,
+          studentId: finJoeRoleChangeRequests.studentId,
+        })
         .from(finJoeRoleChangeRequests)
         .where(eq(finJoeRoleChangeRequests.id, req.params.id))
         .limit(1);
       const finJoeData = createFinJoeData(db, tenantId);
       const result = await finJoeData.rejectRoleRequest(req.params.id, user.id, reason || "Rejected via admin", "admin");
       if (!result) return res.status(404).json({ error: "Role request not found or not pending" });
-      if (reqRow?.contactPhone && reqRow?.tenantId) {
+      if (reqRow?.tenantId) {
         try {
-          await notifyRoleRequestRequester(reqRow.contactPhone, "rejected", req.params.id, reqRow.tenantId, reason || "Rejected via admin", req.requestId);
+          let requesterEmail: string | null = null;
+          if (reqRow.studentId) {
+            const [u] = await db.select({ email: users.email }).from(users).where(eq(users.id, reqRow.studentId)).limit(1);
+            requesterEmail = u?.email ?? null;
+          }
+          await notifyRoleRequestRequester(reqRow.contactPhone, "rejected", req.params.id, reqRow.tenantId, reason || "Rejected via admin", req.requestId, undefined, undefined, requesterEmail);
         } catch (notifyErr) {
           logger.error("Failed to notify role request requester for rejection", { requestId: req.requestId, err: String(notifyErr) });
         }
@@ -1307,6 +1327,7 @@ export async function registerRoutes(app: Express) {
       } else {
         [result] = await db.insert(finjoeSettings).values({ tenantId: tid, ...updates } as any).returning();
       }
+      invalidateSendSettingsCache(tid);
       res.json(result);
     } catch (e) {
       logger.error("FinJoe settings update error", { requestId: req.requestId, err: String(e) });
@@ -4187,10 +4208,68 @@ export async function registerRoutes(app: Express) {
       } else {
         [result] = await db.insert(platformSettings).values({ id: "default", ...updates } as any).returning();
       }
+      invalidatePlatformSettingsCache();
+      invalidateSendSettingsCache();
       res.json(result);
     } catch (e) {
       logger.error("Account settings update error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to update account settings" });
+    }
+  });
+
+  // Super Admin: Platform stats (hub dashboard)
+  app.get("/api/admin/stats", requireSuperAdmin, async (req, res) => {
+    try {
+      const [totalTenantsRow] = await db.select({ n: count() }).from(tenants);
+      const [activeTenantsRow] = await db.select({ n: count() }).from(tenants).where(eq(tenants.isActive, true));
+      const [totalUsersRow] = await db.select({ n: count() }).from(users).where(isNotNull(users.tenantId));
+      const [lastCron] = await db
+        .select({
+          jobName: cronRuns.jobName,
+          status: cronRuns.status,
+          startedAt: cronRuns.startedAt,
+        })
+        .from(cronRuns)
+        .orderBy(desc(cronRuns.startedAt))
+        .limit(1);
+      res.json({
+        totalTenants: totalTenantsRow?.n ?? 0,
+        activeTenants: activeTenantsRow?.n ?? 0,
+        totalUsers: totalUsersRow?.n ?? 0,
+        lastCronRun: lastCron
+          ? { jobName: lastCron.jobName, status: lastCron.status, startedAt: lastCron.startedAt }
+          : null,
+      });
+    } catch (e) {
+      logger.error("Admin stats error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch stats" });
+    }
+  });
+
+  // Super Admin: All tenant users (cross-tenant list)
+  app.get("/api/admin/users", requireSuperAdmin, async (req, res) => {
+    try {
+      const tenantFilter = typeof req.query?.tenantId === "string" && req.query.tenantId ? req.query.tenantId : null;
+      const conditions = tenantFilter ? eq(users.tenantId, tenantFilter) : isNotNull(users.tenantId);
+      const rows = await db
+        .select({
+          id: users.id,
+          email: users.email,
+          name: users.name,
+          role: users.role,
+          isActive: users.isActive,
+          createdAt: users.createdAt,
+          tenantId: users.tenantId,
+          tenantName: tenants.name,
+        })
+        .from(users)
+        .leftJoin(tenants, eq(users.tenantId, tenants.id))
+        .where(conditions)
+        .orderBy(tenants.name, users.name);
+      res.json(rows);
+    } catch (e) {
+      logger.error("Admin users list error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch users" });
     }
   });
 
@@ -4353,18 +4432,22 @@ export async function registerRoutes(app: Express) {
 
   app.post("/api/admin/tenants/:id/create-admin", requireSuperAdmin, async (req, res) => {
     try {
-      const { email, password, name } = req.body;
+      const { email, password, name, role: roleBody } = req.body;
       if (!email || !password) return res.status(400).json({ error: "email and password required" });
       const tenantId = req.params.id;
       const [tenant] = await db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
       if (!tenant) return res.status(404).json({ error: "Tenant not found" });
+      const roleNorm = roleBody != null && String(roleBody).trim() ? String(roleBody).trim() : "admin";
+      if (!TENANT_USER_ROLES.includes(roleNorm as (typeof TENANT_USER_ROLES)[number])) {
+        return res.status(400).json({ error: `role must be one of: ${TENANT_USER_ROLES.join(", ")}` });
+      }
       const [created] = await db
         .insert(users)
         .values({
           email: email.toLowerCase(),
           passwordHash: await hashPassword(password),
           name: name || "Admin",
-          role: "admin",
+          role: roleNorm,
           tenantId,
           isActive: true,
           createdById: req.user?.id || null,
@@ -4383,7 +4466,7 @@ export async function registerRoutes(app: Express) {
   app.patch("/api/admin/users/:id", requireSuperAdmin, async (req, res) => {
     try {
       const userId = req.params.id;
-      const { name, email, isActive, tenantId, password } = req.body;
+      const { name, email, isActive, tenantId, password, role } = req.body;
       const [existing] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
       if (!existing) return res.status(404).json({ error: "User not found" });
       const updates: Record<string, unknown> = { updatedAt: new Date() };
@@ -4391,6 +4474,17 @@ export async function registerRoutes(app: Express) {
       if (email !== undefined) updates.email = email.toLowerCase();
       if (isActive !== undefined) updates.isActive = isActive;
       if (tenantId !== undefined) updates.tenantId = tenantId || null;
+      if (role !== undefined) {
+        if (existing.role === "super_admin") {
+          return res.status(403).json({ error: "Cannot change role for platform admin" });
+        }
+        if (!existing.tenantId) return res.status(400).json({ error: "User has no tenant; set tenant first" });
+        const roleNorm = String(role).trim();
+        if (!TENANT_USER_ROLES.includes(roleNorm as (typeof TENANT_USER_ROLES)[number])) {
+          return res.status(400).json({ error: `role must be one of: ${TENANT_USER_ROLES.join(", ")}` });
+        }
+        updates.role = roleNorm;
+      }
       if (typeof password === "string" && password.trim()) {
         updates.passwordHash = await hashPassword(password);
       }
@@ -4501,8 +4595,10 @@ export async function registerRoutes(app: Express) {
 
       if (!created) return res.status(500).json({ error: "Failed to create user" });
 
+      let inviteSent = false;
       if (doInvite && inviteRaw) {
         const { ok } = await sendInviteEmailToUser(tenantId, emailLower, inviteRaw, req.requestId);
+        inviteSent = ok;
         if (!ok) {
           logger.warn("Invite email may not have sent (check Resend / from address)", {
             requestId: req.requestId,
@@ -4513,7 +4609,7 @@ export async function registerRoutes(app: Express) {
       }
 
       const { passwordHash, inviteTokenHash: _ih, inviteTokenExpiresAt: _ie, ...u } = created as any;
-      res.status(201).json({ ...u, inviteSent: doInvite });
+      res.status(201).json({ ...u, inviteSent });
     } catch (e: any) {
       if (e?.code === "23505") return res.status(400).json({ error: "Email already in use" });
       logger.error("Tenant user create error", { requestId: req.requestId, err: String(e) });

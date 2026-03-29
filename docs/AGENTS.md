@@ -119,6 +119,59 @@ npm run db:query -- "SELECT id, name FROM tenants"
 
 ---
 
+## Railway Services & Environment Variables
+
+The project **Finjoe.app** on Railway (production environment) has three services:
+
+| Service | ID | Purpose |
+|---------|----|---------|
+| `FinJoe` | `f0f491a5-3837-405d-90c6-353b78a66a3e` | Main API + Vite client (finjoe.app) |
+| `finjoe-cron` | `38d5789c-d822-42fb-a76c-c51af9e08069` | Cron / scheduled jobs |
+| `pgvector` | `7a94a928-dc8e-4fd9-8591-e2138e68f615` | PostgreSQL + pgvector (internal) |
+
+Environment ID (production): `f20a159b-afa1-4942-b34b-e5405054effa`
+
+### Variables currently set on `FinJoe` service
+
+| Variable | Notes |
+|----------|-------|
+| `DATABASE_URL` | Internal Postgres URL via `pgvector.railway.internal` |
+| `SESSION_SECRET` | Express session secret |
+| `CRON_SECRET` | Shared secret for `/cron/*` endpoints |
+| `GEMINI_API_KEY` | Gemini API key |
+| `FINJOE_WEBHOOK_URL` | `https://finjoe.app/webhook/finjoe` — Twilio signature validation |
+| `MEDIA_STORAGE_PATH` | `/data/finjoe-media` — mounted volume path |
+| `RESEND_API_KEY` | Resend email API key |
+| `RESEND_FROM` | `FinJoe <notify@finjoe.app>` |
+
+### Variables still needed on `FinJoe` service
+
+| Variable | Required? | Purpose |
+|----------|-----------|---------|
+| `NODE_ENV` | **Yes** | Set `production` — enables secure cookies, disables Vite dev middleware |
+| `TWILIO_ACCOUNT_SID` | **Yes** | Twilio account SID |
+| `TWILIO_AUTH_TOKEN` | **Yes** | Twilio auth token (webhook signature validation) |
+| `TWILIO_FINJOE_WHATSAPP_FROM` | **Yes** | FinJoe WhatsApp sender (e.g. `whatsapp:+15558171150`) |
+| `TWILIO_WHATSAPP_FROM` | Yes | Fallback WhatsApp sender |
+| `FINJOE_WORKER_URL` | **Yes** | URL of worker service called by cron (internal: `http://finjoe-worker.railway.internal:5001`) |
+| `RAZORPAY_KEY_ID` | **Yes** | Razorpay public key |
+| `RAZORPAY_KEY_SECRET` | **Yes** | Razorpay secret (server-side + webhook verify) |
+| `ZOHO_CLIENT_ID` | Yes | Zoho OAuth client ID |
+| `ZOHO_CLIENT_SECRET` | Yes | Zoho OAuth client secret |
+| `ZOHO_REDIRECT_URI` | Yes | `https://finjoe.app/api/integrations/zoho/oauth/callback` |
+| `APP_BASE_URL` | Yes | Base URL after Zoho OAuth redirect (e.g. `https://finjoe.app`) |
+| `PUBLIC_APP_URL` | Optional | Public URL for invite/password-setup links; falls back to `APP_ORIGIN` |
+| `TWILIO_SMS_FROM` | Optional | SMS sender number |
+| `GEMINI_MODEL` | Optional | Override model (default `gemini-2.5-flash`) |
+| `EMBEDDING_MODEL` | Optional | Override embedding model (default `gemini-embedding-001`) |
+
+### Source of truth for variable names
+
+- Root `.env.example` — covers the main `FinJoe` service
+- `worker/.env.example` — covers `finjoe-worker` / `finjoe-cron`
+
+---
+
 ## MCP / External Tools
 
 - **Railway MCP**: No database query tools. Use for deployment, logs, variables.
