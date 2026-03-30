@@ -18,6 +18,7 @@ import {
   expenses,
   expenseCategories,
   finJoeContacts,
+  billingCustomers,
   finJoeConversations,
   finJoeMessages,
   finJoeOutboundIdempotency,
@@ -1123,6 +1124,23 @@ export async function registerRoutes(app: Express) {
       const user = req.user as Express.User;
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const whereClause = tenantId ? and(eq(finJoeContacts.id, req.params.id), eq(finJoeContacts.tenantId, tenantId)) : eq(finJoeContacts.id, req.params.id);
+      const [existing] = await db
+        .select({ id: finJoeContacts.id, tenantId: finJoeContacts.tenantId, phone: finJoeContacts.phone })
+        .from(finJoeContacts)
+        .where(whereClause)
+        .limit(1);
+      if (!existing) return res.status(404).json({ error: "Contact not found" });
+
+      await db.update(billingCustomers).set({ contactId: null, updatedAt: new Date() }).where(eq(billingCustomers.contactId, existing.id));
+
+      await db
+        .delete(finJoeRoleChangeRequests)
+        .where(and(eq(finJoeRoleChangeRequests.tenantId, existing.tenantId), eq(finJoeRoleChangeRequests.contactPhone, existing.phone)));
+
+      await db
+        .delete(finJoeConversations)
+        .where(and(eq(finJoeConversations.tenantId, existing.tenantId), eq(finJoeConversations.contactPhone, existing.phone)));
+
       const [deleted] = await db.delete(finJoeContacts).where(whereClause).returning();
       if (!deleted) return res.status(404).json({ error: "Contact not found" });
       res.status(204).send();

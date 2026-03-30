@@ -158,7 +158,8 @@ export async function sendWith24hRouting(
       emails.push(options.submitterEmail);
     }
     if (emails.length > 0) {
-      const subject = freeFormMessage.length > 60 ? freeFormMessage.slice(0, 57) + "..." : freeFormMessage;
+      const normalized = freeFormMessage.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
+      const subject = normalized.length > 60 ? normalized.slice(0, 57) + "..." : normalized;
       const html = `<p>${freeFormMessage.replace(/\n/g, "<br>")}</p>`;
       emailDelivered = await sendFinJoeEmail(
         emails,

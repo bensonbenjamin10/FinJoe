@@ -39,6 +39,7 @@ export async function resolveTenantAndProvider(toNumber: string): Promise<Tenant
       const smsFrom = await resolveSmsFromAsync(row.whatsappFrom, smsFromOverride);
       return {
         tenantId: row.tenantId,
+        resolvedFromDb: true,
         credentials: {
           provider: "twilio",
           whatsappFrom: row.whatsappFrom,
@@ -60,6 +61,7 @@ export async function resolveTenantAndProvider(toNumber: string): Promise<Tenant
     const smsFrom = await resolveSmsFromAsync(whatsappFrom, process.env.TWILIO_SMS_FROM);
     return {
       tenantId,
+      resolvedFromDb: false,
       credentials: {
         provider: "twilio",
         whatsappFrom,
@@ -69,7 +71,7 @@ export async function resolveTenantAndProvider(toNumber: string): Promise<Tenant
     };
   }
 
-  return { tenantId, credentials: null };
+  return { tenantId, resolvedFromDb: false, credentials: null };
 }
 
 /** Resolve SMS from number: override > platform default > env > derive from whatsappFrom */

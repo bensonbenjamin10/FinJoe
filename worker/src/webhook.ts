@@ -233,10 +233,14 @@ export async function handleWebhook(req: Request, res: Response) {
     return;
   }
 
-  const demoTenantOverride = await resolveDemoTenantForInboundPhone(from);
-  if (demoTenantOverride) {
-    tenantId = demoTenantOverride;
-    logger.info("Demo tenant routing from phone", { traceId, tenantId });
+  // Only apply demo routing when the To number wasn't matched to a specific tenant's WABA provider.
+  // If a tenant has their own WhatsApp number configured, messages to that number must stay with that tenant.
+  if (!resolved.resolvedFromDb) {
+    const demoTenantOverride = await resolveDemoTenantForInboundPhone(from);
+    if (demoTenantOverride) {
+      tenantId = demoTenantOverride;
+      logger.info("Demo tenant routing from phone", { traceId, tenantId });
+    }
   }
 
   logger.info("Webhook received", { traceId, from, bodyLength: body?.length ?? 0, numMedia });

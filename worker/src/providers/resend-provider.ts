@@ -9,6 +9,11 @@ import { logger } from "../logger.js";
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 const defaultFrom = process.env.RESEND_FROM || "FinJoe <onboarding@resend.dev>";
 
+/** Resend rejects newlines in subject; normalize to a single line. */
+export function sanitizeEmailSubject(subject: string): string {
+  return subject.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
+}
+
 export interface ResendSendOptions {
   from?: string;
   idempotencyKey?: string;
@@ -32,11 +37,12 @@ export async function sendEmail(
 
   const recipients = Array.isArray(to) ? to : [to];
   const from = options?.from || defaultFrom;
+  const safeSubject = sanitizeEmailSubject(subject);
 
   const sendOptions: Record<string, unknown> = {
     from,
     to: recipients,
-    subject,
+    subject: safeSubject,
     html,
   };
   if (options?.idempotencyKey) {
