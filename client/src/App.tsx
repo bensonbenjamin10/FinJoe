@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SplashScreen } from "@/components/SplashScreen";
 import Landing from "@/pages/landing";
+import Support from "@/pages/support";
 import Login from "@/pages/login";
 import Setup from "@/pages/setup";
 import Signup from "@/pages/signup";
@@ -38,12 +39,14 @@ import PaymentCheckout from "@/pages/payment-checkout";
 import PaymentSuccess from "@/pages/payment-success";
 import { AdminShell } from "@/components/layout/AdminShell";
 import { ProtectedRoute } from "@/components/protected-route";
+import AdminKnowledgeBase from "@/pages/admin-knowledge-base";
 
 function Router() {
   return (
     <div className="flex flex-col min-h-screen">
       <Switch>
         <Route path="/" component={Landing} />
+        <Route path="/support" component={Support} />
         <Route path="/setup" component={Setup} />
         <Route path="/signup" component={Signup} />
         <Route path="/accept-invite" component={AcceptInvite} />
@@ -95,6 +98,20 @@ function Router() {
         <Route path="/admin/team">
           <ProtectedRoute requireRoles={["admin", "super_admin"]}>
             <LegacyTeamRedirect />
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/help/:slug">
+          <ProtectedRoute>
+            <AdminShell>
+              <AdminKnowledgeBase />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/help">
+          <ProtectedRoute>
+            <AdminShell>
+              <AdminKnowledgeBase />
+            </AdminShell>
           </ProtectedRoute>
         </Route>
         <Route path={FINJOE_AREA_PATH_PATTERN}>

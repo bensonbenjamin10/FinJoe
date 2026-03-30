@@ -1,13 +1,12 @@
 /**
- * Resolve tenant for incoming webhook.
- * Phase 5 will resolve from tenant_waba_providers by To number.
- * For now, use default tenant.
+ * Resolve tenant for incoming webhook helpers.
  */
 
 import { db } from "./db.js";
-import { tenants, tenantWabaProviders } from "../../shared/schema.js";
+import { tenants } from "../../shared/schema.js";
 import { eq } from "drizzle-orm";
 import { logger } from "./logger.js";
+import { resolveTenantAndProvider } from "./providers/resolver.js";
 
 let cachedDefaultTenantId: string | null = null;
 
@@ -23,14 +22,8 @@ export async function getDefaultTenantId(): Promise<string> {
   return "default";
 }
 
-/** Resolve tenant from webhook. To = number that received the message (e.g. whatsapp:+14155238886). Returns tenant id. */
+/** Resolve tenant from webhook To number — same rules as resolveTenantAndProvider (active row, isActive, Twilio path). */
 export async function resolveTenantFromWebhook(toNumber: string): Promise<string> {
-  const toNorm = toNumber.startsWith("whatsapp:") ? toNumber : `whatsapp:${toNumber}`;
-  const [provider] = await db
-    .select({ tenantId: tenantWabaProviders.tenantId })
-    .from(tenantWabaProviders)
-    .where(eq(tenantWabaProviders.whatsappFrom, toNorm))
-    .limit(1);
-  if (provider) return provider.tenantId;
-  return getDefaultTenantId();
+  const resolved = await resolveTenantAndProvider(toNumber);
+  return resolved.tenantId;
 }

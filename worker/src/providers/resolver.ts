@@ -5,7 +5,7 @@
 
 import { db } from "../db.js";
 import { tenants, tenantWabaProviders, finjoeSettings, platformSettings } from "../../../shared/schema.js";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { logger } from "../logger.js";
 import type { TenantProviderResult, TwilioProviderConfig, WabaProviderCredentials } from "./types.js";
 
@@ -30,6 +30,7 @@ export async function resolveTenantAndProvider(toNumber: string): Promise<Tenant
     .select()
     .from(tenantWabaProviders)
     .where(and(eq(tenantWabaProviders.whatsappFrom, toNorm), eq(tenantWabaProviders.isActive, true)))
+    .orderBy(desc(tenantWabaProviders.createdAt))
     .limit(1);
 
   if (row && row.provider === "twilio") {
@@ -49,6 +50,15 @@ export async function resolveTenantAndProvider(toNumber: string): Promise<Tenant
       };
     }
     logger.warn("Tenant WABA provider has invalid Twilio config", { tenantId: row.tenantId });
+    return { tenantId: row.tenantId, resolvedFromDb: true, credentials: null };
+  }
+
+  if (row) {
+    logger.warn("Tenant WABA provider is not Twilio — cannot validate webhook or send", {
+      tenantId: row.tenantId,
+      provider: row.provider,
+    });
+    return { tenantId: row.tenantId, resolvedFromDb: true, credentials: null };
   }
 
   const tenantId = await getDefaultTenantId();

@@ -177,6 +177,31 @@ function rateLimitForgotPassword(req: Request, res: Response, next: NextFunction
   next();
 }
 
+const SUPPORT_INQUIRY_WINDOW_MS = 60_000;
+const SUPPORT_INQUIRY_MAX_PER_WINDOW = 5;
+const supportInquiryHitsByIp = new Map<string, number[]>();
+
+function rateLimitSupportInquiry(req: Request, res: Response, next: NextFunction) {
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  const now = Date.now();
+  const arr = (supportInquiryHitsByIp.get(ip) ?? []).filter((t) => now - t < SUPPORT_INQUIRY_WINDOW_MS);
+  if (arr.length >= SUPPORT_INQUIRY_MAX_PER_WINDOW) {
+    res.setHeader("Retry-After", "60");
+    return res.status(429).json({ error: "Too many messages. Please wait a minute and try again." });
+  }
+  arr.push(now);
+  supportInquiryHitsByIp.set(ip, arr);
+  next();
+}
+
+function escapeHtmlPublic(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function authAppOrigin(): string {
   return (process.env.PUBLIC_APP_URL || process.env.APP_ORIGIN || "http://localhost:5173").replace(/\/$/, "");
 }
@@ -737,6 +762,64 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("forgot-password error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Could not process request" });
+    }
+  });
+
+  const SUPPORT_TOPICS = new Set(["general", "account", "billing", "technical", "security"]);
+
+  app.post("/api/public/support-inquiry", rateLimitSupportInquiry, async (req, res) => {
+    try {
+      const inbox = process.env.SUPPORT_INBOX_EMAIL?.trim();
+      if (!inbox) {
+        logger.warn("support-inquiry: SUPPORT_INBOX_EMAIL not configured", { requestId: req.requestId });
+        return res.status(503).json({
+          error: "Support email is not configured. Please use the contact link on the support page.",
+        });
+      }
+      const body = req.body ?? {};
+      const name = typeof body.name === "string" ? body.name.trim().slice(0, 120) : "";
+      const email = typeof body.email === "string" ? body.email.trim().toLowerCase().slice(0, 320) : "";
+      const topic = typeof body.topic === "string" ? body.topic.trim() : "";
+      const message = typeof body.message === "string" ? body.message.trim().slice(0, 8000) : "";
+      const honeypot = typeof body.website === "string" ? body.website.trim() : "";
+      if (honeypot) {
+        return res.status(400).json({ error: "Invalid request" });
+      }
+      if (!name || !email || !email.includes("@") || !message || message.length < 10) {
+        return res.status(400).json({ error: "Name, valid email, and a detailed message are required." });
+      }
+      if (!SUPPORT_TOPICS.has(topic)) {
+        return res.status(400).json({ error: "Invalid topic." });
+      }
+      const safeName = escapeHtmlPublic(name);
+      const safeEmail = escapeHtmlPublic(email);
+      const safeMessage = escapeHtmlPublic(message).replace(/\r\n|\r|\n/g, "<br/>");
+      const subject = `[FinJoe support] ${topic}: ${name}`.replace(/\r?\n/g, " ").slice(0, 200);
+      const html = `
+<p><strong>New support inquiry</strong></p>
+<table style="border-collapse:collapse;font-family:sans-serif;font-size:14px;">
+<tr><td style="padding:4px 12px 4px 0;"><strong>Topic</strong></td><td>${escapeHtmlPublic(topic)}</td></tr>
+<tr><td style="padding:4px 12px 4px 0;"><strong>Name</strong></td><td>${safeName}</td></tr>
+<tr><td style="padding:4px 12px 4px 0;"><strong>Email</strong></td><td>${safeEmail}</td></tr>
+<tr><td style="padding:4px 12px 4px 0;vertical-align:top;"><strong>Message</strong></td><td>${safeMessage}</td></tr>
+</table>
+<p style="color:#64748b;font-size:12px;">IP: ${escapeHtmlPublic(String(req.ip || ""))} · ${new Date().toISOString()}</p>
+`.trim();
+      const sent = await sendFinJoeEmail(
+        [inbox],
+        subject,
+        html,
+        { replyTo: email },
+        req.requestId
+      );
+      if (!sent) {
+        logger.error("support-inquiry: email send failed", { requestId: req.requestId, to: inbox });
+        return res.status(503).json({ error: "Could not send email right now. Please try again or email us directly." });
+      }
+      res.json({ ok: true });
+    } catch (e) {
+      logger.error("support-inquiry error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Could not send message" });
     }
   });
 

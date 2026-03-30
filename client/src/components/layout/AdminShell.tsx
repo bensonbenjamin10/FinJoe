@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   Building2,
+  BookOpen,
   LayoutDashboard,
   LayoutGrid,
   MessageCircle,
@@ -146,6 +147,7 @@ export function AdminShell({ children }: AdminShellProps) {
 
   const navItems = [
     { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { href: "/admin/help", label: "Help", icon: BookOpen },
     { href: "/admin/reports", label: "Reports", icon: FileSpreadsheet },
     ...(isTenantAdmin ? [{ href: teamHref, label: "Team", icon: Users }] : []),
     { href: finjoeHref, label: "FinJoe", icon: MessageCircle },
@@ -190,9 +192,11 @@ export function AdminShell({ children }: AdminShellProps) {
                   const isActive =
                     itemPath === "/admin/finjoe"
                       ? locPath.startsWith("/admin/finjoe")
-                      : itemPath === FINJOE_PATHS.peopleUsers
-                        ? locPath.startsWith("/admin/finjoe/people/users")
-                        : locPath === itemPath;
+                      : itemPath === "/admin/help"
+                        ? locPath.startsWith("/admin/help")
+                        : itemPath === FINJOE_PATHS.peopleUsers
+                          ? locPath.startsWith("/admin/finjoe/people/users")
+                          : locPath === itemPath;
                   return (
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton asChild isActive={isActive}>

@@ -28,6 +28,6 @@ export interface WabaProviderCredentials {
 export interface TenantProviderResult {
   tenantId: string;
   credentials: WabaProviderCredentials | null;
-  /** True when tenantId was resolved by matching To against a tenant_waba_providers row */
+  /** True when To matched an active tenant_waba_providers row (blocks demo routing even if credentials are null) */
   resolvedFromDb: boolean;
 }

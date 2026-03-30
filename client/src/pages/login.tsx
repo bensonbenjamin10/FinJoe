@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useLocation, Link } from "wouter";
+import { useLocation, Link, useSearchParams } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -10,7 +10,6 @@ import { Input } from "@/components/ui/input";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Link } from "wouter";
 import { Loader2, LogIn } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
@@ -21,8 +20,17 @@ const loginSchema = z.object({
 
 type LoginFormData = z.infer<typeof loginSchema>;
 
+function safePostLoginRedirect(raw: string | null): string | null {
+  if (!raw || typeof raw !== "string") return null;
+  const p = raw.trim();
+  if (!p.startsWith("/") || p.startsWith("//")) return null;
+  if (p.includes("://")) return null;
+  return p;
+}
+
 export default function Login() {
   const [, setLocation] = useLocation();
+  const [searchParams] = useSearchParams();
   const { toast } = useToast();
   const [error, setError] = useState<string | null>(null);
 
@@ -61,8 +69,8 @@ export default function Login() {
         title: "Login successful",
         description: `Welcome back, ${user.name}!`,
       });
-      
-      setLocation("/admin/dashboard");
+      const next = safePostLoginRedirect(searchParams.get("redirect"));
+      setLocation(next ?? "/admin/dashboard");
     },
     onError: (error: Error) => {
       setError(error.message);

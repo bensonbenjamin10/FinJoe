@@ -15,7 +15,7 @@ export async function sendFinJoeEmail(
   to: string[],
   subject: string,
   html: string,
-  options?: { tenantId?: string; from?: string; idempotencyKey?: string },
+  options?: { tenantId?: string; from?: string; idempotencyKey?: string; replyTo?: string | string[] },
   traceId?: string
 ): Promise<boolean> {
   const recipients = to.filter((e) => e && e.includes("@"));
@@ -42,7 +42,11 @@ export async function sendFinJoeEmail(
     recipients,
     subject,
     html,
-    { from: fromOverride, idempotencyKey: options?.idempotencyKey },
+    {
+      from: fromOverride,
+      idempotencyKey: options?.idempotencyKey,
+      replyTo: options?.replyTo,
+    },
     traceId
   );
   return !!result;

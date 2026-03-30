@@ -18,6 +18,7 @@ const NAV_LINKS = [
   { href: "/#intelligence", label: "Intelligence" },
   { href: "/#features", label: "Product" },
   { href: "/#how-it-works", label: "How it works" },
+  { href: "/support", label: "Support" },
 ];
 
 export function MarketingLayout({ children }: { children: React.ReactNode }) {

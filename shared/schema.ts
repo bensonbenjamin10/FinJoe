@@ -13,6 +13,7 @@ import {
   integer,
   boolean,
   jsonb,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -39,18 +40,26 @@ export const tenants = pgTable("tenants", {
 });
 
 // Tenant WABA provider credentials (Twilio, 360dialog, MessageBird, etc.)
-export const tenantWabaProviders = pgTable("tenant_waba_providers", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id")
-    .notNull()
-    .references(() => tenants.id, { onDelete: "cascade" }),
-  provider: text("provider").notNull(),
-  config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
-  whatsappFrom: text("whatsapp_from").notNull(),
-  isActive: boolean("is_active").notNull().default(true),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+export const tenantWabaProviders = pgTable(
+  "tenant_waba_providers",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    tenantId: varchar("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
+    whatsappFrom: text("whatsapp_from").notNull(),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("tenant_waba_providers_whatsapp_from_active_unique")
+      .on(t.whatsappFrom)
+      .where(sql`${t.isActive} = true`),
+  ]
+);
 
 // Cost Centers - tenant-configurable (campus, branch, department, etc.)
 export const costCenters = pgTable("cost_centers", {

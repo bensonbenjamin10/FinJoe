@@ -16,6 +16,7 @@
     "db:studio": "drizzle-kit studio",
     "db:pull": "drizzle-kit pull",
     "db:query": "node scripts/db-query.mjs",
+    "db:check-waba-duplicates": "node scripts/check-waba-whatsapp-duplicates.mjs",
     "test": "vitest run --config vitest.config.ts",
     "db:wipe-financial": "node scripts/wipe-financial-data.mjs",
     "cron:weekly-insights": "node scripts/run-weekly-insights.mjs",
@@ -28,6 +29,7 @@
   "dependencies": {
     "@google/genai": "^1.44.0",
     "@pdfsmaller/pdf-decrypt": "^1.0.1",
+    "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-alert-dialog": "^1.1.7",
     "@radix-ui/react-checkbox": "^1.1.4",
     "@radix-ui/react-dialog": "^1.1.7",

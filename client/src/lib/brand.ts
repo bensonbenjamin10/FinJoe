@@ -93,3 +93,84 @@ export const COPY = {
   ctaDescription:
     "Sign up or log in to configure your organization, manage contacts and approvals, and unlock actionable insight from your cash flows.",
 } as const;
+
+/** Public marketing /support page — hero, journey, FAQ, contact labels. */
+export const SUPPORT_COPY = {
+  pageTitle: "Support — FinJoe",
+  metaDescription:
+    "Get help with FinJoe: sign in for team guides, browse FAQs, or contact our team. Finance intelligence for your organization.",
+  heroBadge: "We’re here to help",
+  heroHeadline: "Support that fits how you use FinJoe",
+  heroSubhead:
+    "Start with in-app guides for your team, read common answers, or send us a message—we’ll get back to you by email.",
+  ctaTeamGuides: "Team guides (Knowledge Base)",
+  ctaTeamGuidesSub: "Log in to open step-by-step help inside the admin.",
+  ctaLogin: "Log in",
+  ctaFaq: "Browse FAQs",
+  ctaContact: "Contact us",
+  flowTitle: "How support works",
+  flowSubtitle: "A simple path from self-serve to a direct line when you need it.",
+  flowSteps: [
+    {
+      step: 1,
+      title: "Sign in",
+      description: "Access your workspace and the in-app Knowledge Base for detailed, product-specific guides.",
+    },
+    {
+      step: 2,
+      title: "Check settings",
+      description: "Many questions are resolved in FinJoe settings, contacts, and integrations—trace the flow in admin.",
+    },
+    {
+      step: 3,
+      title: "Still stuck? Email us",
+      description: "Use the form below with context (workspace, what you tried). We reply to the address you provide.",
+    },
+    {
+      step: 4,
+      title: "We follow up",
+      description: "Our team responds by email. For account-sensitive issues we may ask you to confirm from your admin email.",
+    },
+  ] as const,
+  faqTitle: "Frequently asked questions",
+  faqSubtitle: "Quick answers about getting started, WhatsApp, and your account.",
+  contactTitle: "Contact the team",
+  contactSubtitle: "Tell us what you need—we read every message.",
+  contactSuccess: "Thanks—we’ve received your message and will reply by email.",
+} as const;
+
+export type SupportFaqItem = { q: string; a: string };
+
+export const SUPPORT_FAQ: SupportFaqItem[] = [
+  {
+    q: "How do I get help inside the product?",
+    a: "Log in to FinJoe Admin and open Help in the sidebar to browse the Knowledge Base: step-by-step guides with on-screen references for your team.",
+  },
+  {
+    q: "How does WhatsApp fit in?",
+    a: "FinJoe uses WhatsApp for capture and collaboration. Your admins configure contacts and templates under FinJoe in the admin. Exact steps are in the Knowledge Base after you sign in.",
+  },
+  {
+    q: "I forgot my password",
+    a: "Use “Forgot password” on the login page. You’ll receive a reset link by email if your account exists.",
+  },
+  {
+    q: "Who can access the admin?",
+    a: "Your organization controls dashboard users and roles. Ask your FinJoe admin to invite you or adjust permissions if you can’t see a section you need.",
+  },
+  {
+    q: "Is my data secure?",
+    a: "We treat finance data seriously. Use the in-app Data Handling area for export and retention settings appropriate to your organization, and contact us for specific compliance questions.",
+  },
+];
+
+/** Fallback display + mailto when API is unavailable (override with VITE_SUPPORT_EMAIL). */
+export const SUPPORT_EMAIL_FALLBACK = "support@finjoe.app";
+
+export const SUPPORT_CONTACT_TOPICS = [
+  { value: "general", label: "General question" },
+  { value: "account", label: "Account & access" },
+  { value: "billing", label: "Billing & plans" },
+  { value: "technical", label: "Technical issue" },
+  { value: "security", label: "Security & privacy" },
+] as const;

@@ -17,6 +17,8 @@ export function sanitizeEmailSubject(subject: string): string {
 export interface ResendSendOptions {
   from?: string;
   idempotencyKey?: string;
+  /** Resend reply_to — e.g. visitor email for support inquiries */
+  replyTo?: string | string[];
 }
 
 /**
@@ -45,6 +47,9 @@ export async function sendEmail(
     subject: safeSubject,
     html,
   };
+  if (options?.replyTo) {
+    sendOptions.reply_to = options.replyTo;
+  }
   if (options?.idempotencyKey) {
     sendOptions.headers = { "Idempotency-Key": options.idempotencyKey };
   }
