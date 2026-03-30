@@ -147,7 +147,6 @@ export function AdminShell({ children }: AdminShellProps) {
 
   const navItems = [
     { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { href: "/admin/help", label: "Help", icon: BookOpen },
     { href: "/admin/reports", label: "Reports", icon: FileSpreadsheet },
     ...(isTenantAdmin ? [{ href: teamHref, label: "Team", icon: Users }] : []),
     { href: finjoeHref, label: "FinJoe", icon: MessageCircle },
@@ -170,6 +169,9 @@ export function AdminShell({ children }: AdminShellProps) {
       ]
     : [];
 
+  const locPath = location.split("?")[0];
+  const helpNavActive = locPath.startsWith("/admin/help");
+
   return (
     <SidebarProvider>
       <Sidebar side="left" collapsible="icon" className="border-r border-sidebar-border">
@@ -187,16 +189,13 @@ export function AdminShell({ children }: AdminShellProps) {
             <SidebarGroupContent>
               <SidebarMenu>
                 {navItems.map((item) => {
-                  const locPath = location.split("?")[0];
                   const itemPath = item.href.split("?")[0];
                   const isActive =
                     itemPath === "/admin/finjoe"
                       ? locPath.startsWith("/admin/finjoe")
-                      : itemPath === "/admin/help"
-                        ? locPath.startsWith("/admin/help")
-                        : itemPath === FINJOE_PATHS.peopleUsers
-                          ? locPath.startsWith("/admin/finjoe/people/users")
-                          : locPath === itemPath;
+                      : itemPath === FINJOE_PATHS.peopleUsers
+                        ? locPath.startsWith("/admin/finjoe/people/users")
+                        : locPath === itemPath;
                   return (
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton asChild isActive={isActive}>
@@ -219,7 +218,6 @@ export function AdminShell({ children }: AdminShellProps) {
                 <SidebarGroupContent>
                   <SidebarMenu>
                     {platformNavItems.map((item) => {
-                      const locPath = location.split("?")[0];
                       const itemPath = item.href.split("?")[0];
                       const isActive =
                         itemPath === "/admin/super"
@@ -266,6 +264,21 @@ export function AdminShell({ children }: AdminShellProps) {
               </SidebarGroup>
             </>
           )}
+          <SidebarGroup className="mt-auto pb-0">
+            <SidebarSeparator className="mb-2" />
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={helpNavActive} tooltip="Help">
+                    <Link href="/admin/help">
+                      <BookOpen className="h-4 w-4" />
+                      <span>Help</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
         </SidebarContent>
         <SidebarFooter className="border-t border-sidebar-border">
           <div className="flex flex-col gap-2 p-2">

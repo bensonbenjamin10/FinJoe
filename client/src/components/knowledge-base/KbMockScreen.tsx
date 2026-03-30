@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 import type { MockScreenSpec } from "@/lib/knowledge-base/types";
 
@@ -5,7 +6,7 @@ interface KbMockScreenProps {
   spec: MockScreenSpec;
 }
 
-export function KbMockScreen({ spec }: KbMockScreenProps) {
+function Wireframe({ spec }: KbMockScreenProps) {
   const { variant, highlight, caption } = spec;
 
   const ring = (key: string) =>
@@ -17,9 +18,8 @@ export function KbMockScreen({ spec }: KbMockScreenProps) {
       : "";
 
   return (
-    <figure className="mx-auto max-w-lg rounded-lg border bg-muted/40 p-3 shadow-sm" aria-hidden>
+    <>
       <div className="flex gap-2">
-        {/* Sidebar */}
         <div
           className={cn(
             "flex w-[22%] flex-col gap-1.5 rounded-md border border-dashed border-muted-foreground/30 bg-background/80 p-2",
@@ -40,7 +40,6 @@ export function KbMockScreen({ spec }: KbMockScreenProps) {
           )}
         </div>
 
-        {/* Main column */}
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div
             className={cn(
@@ -82,6 +81,44 @@ export function KbMockScreen({ spec }: KbMockScreenProps) {
       {caption && (
         <figcaption className="mt-2 text-center text-xs text-muted-foreground leading-snug">{caption}</figcaption>
       )}
+    </>
+  );
+}
+
+export function KbMockScreen({ spec }: KbMockScreenProps) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const { imageSrc, imageAlt, caption } = spec;
+
+  if (imageSrc && !imageFailed) {
+    const alt = imageAlt ?? caption ?? "Product screenshot";
+    return (
+      <figure className="mx-auto max-w-lg rounded-lg border bg-muted/40 p-3 shadow-sm">
+        <img
+          src={imageSrc}
+          alt={alt}
+          className="max-h-[320px] w-full rounded-md border object-contain object-top bg-background"
+          loading="lazy"
+          onError={() => setImageFailed(true)}
+        />
+        {caption && (
+          <figcaption className="mt-2 text-center text-xs text-muted-foreground leading-snug">{caption}</figcaption>
+        )}
+      </figure>
+    );
+  }
+
+  if (imageSrc && imageFailed) {
+    return (
+      <figure className="mx-auto max-w-lg rounded-lg border bg-muted/40 p-3 shadow-sm" aria-hidden>
+        <p className="mb-2 text-center text-xs text-muted-foreground">Screenshot unavailable—showing layout guide.</p>
+        <Wireframe spec={spec} />
+      </figure>
+    );
+  }
+
+  return (
+    <figure className="mx-auto max-w-lg rounded-lg border bg-muted/40 p-3 shadow-sm" aria-hidden>
+      <Wireframe spec={spec} />
     </figure>
   );
 }

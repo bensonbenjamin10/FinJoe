@@ -72,9 +72,13 @@ function HubView() {
   const grouped = useMemo(() => groupArticlesByCategory(filtered), [filtered]);
   const categoryOrder: KbArticle["category"][] = [
     "getting-started",
+    "dashboard",
     "whatsapp",
     "people",
+    "expenses-income",
     "integrations",
+    "reports",
+    "data-handling",
     "finance",
   ];
 
@@ -82,7 +86,7 @@ function HubView() {
     <div>
       <PageHeader
         title="Knowledge Base"
-        description="Step-by-step guides for your team. Wireframes show where to click in FinJoe admin—they’re illustrative, not live data."
+        description="Step-by-step guides for your team. Wireframes illustrate where to click; optional screenshots (when present) are illustrative—your workspace may differ."
       />
       <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative max-w-md flex-1">

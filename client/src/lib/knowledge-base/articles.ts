@@ -2,10 +2,14 @@ import type { KbArticle, KbCategoryId } from "./types";
 
 export const KB_CATEGORY_LABELS: Record<KbCategoryId, string> = {
   "getting-started": "Getting started",
+  dashboard: "Dashboard",
   whatsapp: "WhatsApp & capture",
   people: "People & access",
+  "expenses-income": "Expenses & income",
   integrations: "Integrations",
-  finance: "Finance areas",
+  reports: "Reports",
+  "data-handling": "Data handling",
+  finance: "Invoicing & reconciliation",
 };
 
 export const KB_ARTICLES: KbArticle[] = [
@@ -33,6 +37,26 @@ export const KB_ARTICLES: KbArticle[] = [
         title: "Settings last",
         body: "Under Settings, connect templates, notifications, and channel details. Save changes before testing WhatsApp flows.",
         mockScreen: { variant: "finjoe", highlight: "settings", caption: "Integration and channel settings are centralized here." },
+      },
+    ],
+  },
+  {
+    slug: "dashboard-overview",
+    category: "dashboard",
+    title: "Use the Dashboard",
+    summary: "High-level cash, activity, and shortcuts—your first stop after sign-in.",
+    steps: [
+      {
+        body: "Open Dashboard from the sidebar. You’ll see summaries and entry points to expenses, income, and insights for your tenant.",
+        mockScreen: { variant: "dashboard", highlight: "main", caption: "KPI cards and lists summarize recent activity." },
+      },
+      {
+        body: "Use the sidebar to jump to Reports, FinJoe, or transaction areas without losing your place—Help stays at the bottom for guides.",
+        mockScreen: { variant: "dashboard", highlight: "sidebar", caption: "Primary modules live in the left rail." },
+      },
+      {
+        body: "If you use multiple workspaces (super admin), confirm the tenant selector matches the org you’re configuring before changing data.",
+        mockScreen: { variant: "dashboard", highlight: "header", caption: "Tenant context appears in the shell when applicable." },
       },
     ],
   },
@@ -75,6 +99,90 @@ export const KB_ARTICLES: KbArticle[] = [
     ],
   },
   {
+    slug: "expenses-capture-and-review",
+    category: "expenses-income",
+    title: "Expenses: capture and review",
+    summary: "Record, categorize, and approve spend—aligned with WhatsApp and admin workflows.",
+    steps: [
+      {
+        body: "Go to Expenses in the sidebar. Create or import lines, assign categories and cost centers, and submit for approval when required.",
+        mockScreen: { variant: "dashboard", highlight: "main", caption: "Expense list and detail panels live in this module." },
+      },
+      {
+        body: "Many teams capture first on WhatsApp; admins reconcile and adjust in Expenses so the ledger stays clean.",
+      },
+      {
+        body: "Use filters and date ranges to audit periods before month-end close or export.",
+        mockScreen: { variant: "dashboard", highlight: "sidebar", caption: "Jump between modules from the same rail." },
+      },
+    ],
+  },
+  {
+    slug: "income-records-overview",
+    category: "expenses-income",
+    title: "Income records",
+    summary: "Track money in with categories and types consistent with your finance policy.",
+    steps: [
+      {
+        body: "Open Income from the sidebar. Add receipts, classify by income type, and link to customers or internal references as your process requires.",
+        mockScreen: { variant: "dashboard", highlight: "main", caption: "Income list mirrors the expense experience for parity." },
+      },
+      {
+        body: "Align income categories with reporting and tax treatment your leadership expects—edit master data before bulk entry.",
+      },
+    ],
+  },
+  {
+    slug: "recurring-templates-overview",
+    category: "expenses-income",
+    title: "Recurring expense and income templates",
+    summary: "Automate predictable entries so operations spend less time on repetitive posting.",
+    steps: [
+      {
+        body: "Use Recurring Expenses and Recurring Income in the sidebar. Each opens a template list scoped to that flow.",
+        mockScreen: { variant: "dashboard", highlight: "sidebar", caption: "Dedicated sidebar entries for recurring automation." },
+      },
+      {
+        body: "Define amount, cadence, category, and effective dates. Pause or retire templates when contracts change.",
+      },
+      {
+        body: "Confirm cron or scheduled jobs (platform team) are enabled so templates actually post—ask your admin if nothing generates.",
+        mockScreen: { variant: "dashboard", highlight: "main", caption: "Template tables and edit dialogs live in each module." },
+      },
+    ],
+  },
+  {
+    slug: "reports-mis-and-exports",
+    category: "reports",
+    title: "Reports and exports",
+    summary: "Spreadsheet-friendly views and MIS-style summaries for finance review.",
+    steps: [
+      {
+        body: "Open Reports. Pick dimensions your org cares about—time, cost center, category—and export when you need Excel or CSV.",
+        mockScreen: { variant: "dashboard", highlight: "main", caption: "Report grids and export actions are centralized here." },
+      },
+      {
+        body: "Coordinate with Data handling if you need raw dumps versus summarized MIS output.",
+      },
+    ],
+  },
+  {
+    slug: "data-handling-workspace",
+    category: "data-handling",
+    title: "Data handling",
+    summary: "Exports, retention, and privacy-aligned handling for your tenant’s finance data.",
+    steps: [
+      {
+        body: "Open Data Handling from the sidebar. Review what can be exported, who may trigger exports, and any retention notes your policy requires.",
+        mockScreen: { variant: "dashboard", highlight: "main", caption: "Policies and export tools appear in this dedicated area." },
+      },
+      {
+        body: "Super admins switching tenants should confirm the correct workspace before exporting—exports are tenant-scoped.",
+        mockScreen: { variant: "dashboard", highlight: "header", caption: "Match tenant context before sensitive actions." },
+      },
+    ],
+  },
+  {
     slug: "accounting-export-overview",
     category: "integrations",
     title: "Accounting export overview",
@@ -109,6 +217,25 @@ export const KB_ARTICLES: KbArticle[] = [
       {
         body: "Keep tenant and period context consistent—switch workspace from the header if you manage multiple orgs (super admin).",
         mockScreen: { variant: "dashboard", highlight: "header", caption: "Tenant switcher appears when available." },
+      },
+    ],
+  },
+  {
+    slug: "invoicing-customers-and-payment-links",
+    category: "finance",
+    title: "Customers, invoices, and payment links",
+    summary: "Maintain billing master data and share pay URLs with customers.",
+    steps: [
+      {
+        body: "From Invoicing, manage customers (legal name, tax IDs, contacts) before raising invoices—clean master data reduces disputes.",
+        mockScreen: { variant: "dashboard", highlight: "main", caption: "Customer and invoice lists share the same workspace patterns." },
+      },
+      {
+        body: "Create invoices with line items and taxes per your jurisdiction. Generate PDFs for email and audit trails.",
+      },
+      {
+        body: "Enable payment links or hosted checkout where configured so customers can pay without manual bank reconciliation first.",
+        mockScreen: { variant: "dashboard", highlight: "settings", caption: "Payment and gateway settings may live under invoice options." },
       },
     ],
   },
