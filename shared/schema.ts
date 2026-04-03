@@ -159,6 +159,18 @@ export const pettyCashFunds = pgTable("petty_cash_funds", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+/** Receipt/proof uploaded from admin UI (stored on disk or inline when no volume). */
+export type ExpenseWebAttachment = {
+  storagePath?: string | null;
+  /** Fallback when MEDIA_STORAGE_PATH is unset; small files only. */
+  inlineBase64?: string | null;
+  fileName?: string | null;
+  contentType: string;
+  sizeBytes: number;
+  uploadedAt: string;
+  uploadedById?: string | null;
+};
+
 // Expenses
 export const expenses = pgTable("expenses", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -182,7 +194,8 @@ export const expenses = pgTable("expenses", {
   payoutRef: text("payout_ref"),
   payoutAt: timestamp("payout_at"),
   source: text("source").notNull().default("finjoe"),
-  attachments: jsonb("attachments").$type<string[]>().default([]),
+  /** Web-uploaded receipts/proof; WhatsApp media uses fin_joe_media. */
+  attachments: jsonb("attachments").$type<ExpenseWebAttachment[]>().default(sql`'[]'::jsonb`),
   invoiceNumber: text("invoice_number"),
   invoiceDate: timestamp("invoice_date"),
   /** Optional FK to vendors; vendor_name remains denormalized for search/display. */
@@ -807,6 +820,7 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type ExpenseCategory = typeof expenseCategories.$inferSelect;
 export type InsertExpenseCategory = typeof expenseCategories.$inferInsert;
+
 export type Expense = typeof expenses.$inferSelect;
 export type InsertExpense = typeof expenses.$inferInsert;
 export type RecurringExpenseTemplate = typeof recurringExpenseTemplates.$inferSelect;
@@ -820,6 +834,10 @@ export type ExpenseWithDetails = Expense & {
   category?: { id: string; name: string | null; slug: string } | null;
   submittedByName?: string | null;
   approvedByName?: string | null;
+  /** From list API: count of web-uploaded attachment records. */
+  webAttachmentCount?: number;
+  /** From list API: WhatsApp-linked media rows for this expense. */
+  whatsappMediaCount?: number;
 };
 export type FinJoeContact = typeof finJoeContacts.$inferSelect;
 export type InsertFinJoeContact = typeof finJoeContacts.$inferInsert;

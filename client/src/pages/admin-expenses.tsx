@@ -1,6 +1,6 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { Link, useSearchParams } from "wouter";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -47,6 +47,7 @@ import {
   Eye,
   TrendingUp,
   Repeat,
+  Paperclip,
 } from "lucide-react";
 import { format } from "date-fns";
 import { formatIsoDate, parseIsoToDate } from "@/lib/format-date";
@@ -59,7 +60,200 @@ import type {
   ExpenseWithDetails,
   ExpenseCategory,
   Campus,
+  ExpenseWebAttachment,
 } from "@shared/schema";
+
+type ApiAttachmentsMeta = {
+  web: ExpenseWebAttachment[];
+  whatsapp: Array<{
+    id: string;
+    contentType: string;
+    fileName: string | null;
+    sizeBytes: number;
+    createdAt: string;
+  }>;
+};
+
+function ExpenseAttachmentsPanel({ expenseId, tenantId }: { expenseId: string; tenantId: string | null }) {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const q = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : "";
+
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ["/api/admin/expenses", expenseId, "attachments", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/expenses/${expenseId}/attachments${q}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load attachments");
+      return res.json() as ApiAttachmentsMeta;
+    },
+    enabled: !!tenantId && !!expenseId,
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (tenantId) fd.append("tenantId", tenantId);
+      const url = `/api/admin/expenses/${expenseId}/attachments${q}`;
+      const res = await fetch(url, { method: "POST", body: fd, credentials: "include" });
+      if (!res.ok) {
+        let msg = await res.text();
+        try {
+          const j = JSON.parse(msg) as { error?: string };
+          if (j.error) msg = j.error;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(msg || "Upload failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/expenses"] });
+      void refetch();
+      toast({ title: "Receipt uploaded" });
+    },
+    onError: (e: Error) => toast({ title: "Upload failed", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (index: number) => {
+      const res = await fetch(`/api/admin/expenses/${expenseId}/attachments/${index}${q}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/expenses"] });
+      void refetch();
+      toast({ title: "Attachment removed" });
+    },
+    onError: (e: Error) => toast({ title: "Remove failed", description: e.message, variant: "destructive" }),
+  });
+
+  const canDeleteWeb = (att: ExpenseWebAttachment) => {
+    if (!user) return false;
+    if (user.role === "super_admin" || user.role === "admin" || user.role === "finance") return true;
+    return att.uploadedById === user.id;
+  };
+
+  if (!tenantId) return null;
+
+  return (
+    <div className="rounded-lg border bg-muted/30 p-3 space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <Paperclip className="h-4 w-4" />
+          Receipts & proof
+        </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,application/pdf"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) uploadMutation.mutate(f);
+            e.target.value = "";
+          }}
+        />
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={uploadMutation.isPending}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          {uploadMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Upload"}
+        </Button>
+      </div>
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground">Loading attachments…</p>
+      ) : (
+        <div className="space-y-2">
+          {data?.web?.length ? (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Uploaded from web</p>
+              <ul className="space-y-1">
+                {data.web.map((att, i) => {
+                  const url = `/api/admin/expenses/${expenseId}/attachments/${i}${q}`;
+                  const isImg = att.contentType.startsWith("image/");
+                  return (
+                    <li key={`web-${i}-${att.uploadedAt}`} className="flex items-center justify-between gap-2 text-sm">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {isImg ? (
+                          <a href={url} target="_blank" rel="noreferrer" className="shrink-0">
+                            <img src={url} alt="" className="h-10 w-10 rounded object-cover border" />
+                          </a>
+                        ) : (
+                          <a href={url} target="_blank" rel="noreferrer" className="text-primary underline truncate">
+                            {att.fileName || "PDF"}
+                          </a>
+                        )}
+                        <span className="text-muted-foreground truncate">
+                          {(att.fileName || att.contentType).slice(0, 40)}
+                        </span>
+                      </div>
+                      {canDeleteWeb(att) && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="shrink-0 h-8 w-8"
+                          disabled={deleteMutation.isPending}
+                          onClick={() => {
+                            if (confirm("Remove this attachment?")) deleteMutation.mutate(i);
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ) : null}
+          {data?.whatsapp?.length ? (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">WhatsApp</p>
+              <ul className="space-y-1">
+                {data.whatsapp.map((m) => {
+                  const murl = `/api/admin/media/${m.id}${q}`;
+                  const isImg = m.contentType.startsWith("image/");
+                  return (
+                    <li key={m.id} className="flex items-center gap-2 text-sm">
+                      {isImg ? (
+                        <a href={murl} target="_blank" rel="noreferrer">
+                          <img src={murl} alt="" className="h-10 w-10 rounded object-cover border" />
+                        </a>
+                      ) : (
+                        <a href={murl} target="_blank" rel="noreferrer" className="text-primary underline truncate">
+                          {m.fileName || "Media"}
+                        </a>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ) : null}
+          {!data?.web?.length && !data?.whatsapp?.length && (
+            <p className="text-xs text-muted-foreground">No receipts yet.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 function PettyCashTab({
   funds,
   students,
@@ -929,6 +1123,13 @@ export default function AdminExpenses() {
                                     </Badge>
                                   </Link>
                                 )}
+                                {(((exp as ExpenseWithDetails).webAttachmentCount ?? 0) > 0 ||
+                                  ((exp as ExpenseWithDetails).whatsappMediaCount ?? 0) > 0) && (
+                                  <Paperclip
+                                    className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                                    aria-label="Has receipt or proof"
+                                  />
+                                )}
                                 <span className="truncate" title={exp.description || exp.particulars || undefined}>
                                   {exp.description || exp.particulars || "—"}
                                 </span>
@@ -1551,7 +1752,7 @@ export default function AdminExpenses() {
 
       {/* View Expense Dialog */}
       <Dialog open={!!viewExpenseDialog} onOpenChange={() => setViewExpenseDialog(null)}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Expense Details</DialogTitle>
             <DialogDescription>View all expense and documentation fields.</DialogDescription>
@@ -1626,6 +1827,7 @@ export default function AdminExpenses() {
                   </div>
                 )}
               </div>
+              <ExpenseAttachmentsPanel expenseId={viewExpenseDialog.id} tenantId={tenantId} />
               <DialogFooter>
                 <Button variant="outline" onClick={() => setViewExpenseDialog(null)}>Close</Button>
                 <Button onClick={() => { setEditExpenseDialog(viewExpenseDialog); setViewExpenseDialog(null); }}>
@@ -1639,7 +1841,7 @@ export default function AdminExpenses() {
 
       {/* Edit Expense Dialog */}
       <Dialog open={!!editExpenseDialog} onOpenChange={() => setEditExpenseDialog(null)}>
-        <DialogContent>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit Expense</DialogTitle>
             <DialogDescription>Update expense details.</DialogDescription>
@@ -1647,6 +1849,7 @@ export default function AdminExpenses() {
           {editExpenseDialog && (
             <EditExpenseForm
               expense={editExpenseDialog}
+              tenantId={tenantId}
               categories={categories}
               campuses={campuses}
               vendorSuggestions={vendorSuggestions}
@@ -1743,6 +1946,7 @@ export default function AdminExpenses() {
 
 function EditExpenseForm({
   expense,
+  tenantId,
   categories,
   campuses,
   vendorSuggestions = [],
@@ -1751,6 +1955,7 @@ function EditExpenseForm({
   isPending,
 }: {
   expense: ExpenseWithDetails;
+  tenantId: string | null;
   categories: ExpenseCategory[];
   campuses: Campus[];
   vendorSuggestions?: string[];
@@ -1882,6 +2087,7 @@ function EditExpenseForm({
         <Label>Voucher Number</Label>
         <Input value={voucherNumber} onChange={(e) => setVoucherNumber(e.target.value)} placeholder="e.g., VOU-2025-00001" />
       </div>
+      <ExpenseAttachmentsPanel expenseId={expense.id} tenantId={tenantId} />
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
         <Button type="submit" disabled={isPending}>

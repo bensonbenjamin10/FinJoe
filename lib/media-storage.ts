@@ -3,7 +3,7 @@
  * Supports filesystem (Railway volume) or S3. Default: filesystem.
  */
 
-import { mkdir, writeFile, readFile } from "fs/promises";
+import { mkdir, writeFile, readFile, unlink } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
 
@@ -78,5 +78,18 @@ export async function getMedia(storagePath: string): Promise<Buffer | null> {
     return await readFile(fullPath);
   } catch {
     return null;
+  }
+}
+
+/** Remove a file stored under MEDIA_STORAGE_PATH by relative path. No-op if S3 or missing path. */
+export async function deleteMediaFile(storagePath: string): Promise<void> {
+  if (!storagePath?.trim() || USE_S3) return;
+  if (!MEDIA_STORAGE_PATH || !MEDIA_STORAGE_PATH.trim()) return;
+  const fullPath = path.join(MEDIA_STORAGE_PATH, storagePath);
+  if (!existsSync(fullPath)) return;
+  try {
+    await unlink(fullPath);
+  } catch {
+    /* ignore */
   }
 }

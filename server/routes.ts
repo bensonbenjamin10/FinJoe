@@ -56,7 +56,13 @@ import { generateInviteToken, hashInviteToken } from "./invite-tokens.js";
 import { copyFinjoeSettingsDemoToReal, migrateFinJoeGraphDemoToReal } from "./lib/demo-real-switch.js";
 import { deactivateExpiredDemoTenants } from "./lib/demo-expiry.js";
 import { supportedRegimes } from "../lib/invoicing/ports/tax-regime-registry.js";
-import { getMedia } from "../lib/media-storage.js";
+import { getMedia, saveMedia, deleteMediaFile } from "../lib/media-storage.js";
+import {
+  normalizeExpenseAttachments,
+  INLINE_MAX_BYTES,
+  isAllowedExpenseUploadContentType,
+} from "../lib/expense-attachments.js";
+import type { ExpenseWebAttachment } from "../shared/schema.js";
 import {
   notifyFinanceForApproval,
   notifySubmitterForApprovalRejectionFromExpense,
@@ -1488,6 +1494,201 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("Expense media error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to fetch expense media" });
+    }
+  });
+
+  /** Web-uploaded receipt metadata + WhatsApp media list (no file bytes). */
+  app.get("/api/admin/expenses/:id/attachments", requireTenantStaff, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const { id } = req.params;
+      const tid = tenantId ?? (typeof req.query.tenantId === "string" ? req.query.tenantId : null);
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+
+      const [exp] = await db
+        .select({ id: expenses.id, attachments: expenses.attachments })
+        .from(expenses)
+        .where(and(eq(expenses.id, id), eq(expenses.tenantId, tid)))
+        .limit(1);
+      if (!exp) return res.status(404).json({ error: "Expense not found" });
+
+      const mediaRows = await db
+        .select({
+          id: finJoeMedia.id,
+          messageId: finJoeMedia.messageId,
+          contentType: finJoeMedia.contentType,
+          fileName: finJoeMedia.fileName,
+          sizeBytes: finJoeMedia.sizeBytes,
+          createdAt: finJoeMedia.createdAt,
+        })
+        .from(finJoeMedia)
+        .where(eq(finJoeMedia.expenseId, id))
+        .orderBy(desc(finJoeMedia.createdAt));
+
+      res.json({
+        web: normalizeExpenseAttachments(exp.attachments),
+        whatsapp: mediaRows,
+      });
+    } catch (e) {
+      logger.error("Expense attachments meta error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch attachments" });
+    }
+  });
+
+  app.post("/api/admin/expenses/:id/attachments", requireTenantStaff, upload.single("file"), async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const bodyTenant =
+        req.body && typeof (req.body as { tenantId?: unknown }).tenantId === "string"
+          ? (req.body as { tenantId: string }).tenantId
+          : null;
+      const tid =
+        tenantId ?? (typeof req.query.tenantId === "string" ? req.query.tenantId : null) ?? bodyTenant;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { id } = req.params;
+      const file = (req as { file?: { buffer: Buffer; mimetype: string; originalname?: string } }).file;
+      if (!file?.buffer?.length) return res.status(400).json({ error: "No file uploaded" });
+
+      const contentType = file.mimetype?.toLowerCase()?.split(";")[0]?.trim() || "application/octet-stream";
+      if (!isAllowedExpenseUploadContentType(contentType)) {
+        return res.status(400).json({ error: "Only JPEG, PNG, WebP, or PDF files are allowed" });
+      }
+
+      const whereClause = and(eq(expenses.id, id), eq(expenses.tenantId, tid));
+      const [existing] = await db.select({ attachments: expenses.attachments }).from(expenses).where(whereClause).limit(1);
+      if (!existing) return res.status(404).json({ error: "Expense not found" });
+
+      const list = normalizeExpenseAttachments(existing.attachments);
+      const mediaId = crypto.randomUUID();
+      let storagePath: string | null = await saveMedia(mediaId, file.buffer, contentType, tid);
+      let inlineBase64: string | null = null;
+      if (!storagePath) {
+        if (file.buffer.length > INLINE_MAX_BYTES) {
+          return res.status(503).json({
+            error:
+              "File storage is not configured (set MEDIA_STORAGE_PATH) and file is too large for inline storage. Use a smaller file or configure media storage.",
+          });
+        }
+        inlineBase64 = file.buffer.toString("base64");
+      }
+
+      const record: ExpenseWebAttachment = {
+        ...(storagePath ? { storagePath } : { inlineBase64 }),
+        fileName: file.originalname || null,
+        contentType,
+        sizeBytes: file.buffer.length,
+        uploadedAt: new Date().toISOString(),
+        uploadedById: user.id,
+      };
+      list.push(record);
+
+      const [updated] = await db
+        .update(expenses)
+        .set({ attachments: list as unknown as ExpenseWebAttachment[], updatedAt: new Date() })
+        .where(whereClause)
+        .returning({ attachments: expenses.attachments });
+
+      res.status(201).json({ attachments: normalizeExpenseAttachments(updated?.attachments) });
+    } catch (e) {
+      logger.error("Expense attachment upload error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to upload attachment" });
+    }
+  });
+
+  app.get("/api/admin/expenses/:id/attachments/:index", requireTenantStaff, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? (typeof req.query.tenantId === "string" ? req.query.tenantId : null);
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { id, index: indexStr } = req.params;
+      const index = parseInt(indexStr, 10);
+      if (Number.isNaN(index) || index < 0) return res.status(400).json({ error: "Invalid attachment index" });
+
+      const [exp] = await db
+        .select({ attachments: expenses.attachments })
+        .from(expenses)
+        .where(and(eq(expenses.id, id), eq(expenses.tenantId, tid)))
+        .limit(1);
+      if (!exp) return res.status(404).json({ error: "Expense not found" });
+
+      const list = normalizeExpenseAttachments(exp.attachments);
+      const att = list[index];
+      if (!att) return res.status(404).json({ error: "Attachment not found" });
+
+      let buffer: Buffer | null = null;
+      if (att.storagePath) {
+        buffer = await getMedia(att.storagePath);
+      }
+      if (!buffer && att.inlineBase64) {
+        try {
+          buffer = Buffer.from(att.inlineBase64, "base64");
+        } catch {
+          buffer = null;
+        }
+      }
+      if (!buffer) return res.status(404).json({ error: "Attachment file not found" });
+
+      const ct = att.contentType || "application/octet-stream";
+      const safeName = (att.fileName || `attachment-${index}`).replace(/[^\w.\-]+/g, "_");
+      res.setHeader("Content-Type", ct);
+      res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
+      res.send(buffer);
+    } catch (e) {
+      logger.error("Expense attachment download error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to download attachment" });
+    }
+  });
+
+  app.delete("/api/admin/expenses/:id/attachments/:index", requireTenantStaff, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const bodyTenantDel =
+        req.body && typeof (req.body as { tenantId?: unknown }).tenantId === "string"
+          ? (req.body as { tenantId: string }).tenantId
+          : null;
+      const tid =
+        tenantId ?? (typeof req.query.tenantId === "string" ? req.query.tenantId : null) ?? bodyTenantDel;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { id, index: indexStr } = req.params;
+      const index = parseInt(indexStr, 10);
+      if (Number.isNaN(index) || index < 0) return res.status(400).json({ error: "Invalid attachment index" });
+
+      const whereClause = and(eq(expenses.id, id), eq(expenses.tenantId, tid));
+      const [existing] = await db.select({ attachments: expenses.attachments }).from(expenses).where(whereClause).limit(1);
+      if (!existing) return res.status(404).json({ error: "Expense not found" });
+
+      const list = normalizeExpenseAttachments(existing.attachments);
+      const att = list[index];
+      if (!att) return res.status(404).json({ error: "Attachment not found" });
+
+      const canDelete =
+        user.role === "super_admin" ||
+        user.role === "admin" ||
+        user.role === "finance" ||
+        (att.uploadedById && att.uploadedById === user.id);
+      if (!canDelete) return res.status(403).json({ error: "You can only delete attachments you uploaded, unless you are an approver" });
+
+      if (att.storagePath) await deleteMediaFile(att.storagePath);
+      list.splice(index, 1);
+
+      const [updated] = await db
+        .update(expenses)
+        .set({ attachments: list as unknown as ExpenseWebAttachment[], updatedAt: new Date() })
+        .where(whereClause)
+        .returning({ attachments: expenses.attachments });
+
+      res.json({ attachments: normalizeExpenseAttachments(updated?.attachments) });
+    } catch (e) {
+      logger.error("Expense attachment delete error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to delete attachment" });
     }
   });
 
@@ -4037,6 +4238,8 @@ export async function registerRoutes(app: Express) {
           source: expenses.source,
           recurringTemplateId: expenses.recurringTemplateId,
           createdAt: expenses.createdAt,
+          webAttachmentCount: sql<number>`coalesce(jsonb_array_length(coalesce(${expenses.attachments}, '[]'::jsonb)), 0)::int`,
+          whatsappMediaCount: sql<number>`(select count(*)::int from fin_joe_media where expense_id = ${expenses.id})`,
           costCenterName: costCenters.name,
           categoryName: expenseCategories.name,
           submittedByName: submitterTable.name,
