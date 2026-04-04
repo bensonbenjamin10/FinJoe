@@ -24,9 +24,11 @@
     "create-templates": "node scripts/create-finjoe-templates.mjs",
     "backfill:embeddings": "tsx scripts/backfill-expense-embeddings.ts",
     "db:migrate-vendors": "node scripts/migrate-vendors.mjs",
-    "db:ensure-super-admin": "tsx scripts/ensure-super-admin.ts"
+    "db:ensure-super-admin": "tsx scripts/ensure-super-admin.ts",
+    "backup:s3": "tsx scripts/backup-to-s3.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1024.0",
     "@google/genai": "^1.44.0",
     "@pdfsmaller/pdf-decrypt": "^1.0.1",
     "@radix-ui/react-accordion": "^1.2.12",

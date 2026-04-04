@@ -57,6 +57,7 @@ import { copyFinjoeSettingsDemoToReal, migrateFinJoeGraphDemoToReal } from "./li
 import { deactivateExpiredDemoTenants } from "./lib/demo-expiry.js";
 import { supportedRegimes } from "../lib/invoicing/ports/tax-regime-registry.js";
 import { getMedia, saveMedia, deleteMediaFile } from "../lib/media-storage.js";
+import { runBackupToS3, s3BackupConfigured } from "../lib/backup-to-s3.js";
 import {
   normalizeExpenseAttachments,
   INLINE_MAX_BYTES,
@@ -3685,9 +3686,9 @@ export async function registerRoutes(app: Express) {
     const { job } = req.body;
     if (!job || typeof job !== "string")
       return res.status(400).json({
-        error: "job required (recurring-expenses, recurring-income, weekly-insights, backfill-embeddings, demo-expiry)",
+        error: "job required (recurring-expenses, recurring-income, weekly-insights, backfill-embeddings, demo-expiry, backup-to-s3)",
       });
-    const validJobs = ["recurring-expenses", "recurring-income", "weekly-insights", "backfill-embeddings", "demo-expiry"];
+    const validJobs = ["recurring-expenses", "recurring-income", "weekly-insights", "backfill-embeddings", "demo-expiry", "backup-to-s3"];
     if (!validJobs.includes(job)) return res.status(400).json({ error: `job must be one of: ${validJobs.join(", ")}` });
 
     try {
@@ -3714,6 +3715,13 @@ export async function registerRoutes(app: Express) {
           const r = await deactivateExpiredDemoTenants();
           return { ok: true, job, ...r };
         }
+        if (job === "backup-to-s3") {
+          if (!s3BackupConfigured()) {
+            throw new Error("S3 backup not configured (AWS_S3_BUCKET_NAME, AWS_ENDPOINT_URL, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)");
+          }
+          const r = await runBackupToS3();
+          return { ok: true, job, ...r };
+        }
         throw new Error("Unknown job");
       });
       return res.json(result);
@@ -3728,7 +3736,7 @@ export async function registerRoutes(app: Express) {
     try {
       const limit = Math.min(50, parseInt(String(req.query?.limit ?? 20), 10) || 20);
       const jobFilter = req.query?.job as string | undefined;
-      const validJobNames = ["recurring-expenses", "recurring-income", "weekly-insights", "backfill-embeddings"];
+      const validJobNames = ["recurring-expenses", "recurring-income", "weekly-insights", "backfill-embeddings", "backup-to-s3"];
       const conditions = jobFilter && validJobNames.includes(jobFilter) ? [eq(cronRuns.jobName, jobFilter)] : [];
       const rows = await db
         .select()

@@ -7,6 +7,7 @@
  * - Recurring expenses: every run (generates draft expenses from templates)
  * - Backfill embeddings: every run (processes expenses where embedding IS NULL for RAG)
  * - Weekly insights: only on Mondays (sends expense/income summary to admin/finance)
+ * - S3 backup: if FINJOE_APP_URL or PUBLIC_APP_URL is set, calls main app GET /cron/backup (volume + pg_dump live there)
  */
 
 import "dotenv/config";
@@ -141,6 +142,29 @@ if (now.getUTCDay() === 1) {
   }
 } else {
   console.log("Skipping weekly insights (not Monday)");
+}
+
+// 5. S3 backup (DB + optional media) — must hit main FinJoe URL (volume + pg_dump live there), not worker
+const APP_URL = process.env.FINJOE_APP_URL || process.env.PUBLIC_APP_URL;
+if (APP_URL) {
+  const appBase = APP_URL.replace(/\/$/, "");
+  console.log("Running S3 backup via main app:", appBase);
+  try {
+    const res = await fetch(`${appBase}/cron/backup?secret=${encodeURIComponent(CRON_SECRET)}`);
+    const contentType = res.headers.get("content-type") || "";
+    const data = contentType.includes("application/json") ? await res.json() : { error: await res.text() || res.statusText };
+    if (!res.ok || data.error) {
+      console.error("S3 backup error:", formatError(data.error || res.statusText));
+      hadError = true;
+    } else {
+      console.log("S3 backup OK:", data);
+    }
+  } catch (err) {
+    console.error("S3 backup failed:", err.message);
+    hadError = true;
+  }
+} else {
+  console.log("Skipping S3 backup (set FINJOE_APP_URL or PUBLIC_APP_URL to your main FinJoe HTTPS URL, e.g. https://finjoe.app)");
 }
 
 process.exit(hadError ? 1 : 0);

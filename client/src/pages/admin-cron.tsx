@@ -45,6 +45,13 @@ const CRON_JOBS = [
     description: "Deactivates demo tenants past their demo_expires_at (also runs hourly on the server).",
     schedule: "Hourly (server interval) + /cron/demo-expiry",
   },
+  {
+    id: "backup-to-s3",
+    name: "Backup to S3",
+    description:
+      "Uploads pg_dump (custom format) plus optional media tarball to your S3-compatible bucket. Server needs AWS_* and pg_dump; volume at MEDIA_STORAGE_PATH for media.",
+    schedule: "Daily via cron if FINJOE_APP_URL set (see run-all-cron.mjs)",
+  },
 ] as const;
 
 type JobId = (typeof CRON_JOBS)[number]["id"];
@@ -71,6 +78,8 @@ type TriggerResult = {
   total?: number;
   remaining?: number;
   deactivated?: number;
+  keys?: string[];
+  datePrefix?: string;
 };
 
 export default function AdminCron() {
@@ -82,6 +91,7 @@ export default function AdminCron() {
     "weekly-insights": null,
     "backfill-embeddings": null,
     "demo-expiry": null,
+    "backup-to-s3": null,
   });
 
   const triggerMutation = useMutation({
@@ -107,9 +117,11 @@ export default function AdminCron() {
               ? `Processed ${data.processed} embedding(s)`
               : data.deactivated !== undefined
                 ? `Deactivated ${data.deactivated} demo tenant(s)`
-                : data.skipped
-                  ? "Skipped (no work needed)"
-                  : "Completed";
+                : data.keys && data.keys.length > 0
+                  ? `Uploaded ${data.keys.length} object(s) to S3`
+                  : data.skipped
+                    ? "Skipped (no work needed)"
+                    : "Completed";
       toast({ title: `${job} completed`, description: msg });
     },
     onError: (e: Error, job) => {
@@ -200,6 +212,12 @@ export default function AdminCron() {
                       )}
                       {result.deactivated !== undefined && (
                         <span className="ml-2">Deactivated {result.deactivated} demo tenant(s)</span>
+                      )}
+                      {result.keys && result.keys.length > 0 && (
+                        <span className="ml-2">
+                          S3 keys: {result.keys.join(", ")}
+                          {result.datePrefix && ` (prefix ${result.datePrefix})`}
+                        </span>
                       )}
                     </div>
                     {result.errors && result.errors.length > 0 && (

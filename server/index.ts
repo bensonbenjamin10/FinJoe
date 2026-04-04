@@ -12,6 +12,8 @@ import { generateExpensesFromTemplates, generateIncomeFromTemplates } from "../l
 import { runBackfillEmbeddings } from "../lib/backfill-embeddings.js";
 import { db, pool } from "./db.js";
 import { deactivateExpiredDemoTenants } from "./lib/demo-expiry.js";
+import { logCronRun } from "../lib/cron-logger.js";
+import { runBackupToS3, s3BackupConfigured } from "../lib/backup-to-s3.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -142,6 +144,32 @@ app.get("/cron/demo-expiry", async (req, res) => {
   } catch (err) {
     logger.error("Demo expiry cron error", { err: String(err) });
     res.status(500).json({ error: "Failed to run demo expiry" });
+  }
+});
+
+// Cron: pg_dump + optional media tarball → S3 (Railway bucket). Must run on service that has DATABASE_URL + volume.
+app.get("/cron/backup", async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.query?.secret !== secret) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  if (!s3BackupConfigured()) {
+    res.status(503).json({
+      error:
+        "S3 backup not configured (set AWS_S3_BUCKET_NAME, AWS_ENDPOINT_URL, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)",
+    });
+    return;
+  }
+  try {
+    const result = await logCronRun(db, "backup-to-s3", async () => {
+      const r = await runBackupToS3();
+      return { ok: true, ...r };
+    });
+    res.json(result);
+  } catch (err) {
+    logger.error("Backup cron error", { err: String(err) });
+    res.status(500).json({ error: String(err) });
   }
 });
 

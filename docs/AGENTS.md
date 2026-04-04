@@ -117,6 +117,12 @@ npm run db:query -- "SELECT id, name FROM tenants"
 | Sidebar | **FinJoe** + **Team** (tenant admins) deep-link to dashboard users path |
 | Docs | `docs/plans/admin-ia-finjoe-team.plan.md`, `docs/plans/admin-ia-implementation.plan.md`, `docs/admin-ia-strategy.md` |
 
+### S3 backup (archive / DR)
+
+- **Runbook:** `docs/runbooks/BACKUP_RESTORE.md`
+- **Implementation:** `lib/backup-to-s3.ts`, `GET /cron/backup` in `server/index.ts` (uses `CRON_SECRET`), admin cron job `backup-to-s3`, `scripts/run-all-cron.mjs` calls the **main app** URL when `FINJOE_APP_URL` or `PUBLIC_APP_URL` is set (media volume is on the main FinJoe service).
+- **Behavior:** Uploads `pg_dump` (custom format) and optional `media.tar.gz` to the configured S3-compatible bucket. **Live reads still use the Railway volume** (`MEDIA_STORAGE_PATH`); the bucket is for backup/restore only.
+
 ---
 
 ## Railway Services & Environment Variables
