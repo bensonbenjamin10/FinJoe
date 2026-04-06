@@ -41,6 +41,14 @@ const HISTORY_LIMIT = 10;
 
 const USER_FACING_ERROR = "I couldn't save that right now. Please try again in a moment, or contact support if it persists.";
 
+/** Merge prior pending expense/income fields with new tool args so partial follow-up messages only fill gaps. */
+function shallowMergeRecord(
+  prior: Record<string, unknown> | undefined,
+  args: Record<string, unknown>
+): Record<string, unknown> {
+  return { ...(prior ?? {}), ...args };
+}
+
 type PendingExpense = {
   type: "expense_pending";
   extracted: ExtractedExpense & { categoryId?: string; campusId?: string | null };
@@ -482,10 +490,15 @@ async function executeFunctionCall(
       if (validCategoryIds.length === 0) {
         return { success: false, error: "No expense categories configured. Ask admin to add categories in FinJoe Settings." };
       }
-      const amountVal = typeof args.amount === "number" ? Math.round(args.amount) : parseAmount(args.amount);
+      const priorConfirm =
+        convContext.pendingConfirmation?.type === "expense"
+          ? (convContext.pendingConfirmation.data as Record<string, unknown>)
+          : undefined;
+      const mergedArgs = shallowMergeRecord(priorConfirm, args);
+      const amountVal = typeof mergedArgs.amount === "number" ? Math.round(mergedArgs.amount) : parseAmount(mergedArgs.amount);
       const amount = amountVal ?? 0;
-      let categoryId = String(args.categoryId ?? "");
-      let campusId = args.campusId ? String(args.campusId) : null;
+      let categoryId = String(mergedArgs.categoryId ?? "");
+      let campusId = mergedArgs.campusId ? String(mergedArgs.campusId) : null;
       if (categoryId && !validCategoryIds.includes(categoryId)) {
         const resolved = resolveCategoryFromMessage(categoryId, execCtx.categories);
         categoryId = resolved ?? "";
@@ -503,25 +516,53 @@ async function executeFunctionCall(
         }
       }
       const today = new Date().toISOString().slice(0, 10);
-      const parsedInvoiceDate = args.invoiceDate ? parseDateToISO(String(args.invoiceDate)) : null;
-      const taxFromArgs = parseExpenseTaxFields(args as Record<string, unknown>);
+      const parsedInvoiceDate = mergedArgs.invoiceDate ? parseDateToISO(String(mergedArgs.invoiceDate)) : null;
+      const taxFromArgs = parseExpenseTaxFields(mergedArgs as Record<string, unknown>);
       const expenseData = {
         amount: amount ?? 0,
-        expenseDate: parseDateToISO(String(args.invoiceDate ?? today)) ?? today,
+        expenseDate: parseDateToISO(String(mergedArgs.invoiceDate ?? today)) ?? today,
         categoryId,
         campusId,
-        description: args.description ? String(args.description) : null,
-        invoiceNumber: args.invoiceNumber ? String(args.invoiceNumber) : null,
-        invoiceDate: parsedInvoiceDate ?? (args.invoiceDate ? today : null),
-        vendorName: args.vendorName ? String(args.vendorName) : null,
-        gstin: args.gstin ? String(args.gstin) : null,
-        taxType: args.taxType ? String(args.taxType) : null,
+        description: mergedArgs.description ? String(mergedArgs.description) : null,
+        invoiceNumber: mergedArgs.invoiceNumber ? String(mergedArgs.invoiceNumber) : null,
+        invoiceDate: parsedInvoiceDate ?? (mergedArgs.invoiceDate ? today : null),
+        vendorName: mergedArgs.vendorName ? String(mergedArgs.vendorName) : null,
+        gstin: mergedArgs.gstin ? String(mergedArgs.gstin) : null,
+        taxType: mergedArgs.taxType ? String(mergedArgs.taxType) : null,
         ...taxFromArgs,
       };
 
       const validation = validateExpenseData(expenseData, execCtx.categories, execCtx.campuses, requireAuditAbove);
       if (!validation.valid) {
         return { success: false, error: `I need: ${validation.errors.join(". ")}. Please provide the missing information.` };
+      }
+
+      const duplicate = await finJoeData.findLikelyDuplicateExpense({
+        amount: expenseData.amount,
+        expenseDate: expenseData.expenseDate,
+        categoryId: expenseData.categoryId,
+        costCenterId: expenseData.campusId,
+        invoiceNumber: expenseData.invoiceNumber,
+        submittedByContactPhone: contactPhone,
+      });
+      if (duplicate) {
+        const canPatch = duplicate.status === "draft";
+        return {
+          success: true,
+          data: {
+            duplicateDetected: true,
+            matchReason: duplicate.reason,
+            existingExpenseId: duplicate.shortId,
+            existingStatus: duplicate.status,
+            existingAmount: duplicate.amount,
+            existingVendor: duplicate.vendorName,
+            existingInvoiceNumber: duplicate.invoiceNumber,
+            canMergeWithUpdateExpense: canPatch,
+            instruction: canPatch
+              ? `Do NOT call create_expense again. This matches expense #${duplicate.shortId} (draft). If the user is only adding or correcting fields (invoice number, GSTIN, description, etc.), call update_expense with expenseId "${duplicate.shortId}" and pass ONLY the fields that changed or were missing. If they insist this is a different purchase, ask them to confirm explicitly, then you may call create_expense.`
+              : `Do NOT call create_expense again. This matches expense #${duplicate.shortId} (status: ${duplicate.status}). It cannot be edited via WhatsApp unless it is in draft. Tell the user the duplicate risk and that they should use the dashboard or ask finance if a correction is needed.`,
+          },
+        };
       }
 
       // Require confirmation before posting: store/update pending and ask user to confirm (handles user corrections too)
@@ -611,13 +652,18 @@ async function executeFunctionCall(
       if (validIncomeCategoryIds.length === 0) {
         return { success: false, error: "No income categories configured. Ask admin to add income categories in the web app (Income settings)." };
       }
-      const amountVal = typeof args.amount === "number" ? Math.round(args.amount) : parseAmount(args.amount);
+      const priorIncomeConfirm =
+        convContext.pendingConfirmation?.type === "income"
+          ? (convContext.pendingConfirmation.data as Record<string, unknown>)
+          : undefined;
+      const mergedIncomeArgs = shallowMergeRecord(priorIncomeConfirm, args);
+      const amountVal = typeof mergedIncomeArgs.amount === "number" ? Math.round(mergedIncomeArgs.amount) : parseAmount(mergedIncomeArgs.amount);
       const amount = amountVal ?? 0;
       if (amount <= 0) {
         return { success: false, error: "Income amount must be a positive number." };
       }
-      let categoryId = String(args.categoryId ?? "").trim();
-      let campusId = args.campusId ? String(args.campusId) : null;
+      let categoryId = String(mergedIncomeArgs.categoryId ?? "").trim();
+      let campusId = mergedIncomeArgs.campusId ? String(mergedIncomeArgs.campusId) : null;
       if (categoryId && !validIncomeCategoryIds.includes(categoryId)) {
         const resolved = resolveIncomeCategoryFromMessage(categoryId, incCats);
         categoryId = resolved ?? "";
@@ -636,8 +682,8 @@ async function executeFunctionCall(
         }
       }
       const today = new Date().toISOString().slice(0, 10);
-      const incomeDate = parseDateToISO(String(args.incomeDate ?? today)) ?? today;
-      const particulars = args.particulars ? String(args.particulars) : null;
+      const incomeDate = parseDateToISO(String(mergedIncomeArgs.incomeDate ?? today)) ?? today;
+      const particulars = mergedIncomeArgs.particulars ? String(mergedIncomeArgs.particulars) : null;
 
       const incomeData = {
         amount,
@@ -675,7 +721,7 @@ async function executeFunctionCall(
           amount: incomeData.amount,
           incomeDate: incomeData.incomeDate,
           particulars: incomeData.particulars ?? "From FinJoe WhatsApp",
-          incomeType: args.incomeType ? String(args.incomeType) : "other",
+          incomeType: mergedIncomeArgs.incomeType ? String(mergedIncomeArgs.incomeType) : "other",
           submittedByContactPhone: contactPhone,
         });
       } catch (err) {
@@ -715,6 +761,7 @@ async function executeFunctionCall(
         invoiceDate: string | null;
         extracted: ExtractedExpense;
       }> = [];
+      const bulkSkippedDuplicates: Array<{ row: number; existingExpenseId: string; matchReason: string }> = [];
 
       for (let i = 0; i < rawExpenses.length; i++) {
         const r = rawExpenses[i] as Record<string, unknown>;
@@ -756,6 +803,22 @@ async function executeFunctionCall(
         const validation = validateExpenseData(expenseData, execCtx.categories, execCtx.campuses, requireAuditAbove);
         if (!validation.valid) {
           return { success: false, error: `Expense ${i + 1}: ${validation.errors.join(". ")}` };
+        }
+        const rowDup = await finJoeData.findLikelyDuplicateExpense({
+          amount: expenseData.amount,
+          expenseDate: expenseData.expenseDate,
+          categoryId: expenseData.categoryId,
+          costCenterId: expenseData.campusId,
+          invoiceNumber: expenseData.invoiceNumber,
+          submittedByContactPhone: contactPhone,
+        });
+        if (rowDup) {
+          bulkSkippedDuplicates.push({
+            row: i + 1,
+            existingExpenseId: rowDup.shortId,
+            matchReason: rowDup.reason,
+          });
+          continue;
         }
         const extracted: ExtractedExpense = {
           amount: expenseData.amount,
@@ -821,7 +884,14 @@ async function executeFunctionCall(
       if (execCtx.messageId && expenseIds.length > 0) {
         await db.update(finJoeMedia).set({ expenseId: expenseIds[0] }).where(eq(finJoeMedia.messageId, execCtx.messageId));
       }
-      return { success: true, data: { created: expenseIds.length, expenseIds } };
+      return {
+        success: true,
+        data: {
+          created: expenseIds.length,
+          expenseIds,
+          skippedDuplicates: bulkSkippedDuplicates.length ? bulkSkippedDuplicates : undefined,
+        },
+      };
     }
 
     case "create_role_change_request": {
@@ -874,29 +944,34 @@ async function executeFunctionCall(
       if (validCategoryIds.length === 0) {
         return { success: false, error: "No expense categories configured. Ask admin to add categories in FinJoe Settings." };
       }
-      const amountVal = typeof args.amount === "number" ? Math.round(args.amount) : parseAmount(args.amount);
-      const missingFields = Array.isArray(args.missingFields) ? args.missingFields.map(String) : [];
-      let pendingCategoryId = args.categoryId ? String(args.categoryId) : undefined;
+      const priorPending = convContext.pendingExpense?.extracted as Record<string, unknown> | undefined;
+      const mergedPendingArgs = shallowMergeRecord(priorPending, args);
+      const amountVal =
+        typeof mergedPendingArgs.amount === "number" ? Math.round(mergedPendingArgs.amount) : parseAmount(mergedPendingArgs.amount);
+      const missingFields = Array.isArray(mergedPendingArgs.missingFields)
+        ? mergedPendingArgs.missingFields.map(String)
+        : [];
+      let pendingCategoryId = mergedPendingArgs.categoryId ? String(mergedPendingArgs.categoryId) : undefined;
       if (pendingCategoryId && !validCategoryIds.includes(pendingCategoryId)) {
         const resolved = resolveCategoryFromMessage(pendingCategoryId, execCtx.categories);
         pendingCategoryId = resolved ?? undefined;
       }
-      let pendingCampusId: string | null | undefined = args.campusId ? String(args.campusId) : undefined;
+      let pendingCampusId: string | null | undefined = mergedPendingArgs.campusId ? String(mergedPendingArgs.campusId) : undefined;
       if (pendingCampusId && !validCampusIds.includes(pendingCampusId)) {
         const resolved = resolveCampusFromMessage(pendingCampusId, execCtx.campuses);
         pendingCampusId = resolved ?? undefined;
       }
       const extracted: ExtractedExpense & { categoryId?: string; campusId?: string | null } = {
         amount: amountVal ?? undefined,
-        vendorName: args.vendorName ? String(args.vendorName) : undefined,
-        invoiceNumber: args.invoiceNumber ? String(args.invoiceNumber) : undefined,
-        invoiceDate: args.invoiceDate ? String(args.invoiceDate) : undefined,
-        description: args.description ? String(args.description) : undefined,
-        gstin: args.gstin ? String(args.gstin) : undefined,
-        taxType: args.taxType ? String(args.taxType) : undefined,
+        vendorName: mergedPendingArgs.vendorName ? String(mergedPendingArgs.vendorName) : undefined,
+        invoiceNumber: mergedPendingArgs.invoiceNumber ? String(mergedPendingArgs.invoiceNumber) : undefined,
+        invoiceDate: mergedPendingArgs.invoiceDate ? String(mergedPendingArgs.invoiceDate) : undefined,
+        description: mergedPendingArgs.description ? String(mergedPendingArgs.description) : undefined,
+        gstin: mergedPendingArgs.gstin ? String(mergedPendingArgs.gstin) : undefined,
+        taxType: mergedPendingArgs.taxType ? String(mergedPendingArgs.taxType) : undefined,
         categoryId: pendingCategoryId,
         campusId: pendingCampusId !== undefined ? pendingCampusId : undefined,
-        ...parseExpenseTaxFields(args as Record<string, unknown>),
+        ...parseExpenseTaxFields(mergedPendingArgs as Record<string, unknown>),
       };
       return {
         success: true,

@@ -73,7 +73,8 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 - Invalid cost center, category, or amount: ask the user to correct. Do not guess or fabricate.
 - Image extraction unclear or failed: ask for key fields (amount, vendor, etc.) in natural language.
 - If validation fails after a tool call, explain what went wrong and what to fix.
-- Duplicate expense risk: if user might be re-submitting the same invoice, you can mention checking for duplicates—but still process if they confirm.
+- DUPLICATE EXPENSES: Before calling create_expense, the system may return duplicateDetected with existingExpenseId. If duplicateDetected is true and canMergeWithUpdateExpense: do NOT create again—call update_expense(expenseId) with only the new or corrected fields. If the user clearly says this is a different transaction, you may create after they confirm. If canMergeWithUpdateExpense is false (not draft), explain the match and do not create a second expense.
+- PARTIAL FOLLOW-UPS: If the user sends only extra details (e.g. invoice number after amount was already captured), merge mentally with PENDING EXPENSE or pending confirmation: use store_pending_expense / create_expense so you keep prior fields and only add what is new. Never drop earlier fields when the message only adds information.
 
 === VOICE MESSAGES ===
 - Users may send voice messages (audio). When a voice transcription is provided, treat it exactly like typed text. Process it normally—extract expense data, answer questions, or execute actions as requested.
@@ -142,7 +143,8 @@ Assistant: [calls create_income with amount 50000, categoryId from fees category
 const FINJOE_FUNCTION_DECLARATIONS = [
   {
     name: "create_expense",
-    description: "Record an expense when you have amount and cost center (or amount alone for Corporate Office). Call this when user has provided the last missing piece for a pending expense (e.g. cost center after amount). Use today's date for invoiceDate if not provided. Category defaults to first from the provided list. Vendor and invoice details are optional for simple expenses.",
+    description:
+      "Record an expense when you have amount and cost center (or amount alone for Corporate Office). Call this when user has provided the last missing piece for a pending expense (e.g. cost center after amount). If a prior create_expense returned duplicateDetected, do NOT call create_expense again for the same transaction—use update_expense on the existing draft with only changed fields, or ask the user to confirm it is truly different. Use today's date for invoiceDate if not provided. Category defaults to first from the provided list. Vendor and invoice details are optional for simple expenses.",
     parameters: {
       type: Type.OBJECT,
       properties: {
