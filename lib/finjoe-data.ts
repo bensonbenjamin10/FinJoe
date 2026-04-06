@@ -3,6 +3,7 @@
  */
 
 import { eq, and, desc, sql, or, isNull, aliasedTable, gte, inArray } from "drizzle-orm";
+import type { PgTransaction } from "drizzle-orm/pg-core";
 import { embedExpenseText } from "./expense-embeddings.js";
 import { isFullUuid, toShortExpenseId } from "./expense-id.js";
 import {
@@ -15,6 +16,7 @@ import {
   finJoeContacts,
   finJoeTasks,
   pettyCashFunds,
+  pettyCashReplenishments,
   users,
   incomeCategories,
   incomeRecords,
@@ -937,6 +939,365 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       return query;
     },
 
+    /** Read-only analyst: vendor concentration for a period (admin/finance WhatsApp tool). */
+    async getFinanceVendorConcentration(params: {
+      startDate: string;
+      endDate: string;
+      campusId?: string | null;
+    }): Promise<{ totalExpenses: number; topVendors: Array<{ name: string; amount: number; sharePct: number }> }> {
+      const conditions = [
+        eq(expenses.tenantId, tenantId),
+        sql`${expenses.expenseDate} >= ${params.startDate}::date`,
+        sql`${expenses.expenseDate} <= ${params.endDate}::date`,
+      ];
+      const ccId = params.campusId;
+      if (ccId !== undefined && ccId !== null && ccId !== "" && ccId !== "__corporate__") {
+        if (ccId === "null") conditions.push(sql`${expenses.costCenterId} IS NULL`);
+        else conditions.push(eq(expenses.costCenterId, ccId));
+      }
+      const rows = await db
+        .select({ amount: expenses.amount, vendorName: expenses.vendorName, vname: vendors.name })
+        .from(expenses)
+        .leftJoin(vendors, eq(expenses.vendorId, vendors.id))
+        .where(and(...conditions));
+      const total = rows.reduce((s: number, r: { amount: number | null; vendorName: string | null; vname: string | null }) => s + (r.amount ?? 0), 0);
+      const map: Record<string, number> = {};
+      for (const r of rows) {
+        const n = (r.vendorName?.trim() || r.vname?.trim() || "Unknown vendor").slice(0, 120);
+        map[n] = (map[n] ?? 0) + (r.amount ?? 0);
+      }
+      const topVendors = Object.entries(map)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8)
+        .map(([name, amount]) => ({
+          name,
+          amount,
+          sharePct: total > 0 ? Math.round((amount / total) * 1000) / 10 : 0,
+        }));
+      return { totalExpenses: total, topVendors };
+    },
+
+    /** Read-only analyst: approval queue aging (pending expenses only). */
+    async getFinanceApprovalBacklog(params?: { campusId?: string | null }): Promise<{
+      pendingCount: number;
+      avgDays: number | null;
+      medianDays: number | null;
+      countOver7Days: number;
+      maxDays: number | null;
+    }> {
+      const conditions = [eq(expenses.tenantId, tenantId), eq(expenses.status, "pending_approval")];
+      const ccId = params?.campusId;
+      if (ccId !== undefined && ccId !== null && ccId !== "" && ccId !== "__corporate__") {
+        if (ccId === "null") conditions.push(sql`${expenses.costCenterId} IS NULL`);
+        else conditions.push(eq(expenses.costCenterId, ccId));
+      }
+      const rows = await db.select({ submittedAt: expenses.submittedAt }).from(expenses).where(and(...conditions));
+      const now = Date.now();
+      const dayMs = 24 * 60 * 60 * 1000;
+      const ages: number[] = [];
+      let countOver7 = 0;
+      let maxDays: number | null = null;
+      for (const r of rows) {
+        const submitted = r.submittedAt ? new Date(r.submittedAt).getTime() : 0;
+        if (!submitted) continue;
+        const days = Math.floor((now - submitted) / dayMs);
+        ages.push(days);
+        if (days > 7) countOver7++;
+        if (maxDays === null || days > maxDays) maxDays = days;
+      }
+      ages.sort((a, b) => a - b);
+      const medianDays =
+        ages.length === 0
+          ? null
+          : ages.length % 2 === 1
+            ? ages[(ages.length - 1) / 2]!
+            : Math.round((ages[ages.length / 2 - 1]! + ages[ages.length / 2]!) / 2);
+      const avgDays = ages.length ? Math.round((ages.reduce((a, b) => a + b, 0) / ages.length) * 10) / 10 : null;
+      return {
+        pendingCount: rows.length,
+        avgDays,
+        medianDays,
+        countOver7Days: countOver7,
+        maxDays,
+      };
+    },
+
+    /** Read-only analyst: current period vs equal-length prior period (expense/income/net). */
+    async getFinanceVarianceBridge(params: {
+      startDate: string;
+      endDate: string;
+      campusId?: string | null;
+    }): Promise<{
+      current: { totalExpenses: number; totalIncome: number; net: number };
+      prior: { totalExpenses: number; totalIncome: number; net: number };
+      expenseDelta: number;
+      incomeDelta: number;
+      netDelta: number;
+    }> {
+      const s = new Date(params.startDate + "T12:00:00.000Z");
+      const e = new Date(params.endDate + "T12:00:00.000Z");
+      const periodDays = Math.ceil((e.getTime() - s.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+      const prevEnd = new Date(s);
+      prevEnd.setUTCDate(prevEnd.getUTCDate() - 1);
+      const prevStart = new Date(prevEnd);
+      prevStart.setUTCDate(prevStart.getUTCDate() - (periodDays - 1));
+      const prevStartStr = prevStart.toISOString().slice(0, 10);
+      const prevEndStr = prevEnd.toISOString().slice(0, 10);
+
+      const expConds = (start: string, end: string) => {
+        const c = [
+          eq(expenses.tenantId, tenantId),
+          sql`${expenses.expenseDate} >= ${start}::date`,
+          sql`${expenses.expenseDate} <= ${end}::date`,
+        ];
+        const ccId = params.campusId;
+        if (ccId !== undefined && ccId !== null && ccId !== "" && ccId !== "__corporate__") {
+          if (ccId === "null") c.push(sql`${expenses.costCenterId} IS NULL`);
+          else c.push(eq(expenses.costCenterId, ccId));
+        }
+        return and(...c);
+      };
+      const incConds = (start: string, end: string) => {
+        const c = [
+          eq(incomeRecords.tenantId, tenantId),
+          sql`${incomeRecords.incomeDate} >= ${start}::date`,
+          sql`${incomeRecords.incomeDate} <= ${end}::date`,
+        ];
+        const ccId = params.campusId;
+        if (ccId !== undefined && ccId !== null && ccId !== "" && ccId !== "__corporate__") {
+          if (ccId === "null") c.push(sql`${incomeRecords.costCenterId} IS NULL`);
+          else c.push(eq(incomeRecords.costCenterId, ccId));
+        }
+        return and(...c);
+      };
+
+      const [ce, ci, pe, pi] = await Promise.all([
+        db.select({ amount: expenses.amount }).from(expenses).where(expConds(params.startDate, params.endDate)),
+        db.select({ amount: incomeRecords.amount }).from(incomeRecords).where(incConds(params.startDate, params.endDate)),
+        db.select({ amount: expenses.amount }).from(expenses).where(expConds(prevStartStr, prevEndStr)),
+        db.select({ amount: incomeRecords.amount }).from(incomeRecords).where(incConds(prevStartStr, prevEndStr)),
+      ]);
+      const sumAmt = (rows: Array<{ amount: number | null }>) => rows.reduce((a, r) => a + (r.amount ?? 0), 0);
+      const cExp = sumAmt(ce);
+      const cInc = sumAmt(ci);
+      const pExp = sumAmt(pe);
+      const pInc = sumAmt(pi);
+      return {
+        current: { totalExpenses: cExp, totalIncome: cInc, net: cInc - cExp },
+        prior: { totalExpenses: pExp, totalIncome: pInc, net: pInc - pExp },
+        expenseDelta: cExp - pExp,
+        incomeDelta: cInc - pInc,
+        netDelta: cInc - cExp - (pInc - pExp),
+      };
+    },
+
+    async listPettyCashFunds(): Promise<
+      Array<{
+        id: string;
+        costCenterId: string;
+        custodianId: string;
+        imprestAmount: number;
+        currentBalance: number;
+        costCenterName: string | null;
+        custodianName: string | null;
+        custodianEmail: string | null;
+      }>
+    > {
+      return db
+        .select({
+          id: pettyCashFunds.id,
+          costCenterId: pettyCashFunds.costCenterId,
+          custodianId: pettyCashFunds.custodianId,
+          imprestAmount: pettyCashFunds.imprestAmount,
+          currentBalance: pettyCashFunds.currentBalance,
+          costCenterName: costCenters.name,
+          custodianName: users.name,
+          custodianEmail: users.email,
+        })
+        .from(pettyCashFunds)
+        .leftJoin(costCenters, eq(pettyCashFunds.costCenterId, costCenters.id))
+        .leftJoin(users, eq(pettyCashFunds.custodianId, users.id))
+        .where(eq(pettyCashFunds.tenantId, tenantId));
+    },
+
+    async listPettyCashCustodianUsers(): Promise<Array<{ id: string; name: string; email: string; role: string }>> {
+      return db
+        .select({
+          id: users.id,
+          name: users.name,
+          email: users.email,
+          role: users.role,
+        })
+        .from(users)
+        .where(and(eq(users.tenantId, tenantId), eq(users.isActive, true)))
+        .orderBy(users.name);
+    },
+
+    async createPettyCashFund(params: {
+      costCenterId: string;
+      custodianId: string;
+      imprestAmount: number;
+      createdById: string | null;
+    }): Promise<{ id: string } | { error: string }> {
+      const { costCenterId, custodianId, imprestAmount, createdById } = params;
+      if (!Number.isFinite(imprestAmount) || imprestAmount < 0) return { error: "Invalid imprest amount" };
+      const [cc] = await db
+        .select({ id: costCenters.id })
+        .from(costCenters)
+        .where(and(eq(costCenters.id, costCenterId), eq(costCenters.tenantId, tenantId)))
+        .limit(1);
+      if (!cc) return { error: "Invalid cost center" };
+      const [u] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.id, custodianId), eq(users.tenantId, tenantId), eq(users.isActive, true)))
+        .limit(1);
+      if (!u) return { error: "Invalid custodian" };
+      const [dup] = await db
+        .select({ id: pettyCashFunds.id })
+        .from(pettyCashFunds)
+        .where(and(eq(pettyCashFunds.tenantId, tenantId), eq(pettyCashFunds.costCenterId, costCenterId)))
+        .limit(1);
+      if (dup) return { error: "A petty cash fund already exists for this cost center" };
+      const [row] = await db
+        .insert(pettyCashFunds)
+        .values({
+          tenantId,
+          costCenterId,
+          custodianId,
+          imprestAmount: Math.round(imprestAmount),
+          currentBalance: Math.round(imprestAmount),
+          createdById: createdById ?? null,
+          updatedById: createdById ?? null,
+        })
+        .returning({ id: pettyCashFunds.id });
+      return row ? { id: row.id } : { error: "Failed to create fund" };
+    },
+
+    async createPettyCashReplenishment(params: {
+      fundId: string;
+      expenseIds: string[];
+      payoutMethod: string;
+      payoutRef: string;
+      recordedById: string | null;
+    }): Promise<{ id: string; totalAmount: number } | { error: string }> {
+      const { fundId, expenseIds, payoutMethod, payoutRef, recordedById } = params;
+      const ref = (payoutRef ?? "").trim();
+      if (!ref) return { error: "payoutRef required" };
+      if (!expenseIds.length) return { error: "Select at least one expense" };
+
+      const [fund] = await db
+        .select({
+          id: pettyCashFunds.id,
+          costCenterId: pettyCashFunds.costCenterId,
+          imprestAmount: pettyCashFunds.imprestAmount,
+          currentBalance: pettyCashFunds.currentBalance,
+        })
+        .from(pettyCashFunds)
+        .where(and(eq(pettyCashFunds.id, fundId), eq(pettyCashFunds.tenantId, tenantId)))
+        .limit(1);
+      if (!fund) return { error: "Fund not found" };
+
+      const expRows = await db
+        .select({
+          id: expenses.id,
+          amount: expenses.amount,
+          status: expenses.status,
+          costCenterId: expenses.costCenterId,
+          pettyCashFundId: expenses.pettyCashFundId,
+          pettyCashReplenishmentId: expenses.pettyCashReplenishmentId,
+        })
+        .from(expenses)
+        .where(and(eq(expenses.tenantId, tenantId), inArray(expenses.id, expenseIds)));
+
+      if (expRows.length !== expenseIds.length) return { error: "One or more expenses not found" };
+
+      let total = 0;
+      for (const e of expRows) {
+        if (e.status !== "approved") return { error: "Only approved expenses can be replenished" };
+        if (e.pettyCashReplenishmentId) return { error: "An expense is already included in a replenishment" };
+        if (e.costCenterId !== fund.costCenterId) return { error: "Expense cost center does not match this fund" };
+        if (!e.pettyCashFundId || e.pettyCashFundId !== fund.id) {
+          return { error: "Each expense must be tagged to this petty cash fund (set on the expense before approval)" };
+        }
+        total += e.amount ?? 0;
+      }
+
+      const totalAmount = Math.round(total);
+      if (totalAmount <= 0) return { error: "Invalid total amount" };
+
+      return await db.transaction(async (tx: PgTransaction<any, any, any>) => {
+        const [rep] = await tx
+          .insert(pettyCashReplenishments)
+          .values({
+            tenantId,
+            fundId: fund.id,
+            totalAmount,
+            payoutMethod: payoutMethod || null,
+            payoutRef: ref,
+            recordedById: recordedById ?? null,
+          })
+          .returning({ id: pettyCashReplenishments.id });
+        if (!rep) throw new Error("insert replenishment");
+
+        const now = new Date();
+        for (const e of expRows) {
+          await tx
+            .update(expenses)
+            .set({
+              status: "paid",
+              pettyCashReplenishmentId: rep.id,
+              payoutMethod: payoutMethod || null,
+              payoutRef: ref,
+              payoutAt: now,
+              updatedAt: now,
+            })
+            .where(and(eq(expenses.id, e.id), eq(expenses.tenantId, tenantId)));
+        }
+
+        const newBal = Math.min(fund.imprestAmount, fund.currentBalance + totalAmount);
+        await tx
+          .update(pettyCashFunds)
+          .set({
+            currentBalance: newBal,
+            updatedAt: now,
+            updatedById: recordedById ?? null,
+          })
+          .where(eq(pettyCashFunds.id, fund.id));
+
+        return { id: rep.id, totalAmount };
+      });
+    },
+
+    async listPettyCashReplenishments(limit = 50): Promise<
+      Array<{
+        id: string;
+        fundId: string;
+        totalAmount: number;
+        payoutMethod: string | null;
+        payoutRef: string | null;
+        createdAt: Date;
+        costCenterName: string | null;
+      }>
+    > {
+      return db
+        .select({
+          id: pettyCashReplenishments.id,
+          fundId: pettyCashReplenishments.fundId,
+          totalAmount: pettyCashReplenishments.totalAmount,
+          payoutMethod: pettyCashReplenishments.payoutMethod,
+          payoutRef: pettyCashReplenishments.payoutRef,
+          createdAt: pettyCashReplenishments.createdAt,
+          costCenterName: costCenters.name,
+        })
+        .from(pettyCashReplenishments)
+        .innerJoin(pettyCashFunds, eq(pettyCashReplenishments.fundId, pettyCashFunds.id))
+        .leftJoin(costCenters, eq(pettyCashFunds.costCenterId, costCenters.id))
+        .where(eq(pettyCashReplenishments.tenantId, tenantId))
+        .orderBy(desc(pettyCashReplenishments.createdAt))
+        .limit(Math.min(200, Math.max(1, limit)));
+    },
+
     async submitExpense(id: string, submittedById: string | null): Promise<{ id: string } | null> {
       const existing = await this.getExpense(id);
       if (!existing) return null;
@@ -973,11 +1334,12 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           description: expenses.description,
           costCenterName: costCenters.name,
           categoryName: expenseCategories.name,
+          pettyCashFundId: expenses.pettyCashFundId,
         })
         .from(expenses)
         .leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id))
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
-        .where(eq(expenses.id, id))
+        .where(and(eq(expenses.id, id), eq(expenses.tenantId, tenantId)))
         .limit(1);
       if (!existing) return null;
       if (existing.status !== "pending_approval") return null;
@@ -990,9 +1352,35 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
           approvedAt: new Date(),
           updatedAt: new Date(),
         })
-        .where(eq(expenses.id, id))
+        .where(and(eq(expenses.id, id), eq(expenses.tenantId, tenantId)))
         .returning({ id: expenses.id });
-      return updated ? {
+      if (!updated) return null;
+
+      if (existing.pettyCashFundId) {
+        const [fund] = await db
+          .select({
+            id: pettyCashFunds.id,
+            currentBalance: pettyCashFunds.currentBalance,
+            imprestAmount: pettyCashFunds.imprestAmount,
+          })
+          .from(pettyCashFunds)
+          .where(and(eq(pettyCashFunds.id, existing.pettyCashFundId), eq(pettyCashFunds.tenantId, tenantId)))
+          .limit(1);
+        if (fund) {
+          const amt = existing.amount ?? 0;
+          const newBal = Math.max(0, fund.currentBalance - amt);
+          await db
+            .update(pettyCashFunds)
+            .set({
+              currentBalance: newBal,
+              updatedAt: new Date(),
+              updatedById: approvedById,
+            })
+            .where(eq(pettyCashFunds.id, fund.id));
+        }
+      }
+
+      return {
         ...updated,
         submittedByContactPhone: existing.submittedByContactPhone,
         amount: existing.amount,
@@ -1000,7 +1388,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         description: existing.description,
         costCenterName: existing.costCenterName,
         categoryName: existing.categoryName,
-      } : null;
+      };
     },
 
     async rejectExpense(id: string, approvedById: string, reason: string): Promise<{

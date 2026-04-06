@@ -107,6 +107,31 @@ type AnalyticsData = {
     expenseTrend: number;
     incomeTrend: number;
   };
+  cfoExtended?: {
+    expenseCategoryHhi: number;
+    top3CategorySharePct: number;
+    top3CostCenterSharePct: number;
+    topVendors: Array<{ name: string; amount: number; sharePct: number }>;
+    pendingApprovalAging: {
+      count: number;
+      avgDays: number | null;
+      medianDays: number | null;
+      countOver7Days: number;
+      maxDays: number | null;
+    };
+  };
+};
+
+type CfoInsightsApiResponse = {
+  insights: string | null;
+  insight?: {
+    narrative: string;
+    keyPoints: string[];
+    risks: string[];
+    suggestedActions: string[];
+    model: string;
+  } | null;
+  facts?: unknown;
 };
 
 type PredictionsData = {
@@ -231,7 +256,7 @@ export default function AdminDashboard() {
     enabled: !!tenantId,
   });
 
-  const { data: insights, isLoading: insightsLoading } = useQuery<{ insights: string | null }>({
+  const { data: insights, isLoading: insightsLoading } = useQuery<CfoInsightsApiResponse>({
     queryKey: ["/api/admin/analytics/insights", analyticsParams.toString()],
     queryFn: async () => {
       const res = await fetch(`/api/admin/analytics/insights?${analyticsParams.toString()}`, { credentials: "include" });
@@ -402,24 +427,62 @@ export default function AdminDashboard() {
             />
           </div>
 
-          {/* AI Insights */}
-          {(insightsLoading || insights?.insights) && (
+          {/* AI Insights (CFO-style: narrative + structured bullets) */}
+          {(insightsLoading ||
+            insights?.insights ||
+            insights?.insight?.narrative) && (
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Sparkles className="h-5 w-5" />
                   AI Insights
                 </CardTitle>
-                <CardDescription>AI-generated summary of your financial trends</CardDescription>
+                <CardDescription>
+                  CFO-style interpretation of analytics and MIS (configure GEMINI_API_KEY; optional GEMINI_ANALYSIS_MODEL)
+                </CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-4">
                 {insightsLoading ? (
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" />
                     <span className="text-sm">Generating insights...</span>
                   </div>
-                ) : insights?.insights ? (
-                  <p className="text-sm leading-relaxed">{insights.insights}</p>
+                ) : insights?.insight?.narrative || insights?.insights ? (
+                  <>
+                    <p className="text-sm leading-relaxed">
+                      {insights.insight?.narrative ?? insights.insights}
+                    </p>
+                    {insights.insight?.keyPoints && insights.insight.keyPoints.length > 0 ? (
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground mb-2">Highlights</p>
+                        <ul className="text-sm list-disc pl-5 space-y-1">
+                          {insights.insight.keyPoints.map((k, i) => (
+                            <li key={i}>{k}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                    {insights.insight?.risks && insights.insight.risks.length > 0 ? (
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground mb-2">Risks / watch</p>
+                        <ul className="text-sm list-disc pl-5 space-y-1">
+                          {insights.insight.risks.map((k, i) => (
+                            <li key={i}>{k}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                    {insights.insight?.suggestedActions && insights.insight.suggestedActions.length > 0 ? (
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground mb-2">Suggested actions</p>
+                        <ul className="text-sm list-disc pl-5 space-y-1">
+                          {insights.insight.suggestedActions.map((k, i) => (
+                            <li key={i}>{k}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                  </>
                 ) : (
                   <p className="text-sm text-muted-foreground">AI insights require GEMINI_API_KEY to be configured.</p>
                 )}

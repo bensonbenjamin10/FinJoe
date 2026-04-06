@@ -159,6 +159,22 @@ export const pettyCashFunds = pgTable("petty_cash_funds", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+/** Record of a bank/top-up reimbursement tied to a petty cash fund (audit trail). */
+export const pettyCashReplenishments = pgTable("petty_cash_replenishments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
+  fundId: varchar("fund_id")
+    .notNull()
+    .references(() => pettyCashFunds.id),
+  totalAmount: integer("total_amount").notNull(),
+  payoutMethod: text("payout_method"),
+  payoutRef: text("payout_ref"),
+  recordedById: varchar("recorded_by_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 /** Receipt/proof uploaded from admin UI (stored on disk or inline when no volume). */
 export type ExpenseWebAttachment = {
   storagePath?: string | null;
@@ -212,6 +228,10 @@ export const expenses = pgTable("expenses", {
   voucherNumber: text("voucher_number"),
   bankTransactionId: varchar("bank_transaction_id"),
   recurringTemplateId: varchar("recurring_template_id"),
+  /** When set, this expense is tracked against a petty cash imprest fund (balance decreases on approval). */
+  pettyCashFundId: varchar("petty_cash_fund_id").references(() => pettyCashFunds.id),
+  /** Set when this expense was included in a petty cash replenishment batch (status typically paid). */
+  pettyCashReplenishmentId: varchar("petty_cash_replenishment_id").references(() => pettyCashReplenishments.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -619,6 +639,20 @@ export const cronRuns = pgTable("cron_runs", {
   errorMessage: text("error_message"),
 });
 
+/** Persisted CFO insight runs (weekly cron) for dashboard history / digests */
+export const cfoInsightSnapshots = pgTable("cfo_insight_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  periodStart: varchar("period_start", { length: 10 }).notNull(),
+  periodEnd: varchar("period_end", { length: 10 }).notNull(),
+  factsJson: jsonb("facts_json").$type<Record<string, unknown>>().notNull(),
+  insightJson: jsonb("insight_json").$type<Record<string, unknown>>(),
+  model: text("model"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 /** OAuth + org context for external accounting (Zoho Books, etc.) */
 export const tenantIntegrations = pgTable("tenant_integrations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -717,6 +751,19 @@ export const expenseCategoriesRelations = relations(expenseCategories, ({ many }
   expenses: many(expenses),
 }));
 
+export const pettyCashFundsRelations = relations(pettyCashFunds, ({ one, many }) => ({
+  tenant: one(tenants, { fields: [pettyCashFunds.tenantId], references: [tenants.id] }),
+  costCenter: one(costCenters, { fields: [pettyCashFunds.costCenterId], references: [costCenters.id] }),
+  custodian: one(users, { fields: [pettyCashFunds.custodianId], references: [users.id] }),
+  replenishments: many(pettyCashReplenishments),
+}));
+
+export const pettyCashReplenishmentsRelations = relations(pettyCashReplenishments, ({ one }) => ({
+  tenant: one(tenants, { fields: [pettyCashReplenishments.tenantId], references: [tenants.id] }),
+  fund: one(pettyCashFunds, { fields: [pettyCashReplenishments.fundId], references: [pettyCashFunds.id] }),
+  recordedBy: one(users, { fields: [pettyCashReplenishments.recordedById], references: [users.id] }),
+}));
+
 export const expensesRelations = relations(expenses, ({ one, many }) => ({
   costCenter: one(costCenters, { fields: [expenses.costCenterId], references: [costCenters.id] }),
   vendor: one(vendors, { fields: [expenses.vendorId], references: [vendors.id] }),
@@ -724,6 +771,11 @@ export const expensesRelations = relations(expenses, ({ one, many }) => ({
   submittedBy: one(users, { fields: [expenses.submittedById], references: [users.id] }),
   approvedBy: one(users, { fields: [expenses.approvedById], references: [users.id] }),
   recurringTemplate: one(recurringExpenseTemplates, { fields: [expenses.recurringTemplateId], references: [recurringExpenseTemplates.id] }),
+  pettyCashFund: one(pettyCashFunds, { fields: [expenses.pettyCashFundId], references: [pettyCashFunds.id] }),
+  pettyCashReplenishment: one(pettyCashReplenishments, {
+    fields: [expenses.pettyCashReplenishmentId],
+    references: [pettyCashReplenishments.id],
+  }),
   finJoeTasks: many(finJoeTasks),
 }));
 
@@ -825,6 +877,10 @@ export type Expense = typeof expenses.$inferSelect;
 export type InsertExpense = typeof expenses.$inferInsert;
 export type RecurringExpenseTemplate = typeof recurringExpenseTemplates.$inferSelect;
 export type InsertRecurringExpenseTemplate = typeof recurringExpenseTemplates.$inferInsert;
+
+export type PettyCashReplenishment = typeof pettyCashReplenishments.$inferSelect;
+export type InsertPettyCashReplenishment = typeof pettyCashReplenishments.$inferInsert;
+export type PettyCashFund = typeof pettyCashFunds.$inferSelect;
 
 export type ExpenseWithDetails = Expense & {
   costCenterName?: string | null;

@@ -1357,6 +1357,34 @@ async function executeFunctionCall(
       };
     }
 
+    case "finance_vendor_concentration": {
+      const startDate = String(args.startDate ?? "");
+      const endDate = String(args.endDate ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+        return { success: false, error: "startDate and endDate must be YYYY-MM-DD." };
+      }
+      const campusId = args.campusId ? String(args.campusId) : undefined;
+      const data = await finJoeData.getFinanceVendorConcentration({ startDate, endDate, campusId });
+      return { success: true, data };
+    }
+
+    case "finance_approval_backlog": {
+      const campusId = args.campusId ? String(args.campusId) : undefined;
+      const data = await finJoeData.getFinanceApprovalBacklog({ campusId });
+      return { success: true, data };
+    }
+
+    case "finance_variance_bridge": {
+      const startDate = String(args.startDate ?? "");
+      const endDate = String(args.endDate ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+        return { success: false, error: "startDate and endDate must be YYYY-MM-DD." };
+      }
+      const campusId = args.campusId ? String(args.campusId) : undefined;
+      const data = await finJoeData.getFinanceVarianceBridge({ startDate, endDate, campusId });
+      return { success: true, data };
+    }
+
     case "approve_expense": {
       if (execCtx.contactRole !== "finance" && execCtx.contactRole !== "admin") {
         return { success: false, error: "Only finance or admin can approve expenses." };

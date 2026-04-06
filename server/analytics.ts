@@ -12,6 +12,7 @@ import {
   costCenters,
   pettyCashFunds,
   finJoeRoleChangeRequests,
+  vendors,
 } from "../shared/schema.js";
 import { generateGeminiPredictions } from "../lib/analytics-insights.js";
 
@@ -226,6 +227,8 @@ export async function getAnalytics(filters: AnalyticsFilters) {
   const prevTotalExpenses = prevExpenseSum?.total ?? 0;
   const prevTotalIncome = prevIncomeSum?.total ?? 0;
 
+  const cfoExtended = await getCfoExtendedMetrics(filters, expenseRows, totalExpenses);
+
   return {
     kpis: {
       totalExpenses,
@@ -246,6 +249,124 @@ export async function getAnalytics(filters: AnalyticsFilters) {
       prevNetCashflow: prevTotalIncome - prevTotalExpenses,
       expenseTrend: prevTotalExpenses > 0 ? ((totalExpenses - prevTotalExpenses) / prevTotalExpenses) * 100 : 0,
       incomeTrend: prevTotalIncome > 0 ? ((totalIncome - prevTotalIncome) / prevTotalIncome) * 100 : 0,
+    },
+    cfoExtended,
+  };
+}
+
+export type CfoExtendedMetrics = {
+  expenseCategoryHhi: number;
+  top3CategorySharePct: number;
+  top3CostCenterSharePct: number;
+  topVendors: Array<{ name: string; amount: number; sharePct: number }>;
+  pendingApprovalAging: {
+    count: number;
+    avgDays: number | null;
+    medianDays: number | null;
+    countOver7Days: number;
+    maxDays: number | null;
+  };
+};
+
+type ExpenseRowLite = {
+  amount: number | null;
+  status: string | null;
+  expenseDate: Date | null;
+  categoryName: string | null;
+  costCenterName: string | null;
+};
+
+async function getCfoExtendedMetrics(
+  filters: AnalyticsFilters,
+  expenseRows: ExpenseRowLite[],
+  totalExpenses: number
+): Promise<CfoExtendedMetrics> {
+  const tid = filters.tenantId;
+  const whereExpense = buildExpenseConditions(tid, filters);
+
+  const catAmounts: Record<string, number> = {};
+  const ccAmounts: Record<string, number> = {};
+  for (const r of expenseRows) {
+    const cn = r.categoryName ?? "Uncategorized";
+    const ccn = r.costCenterName ?? "Corporate Office";
+    catAmounts[cn] = (catAmounts[cn] ?? 0) + (r.amount ?? 0);
+    ccAmounts[ccn] = (ccAmounts[ccn] ?? 0) + (r.amount ?? 0);
+  }
+  const catSorted = Object.entries(catAmounts).sort((a, b) => b[1] - a[1]);
+  const ccSorted = Object.entries(ccAmounts).sort((a, b) => b[1] - a[1]);
+  let top3Cat = 0;
+  for (let i = 0; i < Math.min(3, catSorted.length); i++) top3Cat += catSorted[i]![1];
+  let top3Cc = 0;
+  for (let i = 0; i < Math.min(3, ccSorted.length); i++) top3Cc += ccSorted[i]![1];
+  let hhi = 0;
+  for (const [, amt] of catSorted) {
+    if (totalExpenses <= 0) break;
+    const s = amt / totalExpenses;
+    hhi += s * s;
+  }
+
+  const vendorRows = await db
+    .select({
+      amount: expenses.amount,
+      vendorName: expenses.vendorName,
+      vname: vendors.name,
+    })
+    .from(expenses)
+    .leftJoin(vendors, eq(expenses.vendorId, vendors.id))
+    .where(whereExpense);
+
+  const vendorMap: Record<string, number> = {};
+  for (const r of vendorRows) {
+    const name = (r.vendorName?.trim() || r.vname?.trim() || "Unknown vendor").slice(0, 120);
+    vendorMap[name] = (vendorMap[name] ?? 0) + (r.amount ?? 0);
+  }
+  const vendorSorted = Object.entries(vendorMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([name, amount]) => ({
+      name,
+      amount,
+      sharePct: totalExpenses > 0 ? Math.round((amount / totalExpenses) * 1000) / 10 : 0,
+    }));
+
+  const pendingRows = await db
+    .select({ submittedAt: expenses.submittedAt })
+    .from(expenses)
+    .where(and(eq(expenses.status, "pending_approval"), whereExpense));
+
+  const now = Date.now();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const ages: number[] = [];
+  let countOver7 = 0;
+  let maxDays: number | null = null;
+  for (const r of pendingRows) {
+    const submitted = r.submittedAt ? new Date(r.submittedAt).getTime() : 0;
+    if (!submitted) continue;
+    const days = Math.floor((now - submitted) / dayMs);
+    ages.push(days);
+    if (days > 7) countOver7++;
+    if (maxDays === null || days > maxDays) maxDays = days;
+  }
+  ages.sort((a, b) => a - b);
+  const medianDays =
+    ages.length === 0
+      ? null
+      : ages.length % 2 === 1
+        ? ages[(ages.length - 1) / 2]!
+        : Math.round((ages[ages.length / 2 - 1]! + ages[ages.length / 2]!) / 2);
+  const avgDays = ages.length ? Math.round((ages.reduce((a, b) => a + b, 0) / ages.length) * 10) / 10 : null;
+
+  return {
+    expenseCategoryHhi: Math.round(hhi * 1000) / 1000,
+    top3CategorySharePct: totalExpenses > 0 ? Math.round((top3Cat / totalExpenses) * 1000) / 10 : 0,
+    top3CostCenterSharePct: totalExpenses > 0 ? Math.round((top3Cc / totalExpenses) * 1000) / 10 : 0,
+    topVendors: vendorSorted,
+    pendingApprovalAging: {
+      count: pendingRows.length,
+      avgDays,
+      medianDays,
+      countOver7Days: countOver7,
+      maxDays,
     },
   };
 }

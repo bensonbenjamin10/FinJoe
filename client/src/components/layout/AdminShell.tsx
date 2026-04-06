@@ -54,6 +54,7 @@ import {
   ChevronDown,
   TrendingUp,
   Receipt,
+  Wallet,
   Repeat,
   Zap,
   GitCompareArrows,
@@ -74,7 +75,7 @@ interface AdminShellProps {
 export function AdminShell({ children }: AdminShellProps) {
   const [location] = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { user, logout, isTenantAdmin } = useAuth();
+  const { user, logout, isTenantAdmin, canApproveExpenses } = useAuth();
   const { toast } = useToast();
   const [switchOpen, setSwitchOpen] = useState(false);
   const [wantsSalesHelp, setWantsSalesHelp] = useState(false);
@@ -142,6 +143,11 @@ export function AdminShell({ children }: AdminShellProps) {
       ? `/admin/data-handling?tenantId=${encodeURIComponent(urlTenantId)}`
       : "/admin/data-handling";
 
+  const pettyCashHref =
+    isSuperAdmin && urlTenantId
+      ? `/admin/petty-cash?tenantId=${encodeURIComponent(urlTenantId)}`
+      : "/admin/petty-cash";
+
   /** Deep-link to dashboard users (scalable path; same destination as legacy `/admin/team`). */
   const teamHref = finjoePathWithTenant(FINJOE_PATHS.peopleUsers, tenantId, isSuperAdmin);
 
@@ -151,6 +157,7 @@ export function AdminShell({ children }: AdminShellProps) {
     ...(isTenantAdmin ? [{ href: teamHref, label: "Team", icon: Users }] : []),
     { href: finjoeHref, label: "FinJoe", icon: MessageCircle },
     { href: "/admin/expenses", label: "Expenses", icon: Receipt },
+    ...(canApproveExpenses ? [{ href: pettyCashHref, label: "Petty Cash", icon: Wallet }] : []),
     { href: "/admin/recurring-templates", label: "Recurring Expenses", icon: Repeat },
     { href: "/admin/income", label: "Income", icon: TrendingUp },
     { href: "/admin/recurring-income-templates", label: "Recurring Income", icon: Repeat },

@@ -1,9 +1,11 @@
 /**
  * AI-powered analytics insights using Gemini.
- * Generates a 2-3 sentence narrative explaining trends from analytics data.
+ * Dashboard CFO insights use GEMINI_ANALYSIS_MODEL (default: gemini-3.1-pro-preview).
+ * Predictions use the same analysis model when set, else GEMINI_MODEL.
  */
 
 import { GoogleGenAI } from "@google/genai";
+import type { CfoInsightPayload, CfoStructuredInsightResult } from "./cfo-insight-types.js";
 
 export type AnalyticsSummary = {
   totalExpenses: number;
@@ -129,9 +131,40 @@ const PREDICTION_RESPONSE_SCHEMA = {
   ],
 } as const;
 
-const MAX_PREDICTION_CONTEXT_CHARS = 60_000;
+const CFO_INSIGHT_RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    narrative: {
+      type: "string",
+      description: "2-4 sentence executive summary; use ₹ (Indian) for amounts; cite only provided numbers.",
+    },
+    keyPoints: {
+      type: "array",
+      items: { type: "string" },
+      description: "3-6 bullet-style short facts (no invented figures).",
+    },
+    risks: {
+      type: "array",
+      items: { type: "string" },
+      description: "0-4 risk or watch items grounded in the data.",
+    },
+    suggestedActions: {
+      type: "array",
+      items: { type: "string" },
+      description: "0-4 practical next steps for finance (e.g. review vendor, speed approvals).",
+    },
+  },
+  required: ["narrative", "keyPoints", "risks", "suggestedActions"],
+} as const;
+
+const MAX_PREDICTION_CONTEXT_CHARS = 200_000;
 
 let ai: GoogleGenAI | null = null;
+
+/** Model for FP&A / dashboard analysis (insights, predictions). WhatsApp worker uses GEMINI_MODEL separately. */
+export function getGeminiAnalysisModel(): string {
+  return process.env.GEMINI_ANALYSIS_MODEL || "gemini-3.1-pro-preview";
+}
 
 function getGemini(): GoogleGenAI | null {
   if (!ai) {
@@ -143,8 +176,7 @@ function getGemini(): GoogleGenAI | null {
 }
 
 /**
- * Generate a 2-3 sentence AI narrative explaining the analytics trends.
- * Returns null if GEMINI_API_KEY is not set or the API fails.
+ * Legacy: thin narrative from summary only. Prefer `generateCfoStructuredInsights(payload)` with full payload.
  */
 export async function generateAnalyticsInsights(summary: AnalyticsSummary): Promise<string | null> {
   const gemini = getGemini();
@@ -170,11 +202,62 @@ Write 2-3 sentences. No bullet points. Plain prose.`;
 
   try {
     const response = await gemini.models.generateContent({
-      model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
+      model: getGeminiAnalysisModel(),
       contents: prompt,
     });
     const text = (response as { text?: string }).text ?? "";
     return text.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * CFO-style structured insights from deterministic payload (analytics + optional MIS slice).
+ * Numbers must match the JSON; do not invent totals.
+ */
+export async function generateCfoStructuredInsights(payload: CfoInsightPayload): Promise<CfoStructuredInsightResult | null> {
+  const gemini = getGemini();
+  if (!gemini) return null;
+
+  const model = getGeminiAnalysisModel();
+  const json = JSON.stringify(payload);
+  if (json.length > MAX_PREDICTION_CONTEXT_CHARS) {
+    return null;
+  }
+
+  const prompt = `You are a senior CFO / FP&A advisor for an Indian organization. Interpret ONLY the financial facts in the JSON below.
+
+Rules:
+- Use Indian Rupee (₹) formatting in prose; numbers must match the JSON.
+- Do not invent vendors, amounts, or dates not present.
+- MIS block (if present) is management-reporting view aligned with FinJoe MIS (P&L / cashflow).
+- Highlight concentration (HHI, top-3 shares), approval aging, and MIS EBITDA / revenue if relevant.
+- Keep narrative concise; keyPoints are short (one line each).
+
+FINANCIAL_FACTS_JSON:
+${json}`;
+
+  try {
+    const response = await gemini.models.generateContent({
+      model,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseJsonSchema: CFO_INSIGHT_RESPONSE_SCHEMA as any,
+      },
+    });
+
+    const text = (response as { text?: string }).text ?? "";
+    if (!text.trim()) return null;
+    const parsed = JSON.parse(text) as Omit<CfoStructuredInsightResult, "model">;
+    return {
+      narrative: String(parsed.narrative ?? "").trim(),
+      keyPoints: Array.isArray(parsed.keyPoints) ? parsed.keyPoints.map((x) => String(x)) : [],
+      risks: Array.isArray(parsed.risks) ? parsed.risks.map((x) => String(x)) : [],
+      suggestedActions: Array.isArray(parsed.suggestedActions) ? parsed.suggestedActions.map((x) => String(x)) : [],
+      model,
+    };
   } catch {
     return null;
   }
@@ -186,7 +269,7 @@ export async function generateGeminiPredictions(input: GeminiPredictionInput): P
 
   const horizonDays = Math.min(90, Math.max(1, Math.round(input.horizonDays || 30)));
   const today = new Date().toISOString().slice(0, 10);
-  const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+  const model = process.env.GEMINI_ANALYSIS_MODEL || process.env.GEMINI_MODEL || "gemini-3.1-pro-preview";
 
   const expenseTransactions = input.expenseTransactions.slice(-240);
   const incomeTransactions = input.incomeTransactions.slice(-240);

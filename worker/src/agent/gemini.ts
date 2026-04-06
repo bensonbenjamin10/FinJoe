@@ -458,6 +458,46 @@ const FINJOE_FUNCTION_DECLARATIONS = [
       required: [],
     },
   },
+  {
+    name: "finance_vendor_concentration",
+    description:
+      "Read-only analyst: top vendors by expense amount and share % for a date range. Use when user asks about vendor concentration, supplier mix, or who we pay most.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        startDate: { type: Type.STRING, description: "YYYY-MM-DD" },
+        endDate: { type: Type.STRING, description: "YYYY-MM-DD" },
+        campusId: { type: Type.STRING, description: "Optional cost center filter" },
+      },
+      required: ["startDate", "endDate"],
+    },
+  },
+  {
+    name: "finance_approval_backlog",
+    description:
+      "Read-only analyst: pending approval queue — count, average/median age in days, how many older than 7 days. Use for approval backlog or SLA questions.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        campusId: { type: Type.STRING, description: "Optional cost center filter" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "finance_variance_bridge",
+    description:
+      "Read-only analyst: compare total expenses, income, and net for a period vs the immediately preceding period of equal length (variance bridge). Use for 'vs last month' style questions with explicit dates.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        startDate: { type: Type.STRING, description: "YYYY-MM-DD" },
+        endDate: { type: Type.STRING, description: "YYYY-MM-DD" },
+        campusId: { type: Type.STRING, description: "Optional cost center filter" },
+      },
+      required: ["startDate", "endDate"],
+    },
+  },
   // Approve/reject (finance, admin)
   {
     name: "approve_expense",
@@ -592,7 +632,16 @@ const FINJOE_FUNCTION_DECLARATIONS = [
 
 const BASE_TOOLS = ["create_expense", "create_income", "create_role_change_request", "store_pending_expense", "store_pending_role_change", "confirm_expense", "confirm_income"];
 const READ_TOOLS = ["list_expenses", "list_incomes", "list_bank_transactions", "get_expense", "submit_expense", "update_expense", "delete_expense", "list_pending_approvals", "list_role_change_requests", "search_expenses", "semantic_search_expenses", "bulk_create_expenses"];
-const ANALYTICS_TOOLS = ["expense_summary", "pending_workload", "petty_cash_summary", "dashboard_summary", "predict_cash_requirement"];
+const ANALYTICS_TOOLS = [
+  "expense_summary",
+  "pending_workload",
+  "petty_cash_summary",
+  "dashboard_summary",
+  "predict_cash_requirement",
+  "finance_vendor_concentration",
+  "finance_approval_backlog",
+  "finance_variance_bridge",
+];
 const APPROVE_TOOLS = ["approve_expense", "reject_expense", "approve_role_request", "reject_role_request", "record_payout"];
 const RECURRING_TOOLS = ["create_recurring_template", "list_recurring_templates", "update_recurring_template", "delete_recurring_template"];
 

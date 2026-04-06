@@ -113,6 +113,20 @@
       "when": 1774118010000,
       "tag": "0015_tenant_waba_whatsapp_from_unique_active",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1774118020000,
+      "tag": "0016_petty_cash_replenishment",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1774118030000,
+      "tag": "0017_cfo_insight_snapshots",
+      "breakpoints": true
     }
   ]
 }

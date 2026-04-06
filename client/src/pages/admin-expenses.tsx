@@ -256,38 +256,58 @@ function ExpenseAttachmentsPanel({ expenseId, tenantId }: { expenseId: string; t
 }
 function PettyCashTab({
   funds,
-  students,
-  campuses,
-  approvedExpenses,
+  custodianUsers,
+  costCenters,
+  expenses,
+  costCenterLabel,
   onCreateFund,
   onCreateReplenishment,
   isCreateFundPending,
   isCreateReplenishmentPending,
 }: {
-  funds: Array<{ id: string; campusId: string; custodianId: string; imprestAmount: number; currentBalance: number }>;
-  students: Array<{ id: string; name?: string; email: string }>;
-  campuses: Campus[];
-  approvedExpenses: ExpenseWithDetails[];
-  onCreateFund: (data: { campusId: string; custodianId: string; imprestAmount: number }) => void;
+  funds: Array<{
+    id: string;
+    costCenterId: string;
+    custodianId: string;
+    imprestAmount: number;
+    currentBalance: number;
+    costCenterName?: string | null;
+    custodianName?: string | null;
+  }>;
+  custodianUsers: Array<{ id: string; name?: string; email: string }>;
+  costCenters: Campus[];
+  expenses: ExpenseWithDetails[];
+  costCenterLabel: string;
+  onCreateFund: (data: { costCenterId: string; custodianId: string; imprestAmount: number }) => void;
   onCreateReplenishment: (data: { fundId: string; expenseIds: string[]; payoutMethod: string; payoutRef: string }) => void;
   isCreateFundPending: boolean;
   isCreateReplenishmentPending: boolean;
 }) {
   const [fundDialog, setFundDialog] = useState(false);
-  const [fundForm, setFundForm] = useState({ campusId: "", custodianId: "", imprestAmount: "" });
+  const [fundForm, setFundForm] = useState({ costCenterId: "", custodianId: "", imprestAmount: "" });
   const [replenishDialog, setReplenishDialog] = useState<{ fundId: string } | null>(null);
   const [replenishForm, setReplenishForm] = useState({ payoutMethod: "bank_transfer", payoutRef: "" });
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  const campusById = new Map(campuses.map((c) => [c.id, c]));
-  const studentById = new Map(students.map((s) => [s.id, s]));
+  const costCenterById = new Map(costCenters.map((c) => [c.id, c]));
+  const custodianById = new Map(custodianUsers.map((s) => [s.id, s]));
+
+  const approvedForFund = (fundId: string) =>
+    expenses.filter(
+      (e) =>
+        e.status === "approved" &&
+        e.pettyCashFundId === fundId &&
+        !e.pettyCashReplenishmentId
+    );
+
+  const replenishPool = replenishDialog ? approvedForFund(replenishDialog.fundId) : [];
 
   const handleCreateFund = (e: React.FormEvent) => {
     e.preventDefault();
     const amt = parseInt(fundForm.imprestAmount, 10);
-    if (!fundForm.campusId || !fundForm.custodianId || isNaN(amt) || amt < 0) return;
-    onCreateFund({ campusId: fundForm.campusId, custodianId: fundForm.custodianId, imprestAmount: amt });
-    setFundForm({ campusId: "", custodianId: "", imprestAmount: "" });
+    if (!fundForm.costCenterId || !fundForm.custodianId || isNaN(amt) || amt < 0) return;
+    onCreateFund({ costCenterId: fundForm.costCenterId, custodianId: fundForm.custodianId, imprestAmount: amt });
+    setFundForm({ costCenterId: "", custodianId: "", imprestAmount: "" });
     setFundDialog(false);
   };
 
@@ -314,11 +334,11 @@ function PettyCashTab({
   };
 
   const selectAll = () => {
-    if (selectedIds.size === approvedExpenses.length) setSelectedIds(new Set());
-    else setSelectedIds(new Set(approvedExpenses.map((e) => e.id)));
+    if (selectedIds.size === replenishPool.length) setSelectedIds(new Set());
+    else setSelectedIds(new Set(replenishPool.map((e) => e.id)));
   };
 
-  const selectedTotal = approvedExpenses
+  const selectedTotal = replenishPool
     .filter((e) => selectedIds.has(e.id))
     .reduce((sum, e) => sum + e.amount, 0);
 
@@ -331,7 +351,8 @@ function PettyCashTab({
             Petty Cash Funds
           </CardTitle>
           <CardDescription>
-            Manage imprest funds per campus and custodian. Record replenishments when coordinators submit approved expenses.
+            Manage imprest per {costCenterLabel.toLowerCase()} and custodian. Tag expenses with this fund before approval; then record replenishments
+            when reimbursing the custodian (restores float up to imprest).
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -342,7 +363,7 @@ function PettyCashTab({
           <Table className="mt-4">
             <TableHeader>
               <TableRow>
-                <TableHead>Campus</TableHead>
+                <TableHead>{costCenterLabel}</TableHead>
                 <TableHead>Custodian</TableHead>
                 <TableHead>Imprest (₹)</TableHead>
                 <TableHead>Balance (₹)</TableHead>
@@ -350,24 +371,32 @@ function PettyCashTab({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {funds.map((f) => (
-                <TableRow key={f.id}>
-                  <TableCell>{campusById.get(f.campusId)?.name ?? f.campusId}</TableCell>
-                  <TableCell>{(studentById.get(f.custodianId)?.name || studentById.get(f.custodianId)?.email) ?? f.custodianId}</TableCell>
-                  <TableCell>₹ {f.imprestAmount.toLocaleString("en-IN")}</TableCell>
-                  <TableCell>₹ {f.currentBalance.toLocaleString("en-IN")}</TableCell>
-                  <TableCell>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setReplenishDialog({ fundId: f.id })}
-                      disabled={approvedExpenses.length === 0}
-                    >
-                      Replenish
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {funds.map((f) => {
+                const pool = approvedForFund(f.id);
+                return (
+                  <TableRow key={f.id}>
+                    <TableCell>{f.costCenterName ?? costCenterById.get(f.costCenterId)?.name ?? f.costCenterId}</TableCell>
+                    <TableCell>
+                      {(custodianById.get(f.custodianId)?.name || custodianById.get(f.custodianId)?.email) ?? f.custodianId}
+                    </TableCell>
+                    <TableCell>₹ {f.imprestAmount.toLocaleString("en-IN")}</TableCell>
+                    <TableCell>₹ {f.currentBalance.toLocaleString("en-IN")}</TableCell>
+                    <TableCell>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setSelectedIds(new Set());
+                          setReplenishDialog({ fundId: f.id });
+                        }}
+                        disabled={pool.length === 0}
+                      >
+                        Replenish
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
           {funds.length === 0 && (
@@ -380,15 +409,15 @@ function PettyCashTab({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create Petty Cash Fund</DialogTitle>
-            <DialogDescription>Set up an imprest fund for a campus custodian.</DialogDescription>
+            <DialogDescription>Set up an imprest fund for a {costCenterLabel.toLowerCase()} custodian.</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleCreateFund} className="space-y-4">
             <div>
-              <Label>Campus *</Label>
-              <Select value={fundForm.campusId} onValueChange={(v) => setFundForm((f) => ({ ...f, campusId: v }))} required>
-                <SelectTrigger><SelectValue placeholder="Select campus" /></SelectTrigger>
+              <Label>{costCenterLabel} *</Label>
+              <Select value={fundForm.costCenterId} onValueChange={(v) => setFundForm((f) => ({ ...f, costCenterId: v }))} required>
+                <SelectTrigger><SelectValue placeholder={`Select ${costCenterLabel.toLowerCase()}`} /></SelectTrigger>
                 <SelectContent>
-                  {campuses.map((c) => (
+                  {costCenters.map((c) => (
                     <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                   ))}
                 </SelectContent>
@@ -399,7 +428,7 @@ function PettyCashTab({
               <Select value={fundForm.custodianId} onValueChange={(v) => setFundForm((f) => ({ ...f, custodianId: v }))} required>
                 <SelectTrigger><SelectValue placeholder="Select custodian" /></SelectTrigger>
                 <SelectContent>
-                  {students.map((s) => (
+                  {custodianUsers.map((s) => (
                     <SelectItem key={s.id} value={s.id}>{s.name || s.email}</SelectItem>
                   ))}
                 </SelectContent>
@@ -430,44 +459,52 @@ function PettyCashTab({
           <DialogHeader>
             <DialogTitle>Record Replenishment</DialogTitle>
             <DialogDescription>
-              Select approved expenses to include in this replenishment. Enter UTR/transaction reference after payment.
+              Select approved expenses tagged to this fund. Enter UTR or reference after payment to the custodian.
             </DialogDescription>
           </DialogHeader>
           {replenishDialog && (
             <>
               <div className="space-y-2">
-                <Button variant="outline" size="sm" onClick={selectAll}>
-                  {selectedIds.size === approvedExpenses.length ? "Deselect all" : "Select all"}
+                <Button variant="outline" size="sm" onClick={selectAll} disabled={replenishPool.length === 0}>
+                  {selectedIds.size === replenishPool.length && replenishPool.length > 0 ? "Deselect all" : "Select all"}
                 </Button>
-                <div className="max-h-48 overflow-auto border rounded">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-10"></TableHead>
-                        <TableHead>Date</TableHead>
-                        <TableHead>Description</TableHead>
-                        <TableHead>Amount</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {approvedExpenses.map((e) => (
-                        <TableRow key={e.id}>
-                          <TableCell>
-                            <input
-                              type="checkbox"
-                              checked={selectedIds.has(e.id)}
-                              onChange={() => toggleSelect(e.id)}
-                            />
-                          </TableCell>
-                          <TableCell>{formatIsoDate(e.expenseDate, "dd MMM yyyy")}</TableCell>
-                          <TableCell>{e.description || e.particulars || "—"}</TableCell>
-                          <TableCell>₹ {e.amount.toLocaleString("en-IN")}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-                <p className="text-sm font-medium">Selected total: ₹ {selectedTotal.toLocaleString("en-IN")}</p>
+                {replenishPool.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-4">
+                    No approved expenses linked to this fund. Edit a draft expense, set the petty cash fund to match this {costCenterLabel.toLowerCase()}, then submit and approve.
+                  </p>
+                ) : (
+                  <>
+                    <div className="max-h-48 overflow-auto border rounded">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-10"></TableHead>
+                            <TableHead>Date</TableHead>
+                            <TableHead>Description</TableHead>
+                            <TableHead>Amount</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {replenishPool.map((e) => (
+                            <TableRow key={e.id}>
+                              <TableCell>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedIds.has(e.id)}
+                                  onChange={() => toggleSelect(e.id)}
+                                />
+                              </TableCell>
+                              <TableCell>{formatIsoDate(e.expenseDate, "dd MMM yyyy")}</TableCell>
+                              <TableCell>{e.description || e.particulars || "—"}</TableCell>
+                              <TableCell>₹ {e.amount.toLocaleString("en-IN")}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    <p className="text-sm font-medium">Selected total: ₹ {selectedTotal.toLocaleString("en-IN")}</p>
+                  </>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -524,9 +561,14 @@ export default function AdminExpenses() {
   const [searchParams] = useSearchParams();
   const isSuperAdmin = user?.role === "super_admin";
   const urlTenantId = searchParams.get("tenantId");
+  const tabFromUrl = searchParams.get("tab");
   const tenantId = isSuperAdmin ? (urlTenantId || user?.tenantId || null) : user?.tenantId ?? null;
   const { costCenterLabel } = useCostCenterLabel(tenantId);
   const [activeTab, setActiveTab] = useState("list");
+
+  useEffect(() => {
+    if (tabFromUrl === "petty-cash" && canApproveExpenses) setActiveTab("petty-cash");
+  }, [tabFromUrl, canApproveExpenses]);
   const [filters, setFilters] = useState({
     campusId: "all",
     status: "all",
@@ -548,6 +590,7 @@ export default function AdminExpenses() {
     gstin: "",
     taxType: "",
     voucherNumber: "",
+    pettyCashFundId: "" as string,
   });
   const [actionMenu, setActionMenu] = useState<{ expense: ExpenseWithDetails; open: boolean } | null>(null);
   const [approveDialog, setApproveDialog] = useState<ExpenseWithDetails | null>(null);
@@ -666,15 +709,32 @@ export default function AdminExpenses() {
     enabled: !!tenantId && canImportExpenses,
   });
 
-  const { data: pettyCashFunds = [] } = useQuery<any[]>({
-    queryKey: ["/api/admin/petty-cash/funds"],
+  const { data: pettyCashFunds = [] } = useQuery<
+    Array<{
+      id: string;
+      costCenterId: string;
+      custodianId: string;
+      imprestAmount: number;
+      currentBalance: number;
+      costCenterName?: string | null;
+    }>
+  >({
+    queryKey: ["/api/admin/petty-cash/funds", tenantId],
     queryFn: async () => {
-      const res = await fetch("/api/admin/petty-cash/funds");
+      const res = await fetch(`/api/admin/petty-cash/funds${qs}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
-    enabled: canImportExpenses,
+    enabled: !!tenantId && canApproveExpenses,
   });
+
+  const pettyFundsForCreate = useMemo(
+    () =>
+      createForm.campusId && createForm.campusId !== "__corporate__"
+        ? pettyCashFunds.filter((f) => f.costCenterId === createForm.campusId)
+        : [],
+    [pettyCashFunds, createForm.campusId]
+  );
 
   const { data: vendorSuggestions = [] } = useQuery<string[]>({
     queryKey: ["/api/admin/expenses/vendor-suggestions", tenantId],
@@ -686,19 +746,19 @@ export default function AdminExpenses() {
     enabled: !!tenantId,
   });
 
-  const { data: studentsForAdmin = [] } = useQuery<any[]>({
-    queryKey: ["/api/admin/petty-cash/custodians"],
+  const { data: custodianUsers = [] } = useQuery<Array<{ id: string; name: string; email: string; role: string }>>({
+    queryKey: ["/api/admin/petty-cash/custodians", tenantId],
     queryFn: async () => {
-      const res = await fetch("/api/admin/petty-cash/custodians");
+      const res = await fetch(`/api/admin/petty-cash/custodians${qs}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
-    enabled: canImportExpenses,
+    enabled: !!tenantId && canApproveExpenses,
   });
 
   const createFundMutation = useMutation({
-    mutationFn: async (data: { campusId: string; custodianId: string; imprestAmount: number }) => {
-      const res = await apiRequest("POST", "/api/admin/petty-cash/funds", data);
+    mutationFn: async (data: { costCenterId: string; custodianId: string; imprestAmount: number }) => {
+      const res = await apiRequest("POST", "/api/admin/petty-cash/funds", { ...data, tenantId });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to create fund");
@@ -714,7 +774,7 @@ export default function AdminExpenses() {
 
   const createReplenishmentMutation = useMutation({
     mutationFn: async (data: { fundId: string; expenseIds: string[]; payoutMethod: string; payoutRef: string }) => {
-      const res = await apiRequest("POST", "/api/admin/petty-cash/replenishments", data);
+      const res = await apiRequest("POST", "/api/admin/petty-cash/replenishments", { ...data, tenantId });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to create replenishment");
@@ -724,6 +784,7 @@ export default function AdminExpenses() {
     onSuccess: () => {
       setExpenseOffset(0);
       queryClient.invalidateQueries({ queryKey: ["/api/admin/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/petty-cash/funds"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/petty-cash/replenishments"] });
       toast({ title: "Replenishment recorded" });
     },
@@ -754,7 +815,20 @@ export default function AdminExpenses() {
     onSuccess: () => {
       setExpenseOffset(0);
       queryClient.invalidateQueries({ queryKey: ["/api/admin/expenses"] });
-      setCreateForm({ campusId: "__corporate__", categoryId: "", amount: "", expenseDate: new Date(), description: "", invoiceNumber: "", invoiceDate: "", vendorName: "", gstin: "", taxType: "", voucherNumber: "" });
+      setCreateForm({
+        campusId: "__corporate__",
+        categoryId: "",
+        amount: "",
+        expenseDate: new Date(),
+        description: "",
+        invoiceNumber: "",
+        invoiceDate: "",
+        vendorName: "",
+        gstin: "",
+        taxType: "",
+        voucherNumber: "",
+        pettyCashFundId: "",
+      });
       setActiveTab("list");
       toast({ title: "Expense created" });
     },
@@ -922,6 +996,7 @@ export default function AdminExpenses() {
       gstin: createForm.gstin || undefined,
       taxType: createForm.taxType || undefined,
       voucherNumber: createForm.voucherNumber || undefined,
+      pettyCashFundId: createForm.pettyCashFundId || undefined,
       status: "draft",
     };
     if (finjoeSettings?.requireConfirmationBeforePost) {
@@ -987,7 +1062,7 @@ export default function AdminExpenses() {
               <TabsTrigger value="create">Create</TabsTrigger>
               <TabsTrigger value="categories">Categories</TabsTrigger>
               {canImportExpenses && <TabsTrigger value="export">Export</TabsTrigger>}
-              {canImportExpenses && <TabsTrigger value="petty-cash">Petty Cash</TabsTrigger>}
+              {canApproveExpenses && <TabsTrigger value="petty-cash">Petty Cash</TabsTrigger>}
             </TabsList>
 
             <TabsContent value="list">
@@ -1291,7 +1366,7 @@ export default function AdminExpenses() {
                   <Label>Campus</Label>
                   <Select
                     value={createForm.campusId}
-                    onValueChange={(v) => setCreateForm((f) => ({ ...f, campusId: v }))}
+                    onValueChange={(v) => setCreateForm((f) => ({ ...f, campusId: v, pettyCashFundId: "" }))}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select campus (optional)" />
@@ -1306,6 +1381,30 @@ export default function AdminExpenses() {
                     </SelectContent>
                   </Select>
                 </div>
+                {pettyFundsForCreate.length > 0 && (
+                  <div>
+                    <Label>Petty cash fund (optional)</Label>
+                    <Select
+                      value={createForm.pettyCashFundId || "__none__"}
+                      onValueChange={(v) => setCreateForm((f) => ({ ...f, pettyCashFundId: v === "__none__" ? "" : v }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Not paid from petty cash" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">Not paid from petty cash</SelectItem>
+                        {pettyFundsForCreate.map((f) => (
+                          <SelectItem key={f.id} value={f.id}>
+                            Imprest ₹{f.imprestAmount.toLocaleString("en-IN")} — balance ₹{f.currentBalance.toLocaleString("en-IN")}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      When set, approving this expense reduces the fund balance; record replenishment later to restore float.
+                    </p>
+                  </div>
+                )}
                 <div>
                   <Label>Category *</Label>
                   <Select
@@ -1567,13 +1666,14 @@ export default function AdminExpenses() {
               </Card>
             </TabsContent>
 
-            {canImportExpenses && (
+            {canApproveExpenses && (
               <TabsContent value="petty-cash">
                 <PettyCashTab
                   funds={pettyCashFunds}
-                  students={studentsForAdmin}
-                  campuses={campuses}
-                  approvedExpenses={expenses.filter((e) => e.status === "approved")}
+                  custodianUsers={custodianUsers}
+                  costCenters={campuses}
+                  expenses={expenses}
+                  costCenterLabel={costCenterLabel}
                   onCreateFund={(data) => createFundMutation.mutate(data)}
                   onCreateReplenishment={(data) => createReplenishmentMutation.mutate(data)}
                   isCreateFundPending={createFundMutation.isPending}
@@ -1852,6 +1952,8 @@ export default function AdminExpenses() {
               tenantId={tenantId}
               categories={categories}
               campuses={campuses}
+              pettyCashFunds={pettyCashFunds}
+              costCenterLabel={costCenterLabel}
               vendorSuggestions={vendorSuggestions}
               onSave={(data) => updateExpenseMutation.mutate({ id: editExpenseDialog.id, data })}
               onCancel={() => setEditExpenseDialog(null)}
@@ -1949,6 +2051,8 @@ function EditExpenseForm({
   tenantId,
   categories,
   campuses,
+  pettyCashFunds,
+  costCenterLabel,
   vendorSuggestions = [],
   onSave,
   onCancel,
@@ -1958,13 +2062,15 @@ function EditExpenseForm({
   tenantId: string | null;
   categories: ExpenseCategory[];
   campuses: Campus[];
+  pettyCashFunds: Array<{ id: string; costCenterId: string; costCenterName?: string | null; imprestAmount: number; currentBalance: number }>;
+  costCenterLabel: string;
   vendorSuggestions?: string[];
   onSave: (data: Record<string, unknown>) => void;
   onCancel: () => void;
   isPending: boolean;
 }) {
   const { toast } = useToast();
-  const [campusId, setCampusId] = useState(expense.campusId ?? "__corporate__");
+  const [campusId, setCampusId] = useState(expense.costCenterId ?? "__corporate__");
   const [categoryId, setCategoryId] = useState(expense.categoryId);
   const [amount, setAmount] = useState(String(expense.amount));
   const [expenseDate, setExpenseDate] = useState(parseIsoToDate(expense.expenseDate) ?? new Date());
@@ -1975,6 +2081,12 @@ function EditExpenseForm({
   const [gstin, setGstin] = useState((expense as any).gstin ?? "");
   const [taxType, setTaxType] = useState((expense as any).taxType ?? "");
   const [voucherNumber, setVoucherNumber] = useState((expense as any).voucherNumber ?? "");
+  const [pettyCashFundId, setPettyCashFundId] = useState(expense.pettyCashFundId ?? "");
+
+  const pettyFundsEdit = useMemo(
+    () => (campusId && campusId !== "__corporate__" ? pettyCashFunds.filter((f) => f.costCenterId === campusId) : []),
+    [campusId, pettyCashFunds]
+  );
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1982,7 +2094,7 @@ function EditExpenseForm({
       toast({ title: "Validation error", description: "Category and a valid amount are required", variant: "destructive" });
       return;
     }
-    onSave({
+    const payload: Record<string, unknown> = {
       campusId: (campusId && campusId !== "__corporate__") ? campusId : null,
       categoryId,
       amount: Math.round(parseFloat(amount)),
@@ -1994,15 +2106,25 @@ function EditExpenseForm({
       gstin: gstin || undefined,
       taxType: taxType || undefined,
       voucherNumber: voucherNumber || undefined,
-    });
+    };
+    if (expense.status === "draft" || expense.status === "pending_approval") {
+      payload.pettyCashFundId = pettyCashFundId || null;
+    }
+    onSave(payload);
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <Label>Campus</Label>
-        <Select value={campusId} onValueChange={setCampusId}>
-          <SelectTrigger><SelectValue placeholder="Campus" /></SelectTrigger>
+        <Label>{costCenterLabel}</Label>
+        <Select
+          value={campusId}
+          onValueChange={(v) => {
+            setCampusId(v);
+            setPettyCashFundId("");
+          }}
+        >
+          <SelectTrigger><SelectValue placeholder={costCenterLabel} /></SelectTrigger>
           <SelectContent>
             <SelectItem value="__corporate__">Corporate Office</SelectItem>
             {campuses.map((c) => (
@@ -2011,6 +2133,25 @@ function EditExpenseForm({
           </SelectContent>
         </Select>
       </div>
+      {pettyFundsEdit.length > 0 && (expense.status === "draft" || expense.status === "pending_approval") && (
+        <div>
+          <Label>Petty cash fund (optional)</Label>
+          <Select
+            value={pettyCashFundId || "__none__"}
+            onValueChange={(v) => setPettyCashFundId(v === "__none__" ? "" : v)}
+          >
+            <SelectTrigger><SelectValue placeholder="Not from petty cash" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">Not from petty cash</SelectItem>
+              {pettyFundsEdit.map((f) => (
+                <SelectItem key={f.id} value={f.id}>
+                  ₹{f.imprestAmount.toLocaleString("en-IN")} imprest — ₹{f.currentBalance.toLocaleString("en-IN")} balance
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
       <div>
         <Label>Category *</Label>
         <Select value={categoryId} onValueChange={setCategoryId}>

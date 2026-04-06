@@ -96,7 +96,8 @@ function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-function fyMonths(fyStartYear: number, fyStartMonth: number): { labels: string[]; startDates: string[]; endDates: string[] } {
+/** Exported for MIS period slicing (CFO insights) — FY month boundaries. */
+export function fyMonths(fyStartYear: number, fyStartMonth: number): { labels: string[]; startDates: string[]; endDates: string[] } {
   const labels: string[] = [];
   const startDates: string[] = [];
   const endDates: string[] = [];

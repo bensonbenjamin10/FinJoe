@@ -8,6 +8,7 @@ import { setupAuth } from "./auth.js";
 import { setupVite, serveStatic } from "./vite.js";
 import { handleWebhook } from "../worker/src/webhook.js";
 import { runWeeklyInsights } from "../worker/src/weekly-insights.js";
+import { runCfoInsightSnapshots } from "./cfo-snapshot-job.js";
 import { generateExpensesFromTemplates, generateIncomeFromTemplates } from "../lib/finjoe-data.js";
 import { runBackfillEmbeddings } from "../lib/backfill-embeddings.js";
 import { db, pool } from "./db.js";
@@ -128,6 +129,22 @@ app.get("/cron/weekly-insights", async (req, res) => {
   } catch (err) {
     logger.error("Weekly insights cron error", { err: String(err) });
     res.status(500).json({ error: "Failed to run weekly insights" });
+  }
+});
+
+// Cron: persist CFO insight snapshots (weekly; complements WhatsApp weekly-insights)
+app.get("/cron/cfo-insight-snapshots", async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.query?.secret !== secret) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  try {
+    const result = await runCfoInsightSnapshots();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error("CFO insight snapshots cron error", { err: String(err) });
+    res.status(500).json({ error: "Failed to run CFO insight snapshots" });
   }
 });
 

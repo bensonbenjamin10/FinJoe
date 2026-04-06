@@ -168,7 +168,8 @@ Environment ID (production): `f20a159b-afa1-4942-b34b-e5405054effa`
 | `APP_BASE_URL` | Yes | Base URL after Zoho OAuth redirect (e.g. `https://finjoe.app`) |
 | `PUBLIC_APP_URL` | Optional | Public URL for invite/password-setup links; falls back to `APP_ORIGIN` |
 | `TWILIO_SMS_FROM` | Optional | SMS sender number |
-| `GEMINI_MODEL` | Optional | Override model (default `gemini-2.5-flash`) |
+| `GEMINI_MODEL` | Optional | WhatsApp / worker fast model (default `gemini-2.5-flash` in worker) |
+| `GEMINI_ANALYSIS_MODEL` | Optional | Dashboard CFO insights + predictions (default `gemini-3.1-pro-preview` in `lib/analytics-insights.ts`) |
 | `EMBEDDING_MODEL` | Optional | Override embedding model (default `gemini-embedding-001`) |
 
 ### Source of truth for variable names

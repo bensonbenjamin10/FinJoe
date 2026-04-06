@@ -15,6 +15,7 @@ import AdminFinJoeHub from "@/pages/admin-finjoe-hub";
 import { LegacyTeamRedirect } from "@/components/FinJoeRedirect";
 import { FINJOE_AREA_PATH_PATTERN } from "@/lib/finjoe-routes";
 import AdminExpenses from "@/pages/admin-expenses";
+import AdminPettyCash from "@/pages/admin-petty-cash";
 import AdminIncome from "@/pages/admin-income";
 import AdminRecurringTemplates from "@/pages/admin-recurring-templates";
 import AdminRecurringIncomeTemplates from "@/pages/admin-recurring-income-templates";
@@ -139,6 +140,13 @@ function Router() {
           <ProtectedRoute>
             <AdminShell>
               <AdminExpenses />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/petty-cash">
+          <ProtectedRoute>
+            <AdminShell>
+              <AdminPettyCash />
             </AdminShell>
           </ProtectedRoute>
         </Route>

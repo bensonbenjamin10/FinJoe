@@ -32,10 +32,13 @@ import {
   incomeTypes,
   cronRuns,
   bankTransactions,
+  pettyCashFunds,
+  cfoInsightSnapshots,
 } from "../shared/schema.js";
 import { createFinJoeData, generateExpensesFromTemplates, generateIncomeFromTemplates, listDistinctVendorNames } from "../lib/finjoe-data.js";
 import { runBackfillEmbeddings } from "../lib/backfill-embeddings.js";
 import { runWeeklyInsights } from "../worker/src/weekly-insights.js";
+import { runCfoInsightSnapshots } from "./cfo-snapshot-job.js";
 import { logCronRun } from "../lib/cron-logger.js";
 import { createTemplatesInTwilio, submitTemplatesForApproval } from "../lib/twilio-content-create.js";
 import { fetchApprovedTemplatesFromTwilio, fetchTemplateStatusesFromTwilio } from "../lib/twilio-content-sync.js";
@@ -45,7 +48,9 @@ import { invalidatePlatformSettingsCache } from "../worker/src/platform-settings
 import { sendFinJoeSms, sendFinJoeWhatsAppTemplate } from "../worker/src/twilio.js";
 import { getCredentialsForTenant } from "../worker/src/providers/resolver.js";
 import { getAnalytics, getPredictions } from "./analytics.js";
-import { generateAnalyticsInsights } from "../lib/analytics-insights.js";
+import { generateCfoStructuredInsights } from "../lib/analytics-insights.js";
+import { buildCfoInsightPayload } from "./cfo-insight-builder.js";
+import { buildMisPeriodSlice } from "./mis-period-slice.js";
 import { getMISReport, getMISCellTransactions } from "./mis-report.js";
 import { registerPaymentRoutes } from "./payments-routes.js";
 import { registerInvoicingRoutes } from "./invoicing-routes.js";
@@ -75,6 +80,29 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 *
 const upload25mb = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 const EXPORT_ROW_LIMIT = parseInt(process.env.EXPORT_ROW_LIMIT ?? "10000", 10) || 10000;
+
+/** Validate optional petty cash fund id against tenant and expense cost center. */
+async function resolvePettyCashFundForExpense(
+  tenantId: string,
+  expenseCostCenterId: string | null,
+  pettyCashFundId: unknown
+): Promise<string | null | { error: string }> {
+  if (pettyCashFundId === undefined || pettyCashFundId === null || pettyCashFundId === "") return null;
+  if (typeof pettyCashFundId !== "string") return { error: "Invalid pettyCashFundId" };
+  const [fund] = await db
+    .select({ id: pettyCashFunds.id, costCenterId: pettyCashFunds.costCenterId })
+    .from(pettyCashFunds)
+    .where(and(eq(pettyCashFunds.id, pettyCashFundId), eq(pettyCashFunds.tenantId, tenantId)))
+    .limit(1);
+  if (!fund) return { error: "Petty cash fund not found" };
+  if (expenseCostCenterId && fund.costCenterId !== expenseCostCenterId) {
+    return { error: "Petty cash fund must match the expense cost center" };
+  }
+  if (!expenseCostCenterId && fund.costCenterId) {
+    return { error: "Assign a cost center before linking a petty cash fund" };
+  }
+  return fund.id;
+}
 
 const ALLOWED_TAX_REGIMES = new Set(["flat_percent", "gst_in", "vat_ae"]);
 
@@ -3104,24 +3132,45 @@ export async function registerRoutes(app: Express) {
         granularity: (granularity as "day" | "week" | "month") ?? "day",
       };
       const data = await getAnalytics(filters);
-      const summary = {
-        totalExpenses: data.kpis.totalExpenses,
-        totalIncome: data.kpis.totalIncome,
-        netCashflow: data.kpis.netCashflow,
-        expenseTrend: data.comparison.expenseTrend,
-        incomeTrend: data.comparison.incomeTrend,
-        prevTotalExpenses: data.comparison.prevTotalExpenses,
-        prevTotalIncome: data.comparison.prevTotalIncome,
-        topExpenseCategories: (data.expensesByCategory ?? []).slice(0, 5).map((c) => ({ name: c.name, amount: c.amount })),
-        topCostCenters: (data.expensesByCostCenter ?? []).slice(0, 5).map((c) => ({ name: c.name, amount: c.amount })),
-        startDate,
-        endDate,
-      };
-      const insights = await generateAnalyticsInsights(summary);
-      res.json({ insights: insights ?? null });
+      const misSlice = await buildMisPeriodSlice(tid, startDate, endDate);
+      const payload = buildCfoInsightPayload(startDate, endDate, data, misSlice);
+      const structured = await generateCfoStructuredInsights(payload);
+      res.json({
+        insights: structured?.narrative ?? null,
+        insight: structured,
+        facts: { cfoExtended: data.cfoExtended, mis: misSlice },
+      });
     } catch (e) {
       logger.error("Analytics insights error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to generate insights" });
+    }
+  });
+
+  app.get("/api/admin/analytics/cfo-snapshot/latest", requireTenantStaff, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const [row] = await db
+        .select({
+          id: cfoInsightSnapshots.id,
+          periodStart: cfoInsightSnapshots.periodStart,
+          periodEnd: cfoInsightSnapshots.periodEnd,
+          factsJson: cfoInsightSnapshots.factsJson,
+          insightJson: cfoInsightSnapshots.insightJson,
+          model: cfoInsightSnapshots.model,
+          createdAt: cfoInsightSnapshots.createdAt,
+        })
+        .from(cfoInsightSnapshots)
+        .where(eq(cfoInsightSnapshots.tenantId, tid))
+        .orderBy(desc(cfoInsightSnapshots.createdAt))
+        .limit(1);
+      res.json({ snapshot: row ?? null });
+    } catch (e) {
+      logger.error("CFO snapshot latest error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch CFO snapshot" });
     }
   });
 
@@ -3686,9 +3735,17 @@ export async function registerRoutes(app: Express) {
     const { job } = req.body;
     if (!job || typeof job !== "string")
       return res.status(400).json({
-        error: "job required (recurring-expenses, recurring-income, weekly-insights, backfill-embeddings, demo-expiry, backup-to-s3)",
+        error: "job required (recurring-expenses, recurring-income, weekly-insights, cfo-insight-snapshots, backfill-embeddings, demo-expiry, backup-to-s3)",
       });
-    const validJobs = ["recurring-expenses", "recurring-income", "weekly-insights", "backfill-embeddings", "demo-expiry", "backup-to-s3"];
+    const validJobs = [
+      "recurring-expenses",
+      "recurring-income",
+      "weekly-insights",
+      "cfo-insight-snapshots",
+      "backfill-embeddings",
+      "demo-expiry",
+      "backup-to-s3",
+    ];
     if (!validJobs.includes(job)) return res.status(400).json({ error: `job must be one of: ${validJobs.join(", ")}` });
 
     try {
@@ -3705,6 +3762,10 @@ export async function registerRoutes(app: Express) {
         }
         if (job === "weekly-insights") {
           const r = await runWeeklyInsights();
+          return { ok: true, job, ...r };
+        }
+        if (job === "cfo-insight-snapshots") {
+          const r = await runCfoInsightSnapshots();
           return { ok: true, job, ...r };
         }
         if (job === "backfill-embeddings") {
@@ -3736,7 +3797,14 @@ export async function registerRoutes(app: Express) {
     try {
       const limit = Math.min(50, parseInt(String(req.query?.limit ?? 20), 10) || 20);
       const jobFilter = req.query?.job as string | undefined;
-      const validJobNames = ["recurring-expenses", "recurring-income", "weekly-insights", "backfill-embeddings", "backup-to-s3"];
+      const validJobNames = [
+        "recurring-expenses",
+        "recurring-income",
+        "weekly-insights",
+        "cfo-insight-snapshots",
+        "backfill-embeddings",
+        "backup-to-s3",
+      ];
       const conditions = jobFilter && validJobNames.includes(jobFilter) ? [eq(cronRuns.jobName, jobFilter)] : [];
       const rows = await db
         .select()
@@ -4172,6 +4240,110 @@ export async function registerRoutes(app: Express) {
   });
 
   // Expenses
+  // Petty cash (funds, custodians, replenishments)
+  app.get("/api/admin/petty-cash/funds", requireTenantStaff, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? (req.query?.tenantId as string | undefined);
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const finJoeData = createFinJoeData(db, tid);
+      const rows = await finJoeData.listPettyCashFunds();
+      res.json(rows);
+    } catch (e) {
+      logger.error("Petty cash funds list error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to list petty cash funds" });
+    }
+  });
+
+  app.post("/api/admin/petty-cash/funds", requireApprover, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { campusId, costCenterId, custodianId, imprestAmount } = req.body ?? {};
+      const cc = (costCenterId ?? campusId) as string | undefined;
+      if (!cc || !custodianId || imprestAmount === undefined || imprestAmount === null) {
+        return res.status(400).json({ error: "costCenterId (or campusId), custodianId, and imprestAmount required" });
+      }
+      const finJoeData = createFinJoeData(db, tid);
+      const result = await finJoeData.createPettyCashFund({
+        costCenterId: cc,
+        custodianId: String(custodianId),
+        imprestAmount: Number(imprestAmount),
+        createdById: (user as { id?: string }).id ?? null,
+      });
+      if ("error" in result) return res.status(400).json({ error: result.error });
+      res.status(201).json(result);
+    } catch (e) {
+      logger.error("Petty cash fund create error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to create petty cash fund" });
+    }
+  });
+
+  app.get("/api/admin/petty-cash/custodians", requireTenantStaff, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? (req.query?.tenantId as string | undefined);
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const finJoeData = createFinJoeData(db, tid);
+      const rows = await finJoeData.listPettyCashCustodianUsers();
+      res.json(rows);
+    } catch (e) {
+      logger.error("Petty cash custodians error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to list custodians" });
+    }
+  });
+
+  app.get("/api/admin/petty-cash/replenishments", requireTenantStaff, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? (req.query?.tenantId as string | undefined);
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const lim = Math.min(100, Math.max(1, parseInt(String(req.query?.limit ?? "50"), 10) || 50));
+      const finJoeData = createFinJoeData(db, tid);
+      const rows = await finJoeData.listPettyCashReplenishments(lim);
+      res.json(rows);
+    } catch (e) {
+      logger.error("Petty cash replenishments list error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to list replenishments" });
+    }
+  });
+
+  app.post("/api/admin/petty-cash/replenishments", requireApprover, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const { fundId, expenseIds, payoutMethod, payoutRef } = req.body ?? {};
+      if (!fundId || !Array.isArray(expenseIds) || expenseIds.length === 0) {
+        return res.status(400).json({ error: "fundId and expenseIds[] required" });
+      }
+      const finJoeData = createFinJoeData(db, tid);
+      const result = await finJoeData.createPettyCashReplenishment({
+        fundId: String(fundId),
+        expenseIds: expenseIds.map((x: unknown) => String(x)),
+        payoutMethod: payoutMethod != null ? String(payoutMethod) : "bank_transfer",
+        payoutRef: payoutRef != null ? String(payoutRef) : "",
+        recordedById: (user as { id?: string }).id ?? null,
+      });
+      if ("error" in result) return res.status(400).json({ error: result.error });
+      res.status(201).json(result);
+    } catch (e) {
+      logger.error("Petty cash replenishment create error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to record replenishment" });
+    }
+  });
+
   app.get("/api/admin/expenses/vendor-suggestions", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
@@ -4245,6 +4417,8 @@ export async function registerRoutes(app: Express) {
           voucherNumber: expenses.voucherNumber,
           source: expenses.source,
           recurringTemplateId: expenses.recurringTemplateId,
+          pettyCashFundId: expenses.pettyCashFundId,
+          pettyCashReplenishmentId: expenses.pettyCashReplenishmentId,
           createdAt: expenses.createdAt,
           webAttachmentCount: sql<number>`coalesce(jsonb_array_length(coalesce(${expenses.attachments}, '[]'::jsonb)), 0)::int`,
           whatsappMediaCount: sql<number>`(select count(*)::int from fin_joe_media where expense_id = ${expenses.id})`,
@@ -4457,9 +4631,13 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.body?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { campusId, costCenterId, categoryId, amount, expenseDate, description, invoiceNumber, invoiceDate, vendorName, gstin, taxType, voucherNumber } = req.body;
+      const { campusId, costCenterId, categoryId, amount, expenseDate, description, invoiceNumber, invoiceDate, vendorName, gstin, taxType, voucherNumber, pettyCashFundId } = req.body;
       const ccId = (costCenterId ?? campusId) && (costCenterId ?? campusId) !== "__corporate__" ? (costCenterId ?? campusId) : null;
       if (!categoryId || !amount || amount <= 0 || !expenseDate) return res.status(400).json({ error: "categoryId, amount (>0), and expenseDate required" });
+      const pettyResolved = await resolvePettyCashFundForExpense(tid, ccId, pettyCashFundId);
+      if (pettyResolved && typeof pettyResolved === "object" && "error" in pettyResolved) {
+        return res.status(400).json({ error: pettyResolved.error });
+      }
       const [created] = await db
         .insert(expenses)
         .values({
@@ -4477,6 +4655,7 @@ export async function registerRoutes(app: Express) {
           voucherNumber: voucherNumber || null,
           status: "draft",
           source: "manual",
+          pettyCashFundId: typeof pettyResolved === "string" ? pettyResolved : null,
         })
         .returning();
       if (!created) return res.status(500).json({ error: "Failed to create" });
@@ -4494,7 +4673,7 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.body?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { costCenterId, campusId, categoryId, amount, expenseDate, description, invoiceNumber, invoiceDate, vendorName, gstin, taxType, voucherNumber } = req.body;
+      const { costCenterId, campusId, categoryId, amount, expenseDate, description, invoiceNumber, invoiceDate, vendorName, gstin, taxType, voucherNumber, pettyCashFundId } = req.body;
       const ccId = (costCenterId ?? campusId) !== undefined ? ((costCenterId ?? campusId) && (costCenterId ?? campusId) !== "__corporate__" ? (costCenterId ?? campusId) : null) : undefined;
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (ccId !== undefined) updates.costCenterId = ccId;
@@ -4509,8 +4688,24 @@ export async function registerRoutes(app: Express) {
       if (taxType !== undefined) updates.taxType = taxType;
       if (voucherNumber !== undefined) updates.voucherNumber = voucherNumber;
       const whereClause = and(eq(expenses.id, req.params.id), eq(expenses.tenantId, tid));
-      const [existing] = await db.select({ status: expenses.status }).from(expenses).where(whereClause).limit(1);
+      const [existing] = await db
+        .select({ status: expenses.status, costCenterId: expenses.costCenterId })
+        .from(expenses)
+        .where(whereClause)
+        .limit(1);
       if (!existing) return res.status(404).json({ error: "Not found" });
+      if (pettyCashFundId !== undefined && (existing.status === "draft" || existing.status === "pending_approval")) {
+        const nextCc = ccId !== undefined ? ccId : existing.costCenterId;
+        if (pettyCashFundId === null || pettyCashFundId === "") {
+          updates.pettyCashFundId = null;
+        } else {
+          const pettyResolved = await resolvePettyCashFundForExpense(tid, nextCc, pettyCashFundId);
+          if (pettyResolved && typeof pettyResolved === "object" && "error" in pettyResolved) {
+            return res.status(400).json({ error: pettyResolved.error });
+          }
+          updates.pettyCashFundId = typeof pettyResolved === "string" ? pettyResolved : null;
+        }
+      }
       const [updated] = await db.update(expenses).set(updates as any).where(whereClause).returning();
       if (!updated) return res.status(404).json({ error: "Not found" });
       res.json(updated);
@@ -4591,19 +4786,23 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.body?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const whereClause = and(eq(expenses.id, req.params.id), eq(expenses.tenantId, tid));
-      const [existing] = await db.select({ status: expenses.status, amount: expenses.amount, vendorName: expenses.vendorName, categoryName: expenseCategories.name, costCenterName: costCenters.name }).from(expenses).leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id)).leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id)).where(whereClause).limit(1);
-      if (!existing) return res.status(404).json({ error: "Not found" });
-      if (existing.status !== "pending_approval") return res.status(400).json({ error: "Only pending expenses can be approved" });
-      const [updated] = await db.update(expenses).set({ status: "approved", approvedAt: new Date(), approvedById: (req.user as any).id, rejectionReason: null, updatedAt: new Date() }).where(whereClause).returning();
-      if (!updated) return res.status(404).json({ error: "Not found" });
-      const expCtx = { amount: existing.amount, vendorName: existing.vendorName, categoryName: existing.categoryName, costCenterName: existing.costCenterName };
+      const approverId = (req.user as Express.User & { id: string }).id;
+      const finJoeData = createFinJoeData(db, tid);
+      const result = await finJoeData.approveExpense(req.params.id, approverId);
+      if (!result) return res.status(404).json({ error: "Not found" });
+      const expCtx = {
+        amount: result.amount,
+        vendorName: result.vendorName,
+        categoryName: result.categoryName,
+        costCenterName: result.costCenterName,
+      };
       try {
-        await notifySubmitterForApprovalRejectionFromExpense(updated.id, "approved", tid, undefined, req.requestId, expCtx);
+        await notifySubmitterForApprovalRejectionFromExpense(result.id, "approved", tid, undefined, req.requestId, expCtx);
       } catch (notifyErr) {
         logger.error("Failed to notify submitter for approval", { requestId: req.requestId, err: String(notifyErr) });
       }
-      res.json(updated);
+      const [full] = await db.select().from(expenses).where(and(eq(expenses.id, result.id), eq(expenses.tenantId, tid))).limit(1);
+      res.json(full ?? { id: result.id });
     } catch (e) {
       logger.error("Expense approve error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to approve" });
