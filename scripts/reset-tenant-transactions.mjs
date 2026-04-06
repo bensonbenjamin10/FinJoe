@@ -133,6 +133,17 @@ async function main() {
   );
   console.log(`Deleted ${delExp.rowCount ?? 0} expenses`);
 
+  // 6b. Petty cash replenishment audit rows (no longer referenced after expenses deleted)
+  const repTable = await pool.query(
+    "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'petty_cash_replenishments' LIMIT 1"
+  );
+  if (repTable.rows.length > 0) {
+    const delRep = await pool.query("DELETE FROM petty_cash_replenishments WHERE tenant_id = $1", [tenantId]);
+    if ((delRep.rowCount ?? 0) > 0) {
+      console.log(`Deleted ${delRep.rowCount} petty_cash_replenishments`);
+    }
+  }
+
   // 7. Delete income_records
   const delInc = await pool.query(
     "DELETE FROM income_records WHERE tenant_id = $1",

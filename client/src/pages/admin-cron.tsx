@@ -34,6 +34,12 @@ const CRON_JOBS = [
     schedule: "Mondays only",
   },
   {
+    id: "cfo-insight-snapshots",
+    name: "CFO insight snapshots",
+    description: "Persists structured CFO analytics + MIS facts per tenant for the last 7 days (dashboard history).",
+    schedule: "Weekly with /cron/cfo-insight-snapshots",
+  },
+  {
     id: "backfill-embeddings",
     name: "Backfill Embeddings",
     description: "Processes expenses without embeddings for RAG/semantic search.",
@@ -73,6 +79,7 @@ type TriggerResult = {
   errors?: string[];
   tenantsProcessed?: number;
   messagesSent?: number;
+  snapshotsWritten?: number;
   processed?: number;
   skipped?: boolean;
   total?: number;
@@ -89,6 +96,7 @@ export default function AdminCron() {
     "recurring-expenses": null,
     "recurring-income": null,
     "weekly-insights": null,
+    "cfo-insight-snapshots": null,
     "backfill-embeddings": null,
     "demo-expiry": null,
     "backup-to-s3": null,
@@ -113,6 +121,8 @@ export default function AdminCron() {
           ? `Generated ${data.generated} expense(s)`
           : data.messagesSent !== undefined
             ? `Sent ${data.messagesSent} message(s)`
+            : data.snapshotsWritten !== undefined
+              ? `Wrote ${data.snapshotsWritten} CFO snapshot(s)`
             : data.processed !== undefined
               ? `Processed ${data.processed} embedding(s)`
               : data.deactivated !== undefined
@@ -199,6 +209,11 @@ export default function AdminCron() {
                       {result.messagesSent !== undefined && (
                         <span className="ml-2">
                           Sent {result.messagesSent} message(s) to {result.tenantsProcessed} tenant(s)
+                        </span>
+                      )}
+                      {result.snapshotsWritten !== undefined && (
+                        <span className="ml-2">
+                          Wrote {result.snapshotsWritten} snapshot(s) for {result.tenantsProcessed} tenant(s)
                         </span>
                       )}
                       {result.processed !== undefined && !result.skipped && (

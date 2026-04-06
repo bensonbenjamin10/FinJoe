@@ -7,6 +7,7 @@
  * - Recurring expenses: every run (generates draft expenses from templates)
  * - Backfill embeddings: every run (processes expenses where embedding IS NULL for RAG)
  * - Weekly insights: only on Mondays (sends expense/income summary to admin/finance)
+ * - CFO insight snapshots: Mondays only via main app GET /cron/cfo-insight-snapshots (requires FINJOE_APP_URL or PUBLIC_APP_URL)
  * - S3 backup: if FINJOE_APP_URL or PUBLIC_APP_URL is set, calls main app GET /cron/backup (volume + pg_dump live there)
  */
 
@@ -148,6 +149,28 @@ if (now.getUTCDay() === 1) {
 const APP_URL = process.env.FINJOE_APP_URL || process.env.PUBLIC_APP_URL;
 if (APP_URL) {
   const appBase = APP_URL.replace(/\/$/, "");
+
+  // CFO insight snapshots (Mondays only) — main app only (same DB + analytics as dashboard)
+  if (now.getUTCDay() === 1) {
+    console.log("Running CFO insight snapshots via main app:", appBase);
+    try {
+      const res = await fetch(`${appBase}/cron/cfo-insight-snapshots?secret=${encodeURIComponent(CRON_SECRET)}`);
+      const contentType = res.headers.get("content-type") || "";
+      const data = contentType.includes("application/json") ? await res.json() : { error: await res.text() || res.statusText };
+      if (!res.ok || data.error) {
+        console.error("CFO insight snapshots error:", formatError(data.error || res.statusText));
+        hadError = true;
+      } else {
+        console.log("CFO insight snapshots OK:", data);
+      }
+    } catch (err) {
+      console.error("CFO insight snapshots failed:", err.message);
+      hadError = true;
+    }
+  } else {
+    console.log("Skipping CFO insight snapshots (not Monday)");
+  }
+
   console.log("Running S3 backup via main app:", appBase);
   try {
     const res = await fetch(`${appBase}/cron/backup?secret=${encodeURIComponent(CRON_SECRET)}`);
