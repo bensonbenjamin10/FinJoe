@@ -2,7 +2,7 @@
  * FinJoe data layer - direct DB access for FinJoe service.
  */
 
-import { eq, and, desc, sql, or, isNull, aliasedTable } from "drizzle-orm";
+import { eq, and, desc, sql, or, isNull, aliasedTable, gte, inArray } from "drizzle-orm";
 import { embedExpenseText } from "./expense-embeddings.js";
 import { isFullUuid, toShortExpenseId } from "./expense-id.js";
 import {
@@ -56,6 +56,32 @@ const AUDIT_REQUIREMENTS: AuditRequirements = {
   optional: ["gstin", "taxType"],
   gstinFormat: "15 characters",
   taxTypes: ["no_gst", "gst_itc", "gst_rcm", "gst_no_itc"],
+};
+
+/** Compare submitter phones across E.164 / local storage variants */
+function normalizePhoneDigits(phone: string | null | undefined): string | null {
+  const d = (phone ?? "").replace(/\D/g, "");
+  return d.length >= 10 ? d : null;
+}
+
+function phonesLikelySame(a: string | null | undefined, b: string | null | undefined): boolean {
+  const da = normalizePhoneDigits(a);
+  const db = normalizePhoneDigits(b);
+  if (!da || !db) return false;
+  if (da === db) return true;
+  if (da.length >= 10 && db.length >= 10) return da.slice(-10) === db.slice(-10);
+  return false;
+}
+
+export type LikelyDuplicateExpense = {
+  id: string;
+  shortId: string;
+  reason: "invoice_number" | "same_submitter_amount_date_category";
+  status: string;
+  amount: number;
+  expenseDate: string | null;
+  vendorName: string | null;
+  invoiceNumber: string | null;
 };
 
 /** Normalize DB date (Date, string, or raw days-since-2000 number from PostgreSQL DATE) to YYYY-MM-DD string */
@@ -295,6 +321,111 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
         .limit(2);
       if (rows.length !== 1) return null;
       return rows[0].id;
+    },
+
+    /**
+     * Find a recent expense that likely duplicates the proposed record (same invoice #, or same submitter + amount + date + category).
+     * Used by the WhatsApp agent to avoid double-posting.
+     */
+    async findLikelyDuplicateExpense(params: {
+      amount: number;
+      expenseDate: string;
+      categoryId: string;
+      costCenterId: string | null;
+      invoiceNumber?: string | null;
+      submittedByContactPhone?: string | null;
+      /** How far back to search (default 45 days) */
+      lookbackDays?: number;
+    }): Promise<LikelyDuplicateExpense | null> {
+      const lookback = Math.min(365, Math.max(7, params.lookbackDays ?? 45));
+      const since = new Date();
+      since.setUTCDate(since.getUTCDate() - lookback);
+      const invNorm = (params.invoiceNumber ?? "").trim().toLowerCase();
+      if (invNorm.length >= 2) {
+        const [byInv] = await db
+          .select({
+            id: expenses.id,
+            status: expenses.status,
+            amount: expenses.amount,
+            expenseDate: expenses.expenseDate,
+            vendorName: expenses.vendorName,
+            invoiceNumber: expenses.invoiceNumber,
+          })
+          .from(expenses)
+          .where(
+            and(
+              eq(expenses.tenantId, tenantId),
+              sql`LOWER(TRIM(${expenses.invoiceNumber})) = ${invNorm}`,
+              inArray(expenses.status, ["draft", "pending_approval", "approved", "paid"]),
+              gte(expenses.expenseDate, since)
+            )
+          )
+          .limit(1);
+        if (byInv?.id) {
+          return {
+            id: byInv.id,
+            shortId: toShortExpenseId(byInv.id),
+            reason: "invoice_number",
+            status: byInv.status,
+            amount: byInv.amount,
+            expenseDate: toDateString(byInv.expenseDate),
+            vendorName: byInv.vendorName ?? null,
+            invoiceNumber: byInv.invoiceNumber ?? null,
+          };
+        }
+      }
+
+      const phone = params.submittedByContactPhone;
+      if (!phone || !normalizePhoneDigits(phone)) return null;
+
+      const candidates = await db
+        .select({
+          id: expenses.id,
+          status: expenses.status,
+          amount: expenses.amount,
+          expenseDate: expenses.expenseDate,
+          vendorName: expenses.vendorName,
+          invoiceNumber: expenses.invoiceNumber,
+          submittedByContactPhone: expenses.submittedByContactPhone,
+          categoryId: expenses.categoryId,
+          costCenterId: expenses.costCenterId,
+        })
+        .from(expenses)
+        .where(
+          and(
+            eq(expenses.tenantId, tenantId),
+            eq(expenses.amount, params.amount),
+            eq(expenses.categoryId, params.categoryId),
+            gte(expenses.expenseDate, since),
+            inArray(expenses.status, ["draft", "pending_approval", "approved", "paid"])
+          )
+        )
+        .orderBy(desc(expenses.createdAt))
+        .limit(25);
+
+      const ccMatch = (a: string | null, b: string | null) => {
+        const na = a === "__corporate__" || a == null ? null : a;
+        const nb = b === "__corporate__" || b == null ? null : b;
+        return na === nb;
+      };
+
+      for (const row of candidates) {
+        if (!phonesLikelySame(phone, row.submittedByContactPhone)) continue;
+        if (!ccMatch(params.costCenterId, row.costCenterId)) continue;
+        const rowDate = toDateString(row.expenseDate);
+        if (rowDate !== params.expenseDate) continue;
+        return {
+          id: row.id,
+          shortId: toShortExpenseId(row.id),
+          reason: "same_submitter_amount_date_category",
+          status: row.status,
+          amount: row.amount,
+          expenseDate: rowDate,
+          vendorName: row.vendorName ?? null,
+          invoiceNumber: row.invoiceNumber ?? null,
+        };
+      }
+      return null;
     },
 
     async updateExpense(
