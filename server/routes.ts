@@ -35,6 +35,11 @@ import {
   pettyCashFunds,
   cfoInsightSnapshots,
 } from "../shared/schema.js";
+import {
+  VALID_EXPENSE_PAYOUT_METHODS,
+  isPayoutRefOptionalForMethod,
+  isValidExpensePayoutMethod,
+} from "../shared/payout-methods.js";
 import { createFinJoeData, generateExpensesFromTemplates, generateIncomeFromTemplates, listDistinctVendorNames } from "../lib/finjoe-data.js";
 import { runBackfillEmbeddings } from "../lib/backfill-embeddings.js";
 import { runWeeklyInsights } from "../worker/src/weekly-insights.js";
@@ -4844,13 +4849,40 @@ export async function registerRoutes(app: Express) {
       const tid = tenantId ?? req.body?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
       const { payoutMethod, payoutRef } = req.body;
+      const methodRaw = payoutMethod != null ? String(payoutMethod).trim() : "";
+      if (!isValidExpensePayoutMethod(methodRaw)) {
+        return res.status(400).json({
+          error: `Invalid payoutMethod. Allowed: ${VALID_EXPENSE_PAYOUT_METHODS.join(", ")}`,
+        });
+      }
+      const refRaw = payoutRef != null ? String(payoutRef).trim() : "";
+      if (!isPayoutRefOptionalForMethod(methodRaw) && !refRaw) {
+        return res.status(400).json({ error: "payoutRef is required for this payout method" });
+      }
+      const payoutRefStored = refRaw || null;
       const whereClause = and(eq(expenses.id, req.params.id), eq(expenses.tenantId, tid));
       const [existing] = await db.select({ status: expenses.status, amount: expenses.amount, vendorName: expenses.vendorName, costCenterName: costCenters.name }).from(expenses).leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id)).where(whereClause).limit(1);
       if (!existing) return res.status(404).json({ error: "Not found" });
       if (existing.status !== "approved") return res.status(400).json({ error: "Only approved expenses can be marked as paid" });
-      const [updated] = await db.update(expenses).set({ status: "paid", payoutMethod: payoutMethod || null, payoutRef: payoutRef || null, payoutAt: new Date(), updatedAt: new Date() }).where(whereClause).returning();
+      const [updated] = await db
+        .update(expenses)
+        .set({
+          status: "paid",
+          payoutMethod: methodRaw,
+          payoutRef: payoutRefStored,
+          payoutAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(whereClause)
+        .returning();
       if (!updated) return res.status(404).json({ error: "Not found" });
-      const payCtx = { amount: existing.amount, vendorName: existing.vendorName, costCenterName: existing.costCenterName, payoutMethod, payoutRef };
+      const payCtx = {
+        amount: existing.amount,
+        vendorName: existing.vendorName,
+        costCenterName: existing.costCenterName,
+        payoutMethod: methodRaw,
+        payoutRef: payoutRefStored,
+      };
       try {
         await notifySubmitterForPayoutFromExpense(updated.id, tid, req.requestId, payCtx);
       } catch (notifyErr) {

@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useEffect } from "react";
+import { useState, useRef, useMemo, useEffect, useCallback } from "react";
 import { Link, useSearchParams } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -15,6 +15,16 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -62,6 +72,11 @@ import type {
   Campus,
   ExpenseWebAttachment,
 } from "@shared/schema";
+import {
+  isPayoutRefOptionalForMethod,
+  payoutRefFieldLabel,
+  payoutRefPlaceholder,
+} from "@shared/payout-methods";
 
 type ApiAttachmentsMeta = {
   web: ExpenseWebAttachment[];
@@ -264,6 +279,8 @@ function PettyCashTab({
   onCreateReplenishment,
   isCreateFundPending,
   isCreateReplenishmentPending,
+  replenishPrefill,
+  onReplenishPrefillConsumed,
 }: {
   funds: Array<{
     id: string;
@@ -282,6 +299,8 @@ function PettyCashTab({
   onCreateReplenishment: (data: { fundId: string; expenseIds: string[]; payoutMethod: string; payoutRef: string }) => void;
   isCreateFundPending: boolean;
   isCreateReplenishmentPending: boolean;
+  replenishPrefill: { fundId: string; expenseId: string } | null;
+  onReplenishPrefillConsumed: () => void;
 }) {
   const [fundDialog, setFundDialog] = useState(false);
   const [fundForm, setFundForm] = useState({ costCenterId: "", custodianId: "", imprestAmount: "" });
@@ -341,6 +360,14 @@ function PettyCashTab({
   const selectedTotal = replenishPool
     .filter((e) => selectedIds.has(e.id))
     .reduce((sum, e) => sum + e.amount, 0);
+
+  useEffect(() => {
+    if (!replenishPrefill) return;
+    setReplenishDialog({ fundId: replenishPrefill.fundId });
+    setSelectedIds(new Set([replenishPrefill.expenseId]));
+    setReplenishForm({ payoutMethod: "bank_transfer", payoutRef: "" });
+    onReplenishPrefillConsumed();
+  }, [replenishPrefill, onReplenishPrefillConsumed]);
 
   return (
     <div className="space-y-6">
@@ -596,6 +623,9 @@ export default function AdminExpenses() {
   const [approveDialog, setApproveDialog] = useState<ExpenseWithDetails | null>(null);
   const [rejectDialog, setRejectDialog] = useState<{ expense: ExpenseWithDetails; reason: string } | null>(null);
   const [payoutDialog, setPayoutDialog] = useState<{ expense: ExpenseWithDetails; method: string; ref: string } | null>(null);
+  const [pettyReplenishPrefill, setPettyReplenishPrefill] = useState<{ fundId: string; expenseId: string } | null>(null);
+  const [directPayoutWarningExpense, setDirectPayoutWarningExpense] = useState<ExpenseWithDetails | null>(null);
+  const consumePettyReplenishPrefill = useCallback(() => setPettyReplenishPrefill(null), []);
   const [editExpenseDialog, setEditExpenseDialog] = useState<ExpenseWithDetails | null>(null);
   const [viewExpenseDialog, setViewExpenseDialog] = useState<ExpenseWithDetails | null>(null);
   const [deleteExpenseDialog, setDeleteExpenseDialog] = useState<ExpenseWithDetails | null>(null);
@@ -880,7 +910,10 @@ export default function AdminExpenses() {
   const payoutMutation = useMutation({
     mutationFn: async ({ id, payoutMethod, payoutRef }: { id: string; payoutMethod: string; payoutRef: string }) => {
       const res = await apiRequest("POST", `/api/admin/expenses/${id}/payout`, { payoutMethod, payoutRef, tenantId });
-      if (!res.ok) throw new Error("Failed to record payout");
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error || "Failed to record payout");
+      }
       return res.json();
     },
     onSuccess: () => {
@@ -889,6 +922,7 @@ export default function AdminExpenses() {
       setPayoutDialog(null);
       toast({ title: "Payout recorded" });
     },
+    onError: (e: Error) => toast({ title: "Payout failed", description: e.message, variant: "destructive" }),
   });
 
   const updateExpenseMutation = useMutation({
@@ -1322,16 +1356,46 @@ export default function AdminExpenses() {
                                     </>
                                   )}
                                   {canApproveExpenses && exp.status === "approved" && (
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      onClick={() => {
-                                        setActionMenu(null);
-                                        setPayoutDialog({ expense: exp, method: "bank_transfer", ref: "" });
-                                      }}
-                                    >
-                                      Record Payout
-                                    </Button>
+                                    <>
+                                      {exp.pettyCashFundId && !exp.pettyCashReplenishmentId ? (
+                                        <>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => {
+                                              setActionMenu(null);
+                                              setActiveTab("petty-cash");
+                                              setPettyReplenishPrefill({ fundId: exp.pettyCashFundId!, expenseId: exp.id });
+                                            }}
+                                          >
+                                            <Wallet className="h-4 w-4 mr-1" />
+                                            Record replenishment
+                                          </Button>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="text-muted-foreground"
+                                            onClick={() => {
+                                              setActionMenu(null);
+                                              setDirectPayoutWarningExpense(exp);
+                                            }}
+                                          >
+                                            Record direct payout…
+                                          </Button>
+                                        </>
+                                      ) : (
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          onClick={() => {
+                                            setActionMenu(null);
+                                            setPayoutDialog({ expense: exp, method: "bank_transfer", ref: "" });
+                                          }}
+                                        >
+                                          Record Payout
+                                        </Button>
+                                      )}
+                                    </>
                                   )}
                                 </div>
                               </PopoverContent>
@@ -1678,6 +1742,8 @@ export default function AdminExpenses() {
                   onCreateReplenishment={(data) => createReplenishmentMutation.mutate(data)}
                   isCreateFundPending={createFundMutation.isPending}
                   isCreateReplenishmentPending={createReplenishmentMutation.isPending}
+                  replenishPrefill={pettyReplenishPrefill}
+                  onReplenishPrefillConsumed={consumePettyReplenishPrefill}
                 />
               </TabsContent>
             )}
@@ -1794,7 +1860,18 @@ export default function AdminExpenses() {
           <DialogHeader>
             <DialogTitle>Record Payout</DialogTitle>
             <DialogDescription>
-              Record the payout method and reference for this expense.
+              Record the payout method and reference for this expense (direct vendor payment). For petty cash imprest, use{" "}
+              <button
+                type="button"
+                className="text-primary underline underline-offset-2 font-medium"
+                onClick={() => {
+                  setPayoutDialog(null);
+                  setActiveTab("petty-cash");
+                }}
+              >
+                Petty Cash → Record replenishment
+              </button>
+              .
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
@@ -1819,13 +1896,16 @@ export default function AdminExpenses() {
               </Select>
             </div>
             <div>
-              <Label>Transaction Reference</Label>
+              <Label>
+                {payoutDialog ? payoutRefFieldLabel(payoutDialog.method) : "Transaction reference"}
+                {!payoutDialog || !isPayoutRefOptionalForMethod(payoutDialog.method) ? " *" : ""}
+              </Label>
               <Input
                 value={payoutDialog?.ref ?? ""}
                 onChange={(e) =>
                   setPayoutDialog((p) => (p ? { ...p, ref: e.target.value } : null))
                 }
-                placeholder="e.g. UTR number, cheque no."
+                placeholder={payoutDialog ? payoutRefPlaceholder(payoutDialog.method) : ""}
               />
             </div>
           </div>
@@ -1842,13 +1922,49 @@ export default function AdminExpenses() {
                   payoutRef: payoutDialog.ref,
                 })
               }
-              disabled={payoutMutation.isPending || !payoutDialog?.ref?.trim()}
+              disabled={
+                payoutMutation.isPending ||
+                !payoutDialog ||
+                (!isPayoutRefOptionalForMethod(payoutDialog.method) && !payoutDialog.ref.trim())
+              }
             >
               {payoutMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Record Payout"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!directPayoutWarningExpense} onOpenChange={(open) => !open && setDirectPayoutWarningExpense(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Record direct payout instead of replenishment?</AlertDialogTitle>
+            <AlertDialogDescription className="text-left space-y-2">
+              <p>
+                This expense is tagged to a petty cash fund. Normally you should use{" "}
+                <strong>Petty Cash → Record replenishment</strong> so the bank/UPI reference to the custodian is recorded together with
+                restoring float.
+              </p>
+              <p>
+                If you mark it paid here first, it will no longer match the replenishment batch flow and may block grouping this expense
+                with others for the same top-up.
+              </p>
+              <p>Continue only if you are sure this is a one-off direct vendor payment outside the imprest replenishment process.</p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const exp = directPayoutWarningExpense;
+                setDirectPayoutWarningExpense(null);
+                if (exp) setPayoutDialog({ expense: exp, method: "bank_transfer", ref: "" });
+              }}
+            >
+              Continue to Record Payout
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* View Expense Dialog */}
       <Dialog open={!!viewExpenseDialog} onOpenChange={() => setViewExpenseDialog(null)}>

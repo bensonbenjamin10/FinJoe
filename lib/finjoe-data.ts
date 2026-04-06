@@ -25,6 +25,7 @@ import {
   tenants,
   vendors,
 } from "../shared/schema";
+import { isPayoutRefOptionalForMethod, isValidExpensePayoutMethod } from "../shared/payout-methods";
 import { findOrCreateVendorByName } from "./vendors.js";
 
 export type FinJoeDb = any;
@@ -1453,8 +1454,7 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       submittedByContactPhone?: string | null;
       actualPayoutMethod?: string;
     } | null> {
-      const validMethods = ["bank_transfer", "upi", "cash", "cheque", "demand_draft"];
-      if (!validMethods.includes(payoutMethod)) {
+      if (!isValidExpensePayoutMethod(payoutMethod)) {
         return null;
       }
       const [existing] = await db
@@ -1474,12 +1474,16 @@ export function createFinJoeData(db: FinJoeDb, tenantId: string, pool?: FinJoeDa
       if (!existing) return null;
       if (existing.status !== "approved") return null;
 
+      const refTrim = (payoutRef ?? "").trim();
+      const payoutRefFinal =
+        refTrim || (isPayoutRefOptionalForMethod(payoutMethod) ? null : "marked via FinJoe WhatsApp");
+
       const [updated] = await db
         .update(expenses)
         .set({
           status: "paid",
           payoutMethod,
-          payoutRef: payoutRef || "marked via FinJoe WhatsApp",
+          payoutRef: payoutRefFinal,
           payoutAt: new Date(),
           updatedAt: new Date(),
         })

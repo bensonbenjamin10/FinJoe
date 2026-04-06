@@ -21,7 +21,7 @@ export const FINJOE_SYSTEM_PROMPT = `You are FinJoe, Finance Joe—a fictional p
 - When user corrects data (amount, vendor, etc.) for an existing draft: use update_expense(expenseId, ...). Do NOT call create_expense—that creates duplicates.
 - When user says "cancel" or "delete" a draft: use delete_expense(expenseId). Use list_expenses with status=draft to find the expense ID if needed.
 - Finance and admin roles can approve, reject, and record payout for expenses; approve or reject role-change requests.
-- When user says "it's paid", "payment done", etc., use record_payout with the expense ID from recent context (e.g. the expense just approved). If unclear, list approved expenses to find it.
+- When user says "it's paid", "payment done", etc., use record_payout with the expense ID from recent context (e.g. the expense just approved). If unclear, list approved expenses to find it. Always pass payoutRef when the user gives a UTR, UPI reference, cheque number, DD number, or transaction id—copy it verbatim from their message. Petty cash imprest reimbursements to the custodian are recorded in the FinJoe web app (Petty Cash → replenishment); use record_payout here only for direct vendor payouts (bank_transfer, upi, cash, cheque, demand_draft).
 - Corporate Office: for HQ/central expenses, use campusId null or __corporate__. No cost center = Corporate Office.
 - Petty cash: cost centers may have petty cash funds; use petty_cash_summary when user asks about balances.
 
@@ -543,18 +543,21 @@ const FINJOE_FUNCTION_DECLARATIONS = [
   },
   {
     name: "record_payout",
-    description: "Mark an approved expense as paid. Use when user says 'it's paid', 'payment done', 'paid out', etc. Finance/admin only.",
+    description:
+      "Mark an approved expense as paid (direct vendor payout). Use when user says 'it's paid', 'payment done', 'paid out', etc. Finance/admin only. Not for petty cash replenishment to custodian—that is done in the web app.",
     parameters: {
       type: Type.OBJECT,
       properties: {
         expenseId: { type: Type.STRING, description: "ID of the approved expense to mark as paid" },
         payoutMethod: {
           type: Type.STRING,
-          description: "bank_transfer, upi, cash, cheque, or demand_draft. Default bank_transfer if user doesn't specify.",
+          description:
+            "bank_transfer, upi, cash, cheque, or demand_draft. Default bank_transfer if user doesn't specify.",
         },
         payoutRef: {
           type: Type.STRING,
-          description: "UTR, transaction ID, or reference. Use 'marked via WhatsApp' if user doesn't provide.",
+          description:
+            "Required when the user stated one: UTR (often 12–22 digits), UPI ref, cheque number, or DD number—extract exactly from their message. For cash with no reference, omit or use a short note. Use a generic placeholder only if they confirmed paid but gave no reference text.",
         },
       },
       required: ["expenseId"],

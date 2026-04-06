@@ -29,6 +29,11 @@ import { parseExpensesFromCsv } from "../csv-parser.js";
 import { fetchSystemContext, fetchSystemData, resolveCategoryFromMessage, resolveCampusFromMessage, resolveIncomeCategoryFromMessage, type DataCollectionSettings } from "../context.js";
 import { validateExpenseData, validateRoleChangeData } from "../validation.js";
 import { createFinJoeData } from "../../../lib/finjoe-data.js";
+import {
+  extractPayoutRefFromMessage,
+  isValidExpensePayoutMethod,
+  VALID_EXPENSE_PAYOUT_METHODS,
+} from "../../../shared/payout-methods.js";
 import { toShortExpenseId } from "../../../lib/expense-id.js";
 import { getMedia } from "../../../lib/media-storage.js";
 import { parseExpenseQuery, parseDateToISO } from "../../../lib/expense-query-ai.js";
@@ -311,6 +316,7 @@ export async function processWithAgent(
           tenantId,
           messageId,
           dataCollectionSettings,
+          userMessage: effectiveUserMessage,
         },
         traceId
       );
@@ -397,6 +403,8 @@ type ExecuteContext = {
   tenantId: string;
   messageId?: string;
   dataCollectionSettings?: DataCollectionSettings;
+  /** Latest user message text (for extracting UTR/reference when the model omits payoutRef). */
+  userMessage?: string;
 };
 
 async function executeFunctionCall(
@@ -1519,21 +1527,50 @@ async function executeFunctionCall(
       const expenseIdInput = String(args.expenseId ?? "");
       const expenseId = await finJoeData.resolveExpenseId(expenseIdInput);
       if (!expenseId) return { success: false, error: `Expense #${expenseIdInput} not found.` };
-      const payoutMethod = String(args.payoutMethod ?? "bank_transfer").trim() || "bank_transfer";
-      const validPayoutMethods = ["bank_transfer", "upi", "cash", "cheque", "demand_draft"];
-      if (!validPayoutMethods.includes(payoutMethod)) {
-        return { success: false, error: `Invalid payout method "${payoutMethod}". Valid options: ${validPayoutMethods.join(", ")}` };
+      const payoutMethodRaw = String(args.payoutMethod ?? "bank_transfer").trim() || "bank_transfer";
+      if (!isValidExpensePayoutMethod(payoutMethodRaw)) {
+        return {
+          success: false,
+          error: `Invalid payout method "${payoutMethodRaw}". Valid options: ${VALID_EXPENSE_PAYOUT_METHODS.join(", ")}`,
+        };
       }
-      const payoutRef = String(args.payoutRef ?? "marked via FinJoe WhatsApp").trim() || "marked via FinJoe WhatsApp";
-      const result = await finJoeData.recordExpensePayout(expenseId, payoutMethod, payoutRef);
+      let payoutRef = String(args.payoutRef ?? "").trim();
+      const generic =
+        !payoutRef ||
+        payoutRef.toLowerCase() === "marked via finjoe whatsapp" ||
+        payoutRef === "marked via WhatsApp";
+      if (generic && execCtx.userMessage) {
+        const extracted = extractPayoutRefFromMessage(execCtx.userMessage);
+        if (extracted) payoutRef = extracted;
+      }
+      if (!payoutRef) payoutRef = "marked via FinJoe WhatsApp";
+      const result = await finJoeData.recordExpensePayout(expenseId, payoutMethodRaw, payoutRef);
       if (!result) return { success: false, error: `Could not record payout for expense #${expenseIdInput}. It may not be approved.` };
-      const payoutCtx = { amount: result.amount, vendorName: result.vendorName, costCenterName: result.costCenterName, payoutMethod: result.actualPayoutMethod, payoutRef };
+      const payoutCtx = {
+        amount: result.amount,
+        vendorName: result.vendorName,
+        costCenterName: result.costCenterName,
+        payoutMethod: result.actualPayoutMethod,
+        payoutRef,
+      };
       try {
         await notifySubmitterForPayoutFromExpense(expenseId, tenantId, traceId, payoutCtx);
       } catch (notifyErr) {
         logger.error("Failed to notify submitter of payout", { traceId, expenseId, err: String(notifyErr) });
       }
-      return { success: true, data: { expenseId, paid: true, payoutMethod, payoutRef, amount: result.amount, vendorName: result.vendorName, categoryName: result.categoryName, costCenterName: result.costCenterName } };
+      return {
+        success: true,
+        data: {
+          expenseId,
+          paid: true,
+          payoutMethod: payoutMethodRaw,
+          payoutRef,
+          amount: result.amount,
+          vendorName: result.vendorName,
+          categoryName: result.categoryName,
+          costCenterName: result.costCenterName,
+        },
+      };
     }
 
     case "create_recurring_template": {
