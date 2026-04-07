@@ -3950,10 +3950,30 @@ export async function registerRoutes(app: Express) {
       const { expenses: expRows, income: incRows } = parseBankStatementCsv(file.buffer, expCats.map((c) => c.slug), incCats.length > 0 ? incCats.map((c) => c.slug) : ["other"]);
 
       if (expRows.length > 0 && expCats.length === 0) {
-        return res.status(400).json({ error: "Expense rows found but no expense categories. Add categories in Expenses settings first." });
+        logger.warn("Bank import blocked: expense categories missing", {
+          channel: "bank_import",
+          categoryValidation: "IMPORT_EXPENSE_ROWS_NO_EXPENSE_CATEGORIES",
+          requestId: req.requestId,
+          tenantId: tid,
+          expenseRowCount: expRows.length,
+        });
+        return res.status(400).json({
+          error:
+            "Bank import — expense rows found but no expense categories in this workspace. Add categories under Expenses settings first.",
+        });
       }
       if (incRows.length > 0 && incCats.length === 0) {
-        return res.status(400).json({ error: "Income rows found but no income categories. Add categories in Income settings first." });
+        logger.warn("Bank import blocked: income categories missing", {
+          channel: "bank_import",
+          categoryValidation: "IMPORT_INCOME_ROWS_NO_INCOME_CATEGORIES",
+          requestId: req.requestId,
+          tenantId: tid,
+          incomeRowCount: incRows.length,
+        });
+        return res.status(400).json({
+          error:
+            "Bank import — income rows found but no income categories in this workspace. Add categories under Income settings first.",
+        });
       }
 
       const toDate = (dateStr: string): Date => {

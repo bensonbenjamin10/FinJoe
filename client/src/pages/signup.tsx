@@ -257,7 +257,7 @@ export default function Signup() {
                   Try FinJoe on WhatsApp
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Opens WhatsApp with a pre-filled message to our demo number. FinJoe will recognize your demo and guide you.
+                  Opens WhatsApp to our <strong>shared FinJoe demo number</strong> — inbound messages are matched to your phone so they stay in the same ACME sandbox as this dashboard. If you use a different WhatsApp Business number later, that number routes to its own workspace (not this demo).
                 </p>
                 <Button className="w-full gap-2" asChild>
                   <a href={waMeUrl} target="_blank" rel="noopener noreferrer">

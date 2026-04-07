@@ -496,7 +496,19 @@ async function executeFunctionCall(
 
     case "create_expense": {
       if (validCategoryIds.length === 0) {
-        return { success: false, error: "No expense categories configured. Ask admin to add categories in FinJoe Settings." };
+        logger.warn("Agent category validation failed", {
+          channel: "whatsapp_agent",
+          categoryValidation: "EXPENSE_NO_CATEGORIES",
+          tenantId,
+          traceId,
+          expenseCategoryCount: 0,
+          incomeCategoryCount: execCtx.validIncomeCategoryIds.length,
+        });
+        return {
+          success: false,
+          error:
+            "No expense categories configured for this workspace. Ask admin to add categories in FinJoe Settings (Expenses).",
+        };
       }
       const priorConfirm =
         convContext.pendingConfirmation?.type === "expense"
@@ -520,7 +532,18 @@ async function executeFunctionCall(
           categoryId = validCategoryIds[0];
         } else {
           const names = execCtx.categories.map((c) => c.name).join(", ");
-          return { success: false, error: `Category is required. Please ask the user which category this expense belongs to. Available categories: ${names}. If none fit, suggest the user contact an admin to create a new category.` };
+          logger.warn("Agent category validation failed", {
+            channel: "whatsapp_agent",
+            categoryValidation: "EXPENSE_CATEGORY_REQUIRED",
+            tenantId,
+            traceId,
+            expenseCategoryCount: validCategoryIds.length,
+            categoryIdArgPresent: Boolean(String(mergedArgs.categoryId ?? "").trim()),
+          });
+          return {
+            success: false,
+            error: `Expense — category required (multiple categories in this workspace). Ask the user which applies. Available: ${names}. If none fit, suggest an admin create a new category.`,
+          };
         }
       }
       const today = new Date().toISOString().slice(0, 10);
@@ -658,7 +681,19 @@ async function executeFunctionCall(
     case "create_income": {
       const { validIncomeCategoryIds, incomeCategories: incCats } = execCtx;
       if (validIncomeCategoryIds.length === 0) {
-        return { success: false, error: "No income categories configured. Ask admin to add income categories in the web app (Income settings)." };
+        logger.warn("Agent category validation failed", {
+          channel: "whatsapp_agent",
+          categoryValidation: "INCOME_NO_CATEGORIES",
+          tenantId,
+          traceId,
+          incomeCategoryCount: 0,
+          expenseCategoryCount: validCategoryIds.length,
+        });
+        return {
+          success: false,
+          error:
+            "No income categories configured for this workspace. Ask admin to add income categories in the web app (Income settings).",
+        };
       }
       const priorIncomeConfirm =
         convContext.pendingConfirmation?.type === "income"
@@ -686,7 +721,18 @@ async function executeFunctionCall(
           finalCategoryId = validIncomeCategoryIds[0];
         } else {
           const names = incCats.map((c) => c.name).join(", ");
-          return { success: false, error: `Income category is required. Please ask the user which category this income belongs to. Available income categories: ${names}. If none fit, suggest the user contact an admin to create a new income category.` };
+          logger.warn("Agent category validation failed", {
+            channel: "whatsapp_agent",
+            categoryValidation: "INCOME_CATEGORY_REQUIRED",
+            tenantId,
+            traceId,
+            incomeCategoryCount: validIncomeCategoryIds.length,
+            categoryIdArgPresent: Boolean(String(mergedIncomeArgs.categoryId ?? "").trim()),
+          });
+          return {
+            success: false,
+            error: `Income — category required (multiple income categories in this workspace). Ask the user which applies. Available: ${names}. If none fit, suggest an admin create a new income category.`,
+          };
         }
       }
       const today = new Date().toISOString().slice(0, 10);
@@ -746,7 +792,19 @@ async function executeFunctionCall(
 
     case "bulk_create_expenses": {
       if (validCategoryIds.length === 0) {
-        return { success: false, error: "No expense categories configured. Ask admin to add categories in FinJoe Settings." };
+        logger.warn("Agent category validation failed", {
+          channel: "whatsapp_agent",
+          categoryValidation: "BULK_EXPENSE_NO_CATEGORIES",
+          tenantId,
+          traceId,
+          expenseCategoryCount: 0,
+          incomeCategoryCount: execCtx.validIncomeCategoryIds.length,
+        });
+        return {
+          success: false,
+          error:
+            "No expense categories configured for this workspace. Ask admin to add categories in FinJoe Settings (Expenses).",
+        };
       }
       const BULK_MAX = 25;
       const rawExpenses = Array.isArray(args.expenses) ? args.expenses : [];

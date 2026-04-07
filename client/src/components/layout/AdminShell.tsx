@@ -311,8 +311,13 @@ export function AdminShell({ children }: AdminShellProps) {
       <SidebarInset>
         {user?.isDemoTenant && user?.realTenantId && (
           <div className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-sm">
-            <p className="text-amber-950 dark:text-amber-100 max-w-[min(100%,42rem)]">
-              You&apos;re viewing <strong>demo data</strong> (ACME sandbox). Switch to your real workspace when ready.
+            <p className="text-amber-950 dark:text-amber-100 max-w-[min(100%,42rem)] space-y-1">
+              <span className="block">
+                You&apos;re viewing <strong>demo data</strong> (ACME sandbox). Switch to your real workspace when ready.
+              </span>
+              <span className="block text-xs opacity-90">
+                WhatsApp: chats to the <strong>FinJoe demo number</strong> from onboarding match this sandbox. Messages to your own WhatsApp Business number go to that workspace only — not mixed with this demo.
+              </span>
             </p>
             <Button size="sm" variant="secondary" className="shrink-0" onClick={() => setSwitchOpen(true)}>
               Switch to your data

@@ -24,6 +24,13 @@ import { createHash } from "crypto";
 const conversationLocks = new Map<string, Promise<void>>();
 const FALLBACK_REPLY = "I received your message, but I hit a temporary delivery issue. Please try again in a minute.";
 
+/** Last n digits for structured logs only; never log full phone numbers. */
+function phoneLastDigits(phoneLike: string, n = 4): string {
+  const d = phoneLike.replace(/\D/g, "");
+  if (d.length < n) return "****";
+  return `…${d.slice(-n)}`;
+}
+
 type OutboundSendReservation =
   | { state: "new" | "retry"; rowId: string }
   | { state: "already_sent"; providerMessageSid?: string | null }
@@ -235,13 +242,24 @@ export async function handleWebhook(req: Request, res: Response) {
 
   // Only apply demo routing when the To number wasn't matched to a specific tenant's WABA provider.
   // If a tenant has their own WhatsApp number configured, messages to that number must stay with that tenant.
+  let demoRoutingApplied = false;
   if (!resolved.resolvedFromDb) {
     const demoTenantOverride = await resolveDemoTenantForInboundPhone(from);
     if (demoTenantOverride) {
       tenantId = demoTenantOverride;
-      logger.info("Demo tenant routing from phone", { traceId, tenantId });
+      demoRoutingApplied = true;
     }
   }
+
+  logger.info("Webhook tenant routing", {
+    channel: "whatsapp_webhook",
+    traceId,
+    tenantId,
+    resolvedFromDb: resolved.resolvedFromDb,
+    demoRoutingApplied,
+    toNumberLast4: phoneLastDigits(to),
+    fromNumberLast4: phoneLastDigits(from),
+  });
 
   logger.info("Webhook received", { traceId, from, bodyLength: body?.length ?? 0, numMedia });
 
