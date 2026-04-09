@@ -44,6 +44,9 @@ export function useAuth() {
     !!user && (user.role === "super_admin" || EXPENSE_ROLES.includes(user.role));
   const isTenantAdmin = !!user && (user.role === "admin" || user.role === "super_admin");
 
+  // Legacy check: admin/finance can always approve; other staff may have scoped authority
+  const hasLegacyApproveRole = !!user && (user.role === "super_admin" || APPROVE_ROLES.includes(user.role));
+
   return {
     user,
     isLoading,
@@ -52,8 +55,9 @@ export function useAuth() {
     isTenantAdmin,
     isTenantStaff,
     hasExpenseAccess: isTenantStaff,
-    canApproveExpenses: !!user && (user.role === "super_admin" || APPROVE_ROLES.includes(user.role)),
-    canImportExpenses: !!user && (user.role === "super_admin" || APPROVE_ROLES.includes(user.role)),
+    canApproveExpenses: hasLegacyApproveRole || isTenantStaff,
+    canImportExpenses: hasLegacyApproveRole,
+    canManageApprovalRules: isTenantAdmin,
     logout: () => logoutMutation.mutate(),
     isLoggingOut: logoutMutation.isPending,
   };

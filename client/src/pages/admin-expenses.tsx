@@ -77,6 +77,7 @@ import {
   payoutRefFieldLabel,
   payoutRefPlaceholder,
 } from "@shared/payout-methods";
+import { ApprovalTimeline } from "@/components/ApprovalTimeline";
 
 type ApiAttachmentsMeta = {
   web: ExpenseWebAttachment[];
@@ -2044,6 +2045,7 @@ export default function AdminExpenses() {
                 )}
               </div>
               <ExpenseAttachmentsPanel expenseId={viewExpenseDialog.id} tenantId={tenantId} />
+              <ApprovalTimeline expenseId={viewExpenseDialog.id} tenantId={tenantId} />
               <DialogFooter>
                 <Button variant="outline" onClick={() => setViewExpenseDialog(null)}>Close</Button>
                 <Button onClick={() => { setEditExpenseDialog(viewExpenseDialog); setViewExpenseDialog(null); }}>

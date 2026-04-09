@@ -127,6 +127,13 @@
       "when": 1774118030000,
       "tag": "0017_cfo_insight_snapshots",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1775730426189,
+      "tag": "0018_lonely_warstar",
+      "breakpoints": true
     }
   ]
 }

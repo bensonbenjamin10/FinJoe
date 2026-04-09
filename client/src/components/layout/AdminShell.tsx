@@ -63,6 +63,8 @@ import {
   FileText,
   Users,
   UserCog,
+  ClipboardCheck,
+  ShieldCheck,
 } from "lucide-react";
 import type { Tenant } from "@shared/schema";
 import { FINJOE_PATHS, finjoePathWithTenant } from "@/lib/finjoe-routes";
@@ -151,12 +153,23 @@ export function AdminShell({ children }: AdminShellProps) {
   /** Deep-link to dashboard users (scalable path; same destination as legacy `/admin/team`). */
   const teamHref = finjoePathWithTenant(FINJOE_PATHS.peopleUsers, tenantId, isSuperAdmin);
 
+  const myApprovalsHref =
+    isSuperAdmin && urlTenantId
+      ? `/admin/my-approvals?tenantId=${encodeURIComponent(urlTenantId)}`
+      : "/admin/my-approvals";
+
+  const approvalRulesHref =
+    isSuperAdmin && urlTenantId
+      ? `/admin/approval-rules?tenantId=${encodeURIComponent(urlTenantId)}`
+      : "/admin/approval-rules";
+
   const navItems = [
     { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/admin/reports", label: "Reports", icon: FileSpreadsheet },
     ...(isTenantAdmin ? [{ href: teamHref, label: "Team", icon: Users }] : []),
     { href: finjoeHref, label: "FinJoe", icon: MessageCircle },
     { href: "/admin/expenses", label: "Expenses", icon: Receipt },
+    ...(canApproveExpenses ? [{ href: myApprovalsHref, label: "My Approvals", icon: ClipboardCheck }] : []),
     ...(canApproveExpenses ? [{ href: pettyCashHref, label: "Petty Cash", icon: Wallet }] : []),
     { href: "/admin/recurring-templates", label: "Recurring Expenses", icon: Repeat },
     { href: "/admin/income", label: "Income", icon: TrendingUp },

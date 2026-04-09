@@ -41,6 +41,8 @@ import PaymentSuccess from "@/pages/payment-success";
 import { AdminShell } from "@/components/layout/AdminShell";
 import { ProtectedRoute } from "@/components/protected-route";
 import AdminKnowledgeBase from "@/pages/admin-knowledge-base";
+import AdminMyApprovals from "@/pages/admin-my-approvals";
+import AdminApprovalRules from "@/pages/admin-approval-rules";
 
 function Router() {
   return (
@@ -112,6 +114,20 @@ function Router() {
           <ProtectedRoute>
             <AdminShell>
               <AdminKnowledgeBase />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/my-approvals">
+          <ProtectedRoute>
+            <AdminShell>
+              <AdminMyApprovals />
+            </AdminShell>
+          </ProtectedRoute>
+        </Route>
+        <Route path="/admin/approval-rules">
+          <ProtectedRoute requireRoles={["admin", "super_admin"]}>
+            <AdminShell>
+              <AdminApprovalRules />
             </AdminShell>
           </ProtectedRoute>
         </Route>

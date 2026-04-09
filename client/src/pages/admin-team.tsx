@@ -33,7 +33,8 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Loader2, Mail, Pencil, UserPlus } from "lucide-react";
+import { Loader2, Mail, Pencil, Plus, ShieldCheck, Trash2, UserPlus } from "lucide-react";
+import { DialogFooter } from "@/components/ui/dialog";
 import { Link } from "wouter";
 import { FINJOE_PATHS, finjoePathWithTenant } from "@/lib/finjoe-routes";
 
@@ -311,6 +312,8 @@ export default function AdminTeam({ embedded = false }: { embedded?: boolean }) 
         </CardContent>
       </Card>
 
+      <ApprovalScopesSection tenantId={tenantId} qs={qs} users={rows} />
+
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -444,5 +447,278 @@ export default function AdminTeam({ embedded = false }: { embedded?: boolean }) 
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+type ScopeRow = {
+  id: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  userRole: string;
+  scopeType: string;
+  scopeValueId: string | null;
+  scopeValueName: string | null;
+  maxAmount: number | null;
+  isActive: boolean;
+};
+
+function ApprovalScopesSection({
+  tenantId,
+  qs,
+  users,
+}: {
+  tenantId: string | null;
+  qs: string;
+  users: TenantUserRow[];
+}) {
+  const { toast } = useToast();
+  const { isTenantAdmin } = useAuth();
+  const [addOpen, setAddOpen] = useState(false);
+  const [addForm, setAddForm] = useState({
+    userId: "",
+    scopeType: "global" as string,
+    scopeValueId: "",
+    maxAmount: "",
+  });
+
+  const { data: scopes = [], isLoading } = useQuery<ScopeRow[]>({
+    queryKey: ["/api/admin/approval-scopes", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/approval-scopes${qs}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load");
+      return res.json();
+    },
+    enabled: !!tenantId && isTenantAdmin,
+  });
+
+  const { data: costCenters = [] } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ["/api/admin/cost-centers", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/cost-centers${qs}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!tenantId && addOpen,
+  });
+
+  const { data: categories = [] } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ["/api/admin/expense-categories", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/expense-categories${qs}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!tenantId && addOpen,
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async () => {
+      const body: Record<string, unknown> = {
+        userId: addForm.userId,
+        scopeType: addForm.scopeType,
+      };
+      if (tenantId) body.tenantId = tenantId;
+      if (addForm.scopeType !== "global" && addForm.scopeValueId) {
+        body.scopeValueId = addForm.scopeValueId;
+      }
+      if (addForm.maxAmount) body.maxAmount = Math.round(parseFloat(addForm.maxAmount) * 100);
+      const res = await apiRequest("POST", "/api/admin/approval-scopes", body);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/approval-scopes"] });
+      toast({ title: "Approval scope added" });
+      setAddOpen(false);
+      setAddForm({ userId: "", scopeType: "global", scopeValueId: "", maxAmount: "" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/admin/approval-scopes/${id}${qs}`);
+      if (!res.ok) throw new Error("Failed to delete");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/approval-scopes"] });
+      toast({ title: "Scope removed" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  if (!isTenantAdmin) return null;
+
+  return (
+    <>
+      <Card className="mt-6">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-5 w-5 text-muted-foreground" />
+              <CardTitle className="text-lg">Approval authority</CardTitle>
+            </div>
+            <Button size="sm" onClick={() => setAddOpen(true)}>
+              <Plus className="h-4 w-4 mr-1" />
+              Add scope
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="flex items-center gap-2 py-4 text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading...
+            </div>
+          ) : scopes.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4">
+              No approval scopes configured. By default, all admin and finance users can approve any expense.
+              Add scopes to restrict who can approve by cost center, category, or amount.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>User</TableHead>
+                    <TableHead>Scope</TableHead>
+                    <TableHead>Max amount</TableHead>
+                    <TableHead className="w-[80px]" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {scopes.map((s) => (
+                    <TableRow key={s.id}>
+                      <TableCell>
+                        <div>
+                          <span className="font-medium">{s.userName}</span>
+                          <span className="text-muted-foreground ml-2 text-xs">{s.userRole}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">
+                          {s.scopeType === "global"
+                            ? "All expenses"
+                            : `${s.scopeType.replace(/_/g, " ")}: ${s.scopeValueName || s.scopeValueId || "—"}`}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {s.maxAmount != null
+                          ? `₹${(s.maxAmount / 100).toLocaleString("en-IN")}`
+                          : "Unlimited"}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => deleteMutation.mutate(s.id)}
+                          disabled={deleteMutation.isPending}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add approval scope</DialogTitle>
+            <DialogDescription>
+              Define what a user is authorized to approve.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="grid gap-2">
+              <Label>User</Label>
+              <Select value={addForm.userId} onValueChange={(v) => setAddForm((f) => ({ ...f, userId: v }))}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select user" />
+                </SelectTrigger>
+                <SelectContent>
+                  {users.filter((u) => u.isActive).map((u) => (
+                    <SelectItem key={u.id} value={u.id}>
+                      {u.name} ({u.role})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label>Scope type</Label>
+              <Select value={addForm.scopeType} onValueChange={(v) => setAddForm((f) => ({ ...f, scopeType: v, scopeValueId: "" }))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">Global (all expenses)</SelectItem>
+                  <SelectItem value="cost_center">Cost center</SelectItem>
+                  <SelectItem value="category">Category</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {addForm.scopeType === "cost_center" && (
+              <div className="grid gap-2">
+                <Label>Cost center</Label>
+                <Select value={addForm.scopeValueId} onValueChange={(v) => setAddForm((f) => ({ ...f, scopeValueId: v }))}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select cost center" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {costCenters.map((cc) => (
+                      <SelectItem key={cc.id} value={cc.id}>{cc.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            {addForm.scopeType === "category" && (
+              <div className="grid gap-2">
+                <Label>Category</Label>
+                <Select value={addForm.scopeValueId} onValueChange={(v) => setAddForm((f) => ({ ...f, scopeValueId: v }))}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categories.map((cat) => (
+                      <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="grid gap-2">
+              <Label>Max amount (optional, in ₹)</Label>
+              <Input
+                type="number"
+                placeholder="Unlimited"
+                value={addForm.maxAmount}
+                onChange={(e) => setAddForm((f) => ({ ...f, maxAmount: e.target.value }))}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => createMutation.mutate()}
+              disabled={!addForm.userId || createMutation.isPending}
+            >
+              {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Add
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

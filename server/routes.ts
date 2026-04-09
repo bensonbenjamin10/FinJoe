@@ -41,6 +41,7 @@ import {
   isValidExpensePayoutMethod,
 } from "../shared/payout-methods.js";
 import { createFinJoeData, generateExpensesFromTemplates, generateIncomeFromTemplates, listDistinctVendorNames } from "../lib/finjoe-data.js";
+import { createApprovalEngine } from "../lib/approval-engine.js";
 import { runBackfillEmbeddings } from "../lib/backfill-embeddings.js";
 import { runWeeklyInsights } from "../worker/src/weekly-insights.js";
 import { runCfoInsightSnapshots } from "./cfo-snapshot-job.js";
@@ -4779,7 +4780,18 @@ export async function registerRoutes(app: Express) {
       if (existing.status !== "draft") return res.status(400).json({ error: "Only draft expenses can be submitted" });
       const [updated] = await db.update(expenses).set({ status: "pending_approval", submittedAt: new Date(), submittedById: (req.user as any).id, updatedAt: new Date() }).where(whereClause).returning();
       if (!updated) return res.status(404).json({ error: "Not found" });
-      // Notify finance about new expense needing approval
+
+      // Initiate approval workflow
+      const engine = createApprovalEngine(db, tid);
+      let firstStepApproverIds: string[] = [];
+      try {
+        const result = await engine.initiateApproval(updated.id);
+        firstStepApproverIds = result.firstStepApproverIds;
+      } catch (engineErr) {
+        logger.error("Approval engine initiation failed, falling back to legacy notify", { requestId: req.requestId, err: String(engineErr) });
+      }
+
+      // Notify approvers (step-aware: only step-1 assignees, falling back to all finance/admin)
       try {
         const [row] = await db
           .select({
@@ -4802,7 +4814,7 @@ export async function registerRoutes(app: Express) {
           );
         }
       } catch (notifyErr) {
-        logger.error("Failed to notify finance for web submit", { requestId: req.requestId, err: String(notifyErr) });
+        logger.error("Failed to notify approvers for web submit", { requestId: req.requestId, err: String(notifyErr) });
       }
       res.json(updated);
     } catch (e) {
@@ -4811,37 +4823,79 @@ export async function registerRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/expenses/:id/approve", requireApprover, async (req, res) => {
+  app.post("/api/admin/expenses/:id/approve", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.body?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const approverId = (req.user as Express.User & { id: string }).id;
-      const finJoeData = createFinJoeData(db, tid);
-      const result = await finJoeData.approveExpense(req.params.id, approverId);
-      if (!result) return res.status(404).json({ error: "Not found" });
-      const expCtx = {
-        amount: result.amount,
-        vendorName: result.vendorName,
-        categoryName: result.categoryName,
-        costCenterName: result.costCenterName,
-      };
-      try {
-        await notifySubmitterForApprovalRejectionFromExpense(result.id, "approved", tid, undefined, req.requestId, expCtx);
-      } catch (notifyErr) {
-        logger.error("Failed to notify submitter for approval", { requestId: req.requestId, err: String(notifyErr) });
+      const approverId = user.id;
+      const engine = createApprovalEngine(db, tid);
+
+      // Check if user can approve (engine-based or legacy role)
+      const canApprove = await engine.canUserApprove(req.params.id, approverId);
+      const hasLegacyRole = user.role === "super_admin" || ["admin", "finance"].includes(user.role);
+      if (!canApprove && !hasLegacyRole) {
+        return res.status(403).json({ error: "You are not authorized to approve this expense" });
       }
-      const [full] = await db.select().from(expenses).where(and(eq(expenses.id, result.id), eq(expenses.tenantId, tid))).limit(1);
-      res.json(full ?? { id: result.id });
+
+      const comment = req.body?.comment ?? null;
+
+      // If approval steps exist, use engine; otherwise fall back to legacy
+      const status = await engine.getApprovalStatus(req.params.id);
+      if (status && status.currentStepOrder !== null) {
+        const result = await engine.processApprovalAction(req.params.id, approverId, "approve", comment);
+        // Notify based on result
+        if (result.isFullyApproved) {
+          try {
+            const finJoeData = createFinJoeData(db, tid);
+            const detail = await finJoeData.getExpenseWithDetails(req.params.id);
+            if (detail) {
+              await notifySubmitterForApprovalRejectionFromExpense(
+                req.params.id, "approved", tid, undefined, req.requestId,
+                { amount: detail.amount as number, vendorName: detail.vendorName as string | null, categoryName: (detail.category as any)?.name, costCenterName: (detail.costCenter as any)?.name }
+              );
+            }
+          } catch (notifyErr) {
+            logger.error("Failed to notify submitter for approval", { requestId: req.requestId, err: String(notifyErr) });
+          }
+        }
+        // If there's a next step, notify next approvers
+        if (result.nextStepApproverIds && result.nextStepApproverIds.length > 0) {
+          try {
+            const [row] = await db
+              .select({ amount: expenses.amount, vendorName: expenses.vendorName, description: expenses.description, categoryName: expenseCategories.name })
+              .from(expenses).leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
+              .where(and(eq(expenses.id, req.params.id), eq(expenses.tenantId, tid))).limit(1);
+            if (row) {
+              await notifyFinanceForApproval(req.params.id, { amount: row.amount, vendorName: row.vendorName, description: row.description }, tid, req.requestId, row.categoryName ?? null);
+            }
+          } catch (notifyErr) {
+            logger.error("Failed to notify next-step approvers", { requestId: req.requestId, err: String(notifyErr) });
+          }
+        }
+      } else {
+        // Legacy path (no approval steps exist)
+        const finJoeData = createFinJoeData(db, tid);
+        const result = await finJoeData.approveExpense(req.params.id, approverId);
+        if (!result) return res.status(404).json({ error: "Not found" });
+        try {
+          await notifySubmitterForApprovalRejectionFromExpense(result.id, "approved", tid, undefined, req.requestId,
+            { amount: result.amount, vendorName: result.vendorName, categoryName: result.categoryName, costCenterName: result.costCenterName });
+        } catch (notifyErr) {
+          logger.error("Failed to notify submitter for approval", { requestId: req.requestId, err: String(notifyErr) });
+        }
+      }
+      const [full] = await db.select().from(expenses).where(and(eq(expenses.id, req.params.id), eq(expenses.tenantId, tid))).limit(1);
+      res.json(full ?? { id: req.params.id });
     } catch (e) {
       logger.error("Expense approve error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to approve" });
     }
   });
 
-  app.post("/api/admin/expenses/:id/reject", requireApprover, async (req, res) => {
+  app.post("/api/admin/expenses/:id/reject", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const user = req.user as Express.User;
@@ -4849,15 +4903,39 @@ export async function registerRoutes(app: Express) {
       const tid = tenantId ?? req.body?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
       const { reason } = req.body;
+      const rejecterId = user.id;
+      const engine = createApprovalEngine(db, tid);
+
+      const canApprove = await engine.canUserApprove(req.params.id, rejecterId);
+      const hasLegacyRole = user.role === "super_admin" || ["admin", "finance"].includes(user.role);
+      if (!canApprove && !hasLegacyRole) {
+        return res.status(403).json({ error: "You are not authorized to reject this expense" });
+      }
+
       const whereClause = and(eq(expenses.id, req.params.id), eq(expenses.tenantId, tid));
       const [existing] = await db.select({ status: expenses.status, amount: expenses.amount, vendorName: expenses.vendorName, categoryName: expenseCategories.name, costCenterName: costCenters.name }).from(expenses).leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id)).leftJoin(costCenters, eq(expenses.costCenterId, costCenters.id)).where(whereClause).limit(1);
       if (!existing) return res.status(404).json({ error: "Not found" });
       if (existing.status !== "pending_approval") return res.status(400).json({ error: "Only pending expenses can be rejected" });
-      const [updated] = await db.update(expenses).set({ status: "rejected", rejectionReason: reason || null, updatedAt: new Date() }).where(whereClause).returning();
-      if (!updated) return res.status(404).json({ error: "Not found" });
+
+      // Use engine if approval steps exist, otherwise legacy
+      const status = await engine.getApprovalStatus(req.params.id);
+      if (status && status.currentStepOrder !== null) {
+        await engine.processApprovalAction(req.params.id, rejecterId, "reject", reason);
+      } else {
+        // Legacy path -- fixed: now records approvedById and approvedAt
+        await db.update(expenses).set({
+          status: "rejected",
+          rejectionReason: reason || null,
+          approvedById: rejecterId,
+          approvedAt: new Date(),
+          updatedAt: new Date(),
+        }).where(whereClause);
+      }
+
+      const [updated] = await db.select().from(expenses).where(whereClause).limit(1);
       const expCtx = { amount: existing.amount, vendorName: existing.vendorName, categoryName: existing.categoryName, costCenterName: existing.costCenterName };
       try {
-        await notifySubmitterForApprovalRejectionFromExpense(updated.id, "rejected", tid, reason, req.requestId, expCtx);
+        await notifySubmitterForApprovalRejectionFromExpense(req.params.id, "rejected", tid, reason, req.requestId, expCtx);
       } catch (notifyErr) {
         logger.error("Failed to notify submitter for rejection", { requestId: req.requestId, err: String(notifyErr) });
       }
@@ -5407,6 +5485,169 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("Send invite error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to send invite" });
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Approval workflow API
+  // ---------------------------------------------------------------------------
+
+  // List approval rules for tenant
+  app.get("/api/admin/approval-rules", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+      const engine = createApprovalEngine(db, tenantId);
+      const rules = await engine.listRules();
+      res.json(rules);
+    } catch (e) {
+      logger.error("List approval rules error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to list rules" });
+    }
+  });
+
+  // Create approval rule
+  app.post("/api/admin/approval-rules", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req) ?? req.body?.tenantId;
+      if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+      const { name, priority, conditions, steps } = req.body;
+      if (!name || !Array.isArray(steps) || steps.length === 0) {
+        return res.status(400).json({ error: "name and at least one step required" });
+      }
+      const engine = createApprovalEngine(db, tenantId);
+      const result = await engine.createRule({
+        name,
+        priority: priority ?? 10,
+        conditions: conditions ?? [],
+        steps,
+      });
+      res.status(201).json(result);
+    } catch (e) {
+      logger.error("Create approval rule error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to create rule" });
+    }
+  });
+
+  // Update approval rule
+  app.put("/api/admin/approval-rules/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req) ?? req.body?.tenantId;
+      if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+      const engine = createApprovalEngine(db, tenantId);
+      const ok = await engine.updateRule(req.params.id, req.body);
+      if (!ok) return res.status(404).json({ error: "Rule not found" });
+      res.json({ success: true });
+    } catch (e) {
+      logger.error("Update approval rule error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to update rule" });
+    }
+  });
+
+  // Delete approval rule
+  app.delete("/api/admin/approval-rules/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+      const engine = createApprovalEngine(db, tenantId);
+      const ok = await engine.deleteRule(req.params.id);
+      if (!ok) return res.status(400).json({ error: "Cannot delete default rule or rule not found" });
+      res.status(204).send();
+    } catch (e) {
+      logger.error("Delete approval rule error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to delete rule" });
+    }
+  });
+
+  // List user approval scopes
+  app.get("/api/admin/approval-scopes", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+      const engine = createApprovalEngine(db, tenantId);
+      const scopes = await engine.listScopes();
+      res.json(scopes);
+    } catch (e) {
+      logger.error("List approval scopes error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to list scopes" });
+    }
+  });
+
+  // Create user approval scope
+  app.post("/api/admin/approval-scopes", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req) ?? req.body?.tenantId;
+      if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+      const { userId, scopeType, scopeValueId, maxAmount } = req.body;
+      if (!userId || !scopeType) return res.status(400).json({ error: "userId and scopeType required" });
+      if (!["cost_center", "category", "global"].includes(scopeType)) {
+        return res.status(400).json({ error: "scopeType must be cost_center, category, or global" });
+      }
+      const engine = createApprovalEngine(db, tenantId);
+      const result = await engine.createScope({ userId, scopeType, scopeValueId, maxAmount });
+      res.status(201).json(result);
+    } catch (e) {
+      logger.error("Create approval scope error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to create scope" });
+    }
+  });
+
+  // Update user approval scope
+  app.put("/api/admin/approval-scopes/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req) ?? req.body?.tenantId;
+      if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+      const engine = createApprovalEngine(db, tenantId);
+      const ok = await engine.updateScope(req.params.id, req.body);
+      if (!ok) return res.status(404).json({ error: "Scope not found" });
+      res.json({ success: true });
+    } catch (e) {
+      logger.error("Update approval scope error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to update scope" });
+    }
+  });
+
+  // Delete user approval scope
+  app.delete("/api/admin/approval-scopes/:id", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+      const engine = createApprovalEngine(db, tenantId);
+      const ok = await engine.deleteScope(req.params.id);
+      if (!ok) return res.status(404).json({ error: "Scope not found" });
+      res.status(204).send();
+    } catch (e) {
+      logger.error("Delete approval scope error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to delete scope" });
+    }
+  });
+
+  // My pending approvals (for current user)
+  app.get("/api/admin/my-approvals", requireTenantStaff, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+      const engine = createApprovalEngine(db, tenantId);
+      const pending = await engine.getMyPendingApprovals(user.id);
+      res.json(pending);
+    } catch (e) {
+      logger.error("My approvals error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch approvals" });
+    }
+  });
+
+  // Approval history for an expense
+  app.get("/api/admin/expenses/:id/approval-history", requireTenantStaff, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+      const engine = createApprovalEngine(db, tenantId);
+      const status = await engine.getApprovalStatus(req.params.id);
+      res.json(status ?? { steps: [], currentStepOrder: null, isFullyApproved: false, isRejected: false });
+    } catch (e) {
+      logger.error("Approval history error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to fetch approval history" });
     }
   });
 

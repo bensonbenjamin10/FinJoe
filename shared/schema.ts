@@ -704,6 +704,107 @@ export const integrationEvents = pgTable("integration_events", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// ---------------------------------------------------------------------------
+// Approval workflow tables
+// ---------------------------------------------------------------------------
+
+/** Configurable approval rules – each rule matches expenses by conditions and defines an ordered approval chain. */
+export const approvalRules = pgTable("approval_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  /** Entity this rule applies to (future: 'purchase_order', 'income', etc.) */
+  entityType: text("entity_type").notNull().default("expense"),
+  isActive: boolean("is_active").notNull().default(true),
+  /** Higher priority rules are evaluated first; 0 = default catch-all. */
+  priority: integer("priority").notNull().default(0),
+  /** JSON array of match predicates – ALL must match for the rule to apply.
+   *  Shape: Array<{ field: string; op: string; value: unknown }>
+   *  Supported fields: amount, category_id, cost_center_id, vendor_id, source
+   *  Supported ops: eq, neq, in, not_in, gte, lte, between */
+  conditions: jsonb("conditions")
+    .$type<Array<{ field: string; op: string; value: unknown }>>()
+    .notNull()
+    .default(sql`'[]'::jsonb`),
+  /** True for the system-generated default rule (non-deletable). */
+  isDefault: boolean("is_default").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+/** Ordered approval steps within a rule. */
+export const approvalRuleSteps = pgTable("approval_rule_steps", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ruleId: varchar("rule_id")
+    .notNull()
+    .references(() => approvalRules.id, { onDelete: "cascade" }),
+  stepOrder: integer("step_order").notNull(),
+  /** How the approver is resolved: 'role', 'user', 'cost_center_head', 'category_owner' */
+  approverType: text("approver_type").notNull(),
+  /** Role name or user ID – nullable for dynamic types like cost_center_head */
+  approverValue: text("approver_value"),
+  /** 'any_one' = first eligible approver is enough; 'all' = every eligible approver must approve */
+  approvalMode: text("approval_mode").notNull().default("any_one"),
+  /** Whether this step can reject (false = review-only, can only approve or skip) */
+  canReject: boolean("can_reject").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+/** Per-user approval authority – defines what a user is allowed to approve. */
+export const userApprovalScopes = pgTable("user_approval_scopes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  /** 'cost_center', 'category', or 'global' */
+  scopeType: text("scope_type").notNull(),
+  /** FK to cost_centers.id or expense_categories.id; null when scopeType='global' */
+  scopeValueId: text("scope_value_id"),
+  /** Maximum amount (minor units) this user can approve; null = unlimited */
+  maxAmount: integer("max_amount"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+/** Runtime approval state per expense – one row per step in the matched rule. */
+export const expenseApprovalSteps = pgTable("expense_approval_steps", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  expenseId: varchar("expense_id")
+    .notNull()
+    .references(() => expenses.id, { onDelete: "cascade" }),
+  ruleId: varchar("rule_id")
+    .notNull()
+    .references(() => approvalRules.id),
+  stepId: varchar("step_id")
+    .notNull()
+    .references(() => approvalRuleSteps.id),
+  stepOrder: integer("step_order").notNull(),
+  /** 'waiting' (not yet active), 'pending' (active, awaiting action), 'approved', 'rejected', 'skipped' */
+  status: text("status").notNull().default("waiting"),
+  /** JSON array of user IDs eligible to act on this step */
+  assignedTo: jsonb("assigned_to").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  actedById: varchar("acted_by_id").references(() => users.id),
+  actedAt: timestamp("acted_at"),
+  comment: text("comment"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Approval workflow types
+export type ApprovalRule = typeof approvalRules.$inferSelect;
+export type InsertApprovalRule = typeof approvalRules.$inferInsert;
+export type ApprovalRuleStep = typeof approvalRuleSteps.$inferSelect;
+export type InsertApprovalRuleStep = typeof approvalRuleSteps.$inferInsert;
+export type UserApprovalScope = typeof userApprovalScopes.$inferSelect;
+export type InsertUserApprovalScope = typeof userApprovalScopes.$inferInsert;
+export type ExpenseApprovalStep = typeof expenseApprovalSteps.$inferSelect;
+export type InsertExpenseApprovalStep = typeof expenseApprovalSteps.$inferInsert;
+
 // Relations
 export const tenantsRelations = relations(tenants, ({ many }) => ({
   costCenters: many(costCenters),
@@ -777,6 +878,7 @@ export const expensesRelations = relations(expenses, ({ one, many }) => ({
     references: [pettyCashReplenishments.id],
   }),
   finJoeTasks: many(finJoeTasks),
+  approvalSteps: many(expenseApprovalSteps),
 }));
 
 export const recurringExpenseTemplatesRelations = relations(recurringExpenseTemplates, ({ one, many }) => ({
@@ -825,6 +927,27 @@ export const finJoeRoleChangeRequestsRelations = relations(finJoeRoleChangeReque
 export const finJoeTasksRelations = relations(finJoeTasks, ({ one }) => ({
   conversation: one(finJoeConversations, { fields: [finJoeTasks.conversationId], references: [finJoeConversations.id] }),
   expense: one(expenses, { fields: [finJoeTasks.expenseId], references: [expenses.id] }),
+}));
+
+export const approvalRulesRelations = relations(approvalRules, ({ one, many }) => ({
+  tenant: one(tenants, { fields: [approvalRules.tenantId], references: [tenants.id] }),
+  steps: many(approvalRuleSteps),
+}));
+
+export const approvalRuleStepsRelations = relations(approvalRuleSteps, ({ one }) => ({
+  rule: one(approvalRules, { fields: [approvalRuleSteps.ruleId], references: [approvalRules.id] }),
+}));
+
+export const userApprovalScopesRelations = relations(userApprovalScopes, ({ one }) => ({
+  tenant: one(tenants, { fields: [userApprovalScopes.tenantId], references: [tenants.id] }),
+  user: one(users, { fields: [userApprovalScopes.userId], references: [users.id] }),
+}));
+
+export const expenseApprovalStepsRelations = relations(expenseApprovalSteps, ({ one }) => ({
+  expense: one(expenses, { fields: [expenseApprovalSteps.expenseId], references: [expenses.id] }),
+  rule: one(approvalRules, { fields: [expenseApprovalSteps.ruleId], references: [approvalRules.id] }),
+  step: one(approvalRuleSteps, { fields: [expenseApprovalSteps.stepId], references: [approvalRuleSteps.id] }),
+  actedBy: one(users, { fields: [expenseApprovalSteps.actedById], references: [users.id] }),
 }));
 
 export const bankTransactionsRelations = relations(bankTransactions, ({ one }) => ({

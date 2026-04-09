@@ -12,6 +12,7 @@ import {
   expenseCategories,
   tenants,
 } from "../../../shared/schema.js";
+import { createApprovalEngine } from "../../../lib/approval-engine.js";
 import { eq, and, desc, or } from "drizzle-orm";
 import { sendWith24hRouting, getExpenseApprovalTemplateConfig, notifySubmitterForApprovalRejection } from "../send.js";
 import { notifySubmitterForPayoutFromExpense, notifyRoleRequestRequester } from "../../../lib/notifications.js";
@@ -1452,55 +1453,98 @@ async function executeFunctionCall(
     }
 
     case "approve_expense": {
-      if (execCtx.contactRole !== "finance" && execCtx.contactRole !== "admin") {
-        return { success: false, error: "Only finance or admin can approve expenses." };
-      }
       if (!contactStudentId) return { success: false, error: "To approve via WhatsApp, your contact must be linked to a user. Ask an admin to add you in FinJoe Contacts—they can link to your existing account or create one for you." };
       const expenseIdInput = String(args.expenseId ?? "");
       const expenseId = await finJoeData.resolveExpenseId(expenseIdInput);
       if (!expenseId) return { success: false, error: `Expense #${expenseIdInput} not found.` };
-      const result = await finJoeData.approveExpense(expenseId, contactStudentId);
-      if (!result) return { success: false, error: `Could not approve expense #${expenseIdInput}. It may not be pending.` };
-      const expenseCtx = { amount: result.amount, vendorName: result.vendorName, categoryName: result.categoryName, costCenterName: result.costCenterName };
-      if (result.submittedByContactPhone) {
+
+      const engine = createApprovalEngine(db, tenantId);
+      const canApprove = await engine.canUserApprove(expenseId, contactStudentId);
+      const hasLegacyRole = execCtx.contactRole === "finance" || execCtx.contactRole === "admin";
+      if (!canApprove && !hasLegacyRole) {
+        return { success: false, error: "You are not authorized to approve this expense." };
+      }
+
+      // Try engine-based approval first, fall back to legacy
+      const approvalStatus = await engine.getApprovalStatus(expenseId);
+      let result;
+      if (approvalStatus && approvalStatus.currentStepOrder !== null) {
+        try {
+          const engineResult = await engine.processApprovalAction(expenseId, contactStudentId, "approve", String(args.comment ?? ""));
+          const detail = await finJoeData.getExpenseWithDetails(expenseId);
+          result = detail ? {
+            id: expenseId,
+            submittedByContactPhone: detail.submittedByContactPhone as string | null,
+            amount: detail.amount as number,
+            vendorName: detail.vendorName as string | null,
+            categoryName: (detail.category as any)?.name as string | null,
+            costCenterName: (detail.costCenter as any)?.name as string | null,
+            isFullyApproved: engineResult.isFullyApproved,
+          } : null;
+        } catch (err) {
+          return { success: false, error: `Could not approve: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      } else {
+        const legacyResult = await finJoeData.approveExpense(expenseId, contactStudentId);
+        if (!legacyResult) return { success: false, error: `Could not approve expense #${expenseIdInput}. It may not be pending.` };
+        result = { ...legacyResult, isFullyApproved: true };
+      }
+
+      if (!result) return { success: false, error: `Could not approve expense #${expenseIdInput}.` };
+      if (result.isFullyApproved && result.submittedByContactPhone) {
+        const expenseCtx = { amount: result.amount, vendorName: result.vendorName, categoryName: result.categoryName, costCenterName: result.costCenterName };
         const submitterEmail = await getSubmitterEmail(result.submittedByContactPhone, tenantId);
         notifySubmitterForApprovalRejection(
-          result.submittedByContactPhone,
-          expenseId,
-          "approved",
-          tenantId,
-          undefined,
-          traceId,
-          submitterEmail,
-          expenseCtx
+          result.submittedByContactPhone, expenseId, "approved", tenantId, undefined, traceId, submitterEmail, expenseCtx
         ).catch((err) => logger.error("Failed to notify submitter of approval", { traceId, expenseId, err: String(err) }));
       }
-      return { success: true, data: { expenseId, approved: true, amount: result.amount, vendorName: result.vendorName, categoryName: result.categoryName, costCenterName: result.costCenterName } };
+      return { success: true, data: { expenseId, approved: true, fullyApproved: result.isFullyApproved, amount: result.amount, vendorName: result.vendorName, categoryName: result.categoryName, costCenterName: result.costCenterName } };
     }
 
     case "reject_expense": {
-      if (execCtx.contactRole !== "finance" && execCtx.contactRole !== "admin") {
-        return { success: false, error: "Only finance or admin can reject expenses." };
-      }
       if (!contactStudentId) return { success: false, error: "To approve or reject via WhatsApp, your contact must be linked to a user. Ask an admin to add you in FinJoe Contacts—they can link to your existing account or create one for you." };
       const expenseIdInput = String(args.expenseId ?? "");
       const expenseId = await finJoeData.resolveExpenseId(expenseIdInput);
       if (!expenseId) return { success: false, error: `Expense #${expenseIdInput} not found.` };
+
+      const engine = createApprovalEngine(db, tenantId);
+      const canApprove = await engine.canUserApprove(expenseId, contactStudentId);
+      const hasLegacyRole = execCtx.contactRole === "finance" || execCtx.contactRole === "admin";
+      if (!canApprove && !hasLegacyRole) {
+        return { success: false, error: "You are not authorized to reject this expense." };
+      }
+
       const reason = String(args.reason ?? "Rejected via FinJoe");
-      const result = await finJoeData.rejectExpense(expenseId, contactStudentId, reason);
-      if (!result) return { success: false, error: `Could not reject expense #${expenseIdInput}. It may not be pending.` };
+
+      const approvalStatus = await engine.getApprovalStatus(expenseId);
+      let result;
+      if (approvalStatus && approvalStatus.currentStepOrder !== null) {
+        try {
+          await engine.processApprovalAction(expenseId, contactStudentId, "reject", reason);
+          const detail = await finJoeData.getExpenseWithDetails(expenseId);
+          result = detail ? {
+            id: expenseId,
+            submittedByContactPhone: detail.submittedByContactPhone as string | null,
+            amount: detail.amount as number,
+            vendorName: detail.vendorName as string | null,
+            categoryName: (detail.category as any)?.name as string | null,
+            costCenterName: (detail.costCenter as any)?.name as string | null,
+          } : null;
+        } catch (err) {
+          return { success: false, error: `Could not reject: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      } else {
+        const legacyResult = await finJoeData.rejectExpense(expenseId, contactStudentId, reason);
+        if (!legacyResult) return { success: false, error: `Could not reject expense #${expenseIdInput}. It may not be pending.` };
+        result = legacyResult;
+      }
+
+      if (!result) return { success: false, error: `Could not reject expense #${expenseIdInput}.` };
       const rejectExpenseCtx = { amount: result.amount, vendorName: result.vendorName, categoryName: result.categoryName, costCenterName: result.costCenterName };
       if (result.submittedByContactPhone) {
         const submitterEmail = await getSubmitterEmail(result.submittedByContactPhone, tenantId);
         notifySubmitterForApprovalRejection(
-          result.submittedByContactPhone,
-          expenseId,
-          "rejected",
-          tenantId,
-          reason,
-          traceId,
-          submitterEmail,
-          rejectExpenseCtx
+          result.submittedByContactPhone, expenseId, "rejected", tenantId, reason, traceId, submitterEmail, rejectExpenseCtx
         ).catch((err) => logger.error("Failed to notify submitter of rejection", { traceId, expenseId, err: String(err) }));
       }
       return { success: true, data: { expenseId, rejected: true, reason, amount: result.amount, vendorName: result.vendorName, categoryName: result.categoryName, costCenterName: result.costCenterName } };

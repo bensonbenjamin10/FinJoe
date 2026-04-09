@@ -39,6 +39,7 @@ import {
   AlertCircle,
   Clock,
   CalendarIcon,
+  ClipboardCheck,
   Loader2,
   AlertTriangle,
   Sparkles,
@@ -256,6 +257,17 @@ export default function AdminDashboard() {
     enabled: !!tenantId,
   });
 
+  const { data: myApprovals = [] } = useQuery<Array<{ expenseId: string }>>({
+    queryKey: ["/api/admin/my-approvals", tenantId],
+    queryFn: async () => {
+      const params = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : "";
+      const res = await fetch(`/api/admin/my-approvals${params}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!tenantId,
+  });
+
   const { data: insights, isLoading: insightsLoading } = useQuery<CfoInsightsApiResponse>({
     queryKey: ["/api/admin/analytics/insights", analyticsParams.toString()],
     queryFn: async () => {
@@ -410,10 +422,17 @@ export default function AdminDashboard() {
               label="Net Cashflow"
               comparison={kpis.netCashflow >= 0 ? "Surplus" : "Deficit"}
             />
+            <Link href={`/admin/my-approvals${tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : ""}`}>
+              <StatCard
+                icon={ClipboardCheck}
+                value={String(myApprovals.length)}
+                label="My Approvals"
+              />
+            </Link>
             <StatCard
               icon={Clock}
               value={String(kpis.pendingApprovals)}
-              label="Pending Approvals"
+              label="Org Pending Approvals"
             />
             <StatCard
               icon={AlertCircle}

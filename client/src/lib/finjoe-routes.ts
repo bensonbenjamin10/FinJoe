@@ -10,6 +10,7 @@ export const FINJOE_PATHS = {
   peopleRoleRequests: "/admin/finjoe/people/role-requests",
   integrationsSettings: "/admin/finjoe/integrations/settings",
   integrationsExports: "/admin/finjoe/integrations/exports",
+  approvalRules: "/admin/finjoe/approvals/rules",
 } as const;
 
 /** Onboarding / checklist tab ids → path (no query). */
