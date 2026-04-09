@@ -22,7 +22,7 @@ export default function AdminAccountSettings() {
   const { data: settings, isLoading } = useQuery<AccountSettings>({
     queryKey: ["/api/admin/account-settings"],
     queryFn: async () => {
-      const res = await fetch("/api/admin/account-settings");
+      const res = await fetch("/api/admin/account-settings", { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },

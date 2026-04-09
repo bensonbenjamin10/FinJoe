@@ -70,7 +70,7 @@ export function CellDrilldown({
         monthIdx: String(monthIdx),
       });
       if (tenantId) params.set("tenantId", tenantId);
-      const res = await fetch(`/api/admin/mis/transactions?${params}`);
+      const res = await fetch(`/api/admin/mis/transactions?${params}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch transactions");
       return res.json();
     },

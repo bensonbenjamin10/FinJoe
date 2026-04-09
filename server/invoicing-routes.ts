@@ -14,6 +14,7 @@ import {
   razorpayConfigured,
   razorpayCreateOrder,
 } from "./razorpay-api.js";
+import { isProductionApi } from "./client-safe-error.js";
 
 export function registerInvoicingRoutes(app: Express) {
   const invoiceSvc = createInvoiceService(db);
@@ -239,7 +240,9 @@ export function registerInvoicingRoutes(app: Express) {
       res.status(201).json(inv);
     } catch (e) {
       logger.error("Create invoice error", { err: String(e) });
-      res.status(500).json({ error: e instanceof Error ? e.message : "Failed to create invoice" });
+      res.status(500).json({
+        error: isProductionApi ? "Failed to create invoice" : e instanceof Error ? e.message : "Failed to create invoice",
+      });
     }
   });
 
@@ -282,7 +285,9 @@ export function registerInvoicingRoutes(app: Express) {
       res.json(result.invoice);
     } catch (e) {
       logger.error("Update draft invoice error", { err: String(e) });
-      res.status(500).json({ error: e instanceof Error ? e.message : "Failed to update invoice" });
+      res.status(500).json({
+        error: isProductionApi ? "Failed to update invoice" : e instanceof Error ? e.message : "Failed to update invoice",
+      });
     }
   });
 

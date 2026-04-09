@@ -15,6 +15,7 @@ import { db, pool } from "./db.js";
 import { deactivateExpiredDemoTenants } from "./lib/demo-expiry.js";
 import { logCronRun } from "../lib/cron-logger.js";
 import { runBackupToS3, s3BackupConfigured } from "../lib/backup-to-s3.js";
+import { expressErrorClientMessage, jsonInternalError } from "./client-safe-error.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -186,7 +187,7 @@ app.get("/cron/backup", async (req, res) => {
     res.json(result);
   } catch (err) {
     logger.error("Backup cron error", { err: String(err) });
-    res.status(500).json({ error: String(err) });
+    res.status(500).json(jsonInternalError());
   }
 });
 
@@ -204,7 +205,8 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     status: err.status || 500,
     stack: err.stack,
   });
-  res.status(err.status || 500).json({ message: err.message || "Internal Server Error" });
+  const status = err.status || 500;
+  res.status(status).json({ message: expressErrorClientMessage(err) });
 });
 
 if (process.env.NODE_ENV === "development") {

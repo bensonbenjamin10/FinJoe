@@ -1,5 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient, apiRequest, getQueryFn } from "@/lib/queryClient";
 import { useLocation } from "wouter";
 
 export interface User {
@@ -20,18 +20,9 @@ export interface User {
 export function useAuth() {
   const [, setLocation] = useLocation();
 
-  const { data: user, isLoading, error } = useQuery<User | null>({
+  const { data: user, isLoading } = useQuery<User | null>({
     queryKey: ["/api/auth/me"],
-    queryFn: async () => {
-      const response = await fetch("/api/auth/me");
-      if (!response.ok) {
-        if (response.status === 401) {
-          return null;
-        }
-        throw new Error("Failed to fetch user");
-      }
-      return response.json();
-    },
+    queryFn: getQueryFn<User | null>({ on401: "returnNull" }),
     retry: false,
   });
 

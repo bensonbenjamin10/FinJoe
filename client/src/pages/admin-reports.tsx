@@ -173,7 +173,9 @@ export default function AdminReports() {
   const { data: report, isLoading, error } = useQuery<MISReport>({
     queryKey: ["/api/admin/mis/report", fy, tenantId, showYtd ? todayISO : "full"],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/mis/report?fy=${fy}${tenantParam}${throughParam}`);
+      const res = await fetch(`/api/admin/mis/report?fy=${fy}${tenantParam}${throughParam}`, {
+        credentials: "include",
+      });
       if (!res.ok) throw new Error("Failed to fetch MIS report");
       return res.json();
     },

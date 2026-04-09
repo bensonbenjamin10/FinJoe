@@ -346,9 +346,16 @@ export async function registerRoutes(app: Express) {
         })
         .returning();
       if (!created) return res.status(500).json({ error: "Failed to create admin" });
-      const { passwordHash, ...u } = created;
-      logger.info("Setup completed", { requestId: req.requestId, adminId: created.id });
-      res.status(201).json(u);
+      req.login(created, (loginErr: unknown) => {
+        if (loginErr) {
+          logger.error("Setup session error", { requestId: req.requestId, err: String(loginErr) });
+          const { passwordHash, ...u } = created;
+          return res.status(201).json({ ...u, loginFailed: true });
+        }
+        logger.info("Setup completed", { requestId: req.requestId, adminId: created.id });
+        const { passwordHash, ...u } = created;
+        res.status(201).json(u);
+      });
     } catch (e) {
       logger.error("Setup error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Setup failed" });

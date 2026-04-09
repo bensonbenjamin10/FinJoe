@@ -91,7 +91,7 @@ export default function AdminTenants() {
   const { data: tenants = [], isLoading } = useQuery<Tenant[]>({
     queryKey: ["/api/admin/tenants"],
     queryFn: async () => {
-      const res = await fetch("/api/admin/tenants");
+      const res = await fetch("/api/admin/tenants", { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },

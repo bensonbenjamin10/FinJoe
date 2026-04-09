@@ -113,9 +113,10 @@ export async function sendFinJoeWhatsApp(
     return null;
   }
 
+  const toLast4 = String(to).replace(/\D/g, "").slice(-4) || "****";
   const chunks = splitMessage(message);
   if (chunks.length > 1) {
-    logger.info("Splitting long WhatsApp message", { traceId, tenantId: tid, to, totalLength: message.length, chunks: chunks.length });
+    logger.info("Splitting long WhatsApp message", { traceId, tenantId: tid, toLast4, totalLength: message.length, chunks: chunks.length });
   }
 
   const maxAttempts = Math.min(4, Math.max(1, options?.maxAttempts ?? 3));
@@ -133,9 +134,16 @@ export async function sendFinJoeWhatsApp(
         break;
       } catch (err) {
         lastErr = err;
-        logger.warn("WhatsApp send attempt failed", { traceId, tenantId: tid, to, attempt, maxAttempts, err: String(err) });
+        logger.warn("WhatsApp send attempt failed", {
+          traceId,
+          tenantId: tid,
+          toLast4,
+          attempt,
+          maxAttempts,
+          err: String(err),
+        });
         if (isPermanentTwilioError(err)) {
-          logger.error("Permanent Twilio error - not retrying", { traceId, tenantId: tid, to, err: String(err) });
+          logger.error("Permanent Twilio error - not retrying", { traceId, tenantId: tid, toLast4, err: String(err) });
           break;
         }
         if (attempt < maxAttempts) {
@@ -144,7 +152,7 @@ export async function sendFinJoeWhatsApp(
       }
     }
     if (!sent) {
-      logger.error("WhatsApp send exhausted retries", { traceId, tenantId: tid, to, maxAttempts, err: String(lastErr) });
+      logger.error("WhatsApp send exhausted retries", { traceId, tenantId: tid, toLast4, maxAttempts, err: String(lastErr) });
       throw lastErr;
     }
     if (chunks.length > 1) {

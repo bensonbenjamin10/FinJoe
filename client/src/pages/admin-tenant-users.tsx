@@ -68,7 +68,7 @@ export default function AdminTenantUsers() {
   const { data: tenant, isLoading: tenantLoading } = useQuery<Tenant>({
     queryKey: ["/api/admin/tenants", tenantId],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/tenants/${tenantId}`);
+      const res = await fetch(`/api/admin/tenants/${tenantId}`, { credentials: "include" });
       if (!res.ok) {
         if (res.status === 404) throw new Error("Tenant not found");
         throw new Error("Failed to fetch");
@@ -81,7 +81,7 @@ export default function AdminTenantUsers() {
   const { data: users = [], isLoading: usersLoading } = useQuery<TenantUser[]>({
     queryKey: ["/api/admin/tenants", tenantId, "users"],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/tenants/${tenantId}/users`);
+      const res = await fetch(`/api/admin/tenants/${tenantId}/users`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },

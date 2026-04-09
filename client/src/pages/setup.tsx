@@ -72,14 +72,21 @@ export default function Setup() {
         credentials: "include",
       });
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Setup failed");
+        let message = "Setup failed";
+        try {
+          const errBody = (await response.json()) as { error?: string };
+          message = errBody.error || message;
+        } catch {
+          /* non-JSON body */
+        }
+        throw new Error(message);
       }
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       toast({ title: "Setup Complete!", description: "Redirecting to admin..." });
-      queryClient.invalidateQueries({ queryKey: ["/api/setup/status"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/setup/status"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       setTimeout(() => setLocation("/admin/dashboard"), 1500);
     },
     onError: (error: any) => {

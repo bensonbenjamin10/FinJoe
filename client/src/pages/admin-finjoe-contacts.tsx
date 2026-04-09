@@ -61,7 +61,7 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
   const { data: contacts = [], isLoading } = useQuery<FinJoeContact[]>({
     queryKey: ["/api/admin/finjoe/contacts", tenantId],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/finjoe/contacts${qs}`);
+      const res = await fetch(`/api/admin/finjoe/contacts${qs}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
@@ -71,7 +71,7 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
   const { data: campuses = [] } = useQuery<Campus[]>({
     queryKey: ["/api/campuses", tenantId],
     queryFn: async () => {
-      const res = await fetch(`/api/campuses${qs}`);
+      const res = await fetch(`/api/campuses${qs}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
@@ -80,7 +80,7 @@ export default function AdminFinJoeContacts({ tenantId }: { tenantId?: string | 
   const { data: users = [] } = useQuery<Array<{ id: string; name: string; email: string }>>({
     queryKey: ["/api/admin/users", tenantId],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/users${qs}`);
+      const res = await fetch(`/api/admin/users${qs}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },

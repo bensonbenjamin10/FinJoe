@@ -33,9 +33,19 @@ async function getSessionStore(): Promise<session.Store> {
   }
 }
 
+const isProduction = process.env.NODE_ENV === "production";
+
 export async function setupAuth(app: Express) {
+  if (isProduction && !process.env.SESSION_SECRET) {
+    throw new Error("SESSION_SECRET must be set in production (sessions cannot use a default secret).");
+  }
   const sessionSecret = process.env.SESSION_SECRET || "finjoe-dev-secret-change-in-production";
   const sessionStore = await getSessionStore();
+  if (sessionStore instanceof Store) {
+    logger.warn(
+      "Using MemoryStore for sessions: not shared across multiple server instances and cleared on restart. Use a reachable DATABASE_URL and connect-pg-simple for production horizontal scale.",
+    );
+  }
 
   app.use(
     session({

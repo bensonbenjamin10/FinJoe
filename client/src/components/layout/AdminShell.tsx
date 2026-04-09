@@ -110,7 +110,7 @@ export function AdminShell({ children }: AdminShellProps) {
   const { data: tenants = [] } = useQuery<Tenant[]>({
     queryKey: ["/api/admin/tenants"],
     queryFn: async () => {
-      const res = await fetch("/api/admin/tenants");
+      const res = await fetch("/api/admin/tenants", { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },

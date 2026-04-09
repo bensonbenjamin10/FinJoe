@@ -32,8 +32,17 @@ import {
   zohoBooksGet,
   zohoBooksPost,
 } from "../lib/zoho-books-api.js";
+import { isProductionApi, jsonInternalError } from "./client-safe-error.js";
 
 const ZOHO = "zoho_books";
+
+function zohoOAuthQueryErrorMessage(err: string): string {
+  return isProductionApi ? "Zoho authorization failed." : `Zoho error: ${err}`;
+}
+
+function zohoTokenExchangeFailedPage(detail: string): string {
+  return isProductionApi ? "Zoho connection failed. Please try again." : `Zoho token exchange failed: ${detail}`;
+}
 
 function resolveTenantId(req: Request): string | null {
   return getTenantId(req) ?? (typeof req.query.tenantId === "string" ? req.query.tenantId : null);
@@ -155,7 +164,7 @@ export function registerIntegrationsRoutes(app: Express) {
     }
     const err = req.query.error as string | undefined;
     if (err) {
-      return res.status(400).send(`Zoho error: ${err}`);
+      return res.status(400).send(zohoOAuthQueryErrorMessage(err));
     }
     const code = req.query.code as string | undefined;
     const stateRaw = req.query.state as string | undefined;
@@ -214,7 +223,7 @@ export function registerIntegrationsRoutes(app: Express) {
       res.redirect(302, base ? `${base}${path}` : path);
     } catch (e) {
       logger.error("Zoho OAuth callback error", { err: String(e) });
-      res.status(500).send(`Zoho token exchange failed: ${String(e)}`);
+      res.status(500).send(zohoTokenExchangeFailedPage(String(e)));
     }
   });
 
@@ -277,7 +286,7 @@ export function registerIntegrationsRoutes(app: Express) {
       });
     } catch (e) {
       logger.error("Zoho import error", { err: String(e), tenantId });
-      res.status(500).json({ error: String(e) });
+      res.status(500).json(jsonInternalError());
     }
   });
 
@@ -392,7 +401,7 @@ export function registerIntegrationsRoutes(app: Express) {
       res.json({ ok: true, billId });
     } catch (e) {
       logger.error("Zoho push expense error", { err: String(e), expenseId, tenantId });
-      res.status(500).json({ error: String(e) });
+      res.status(500).json(jsonInternalError());
     }
   });
 
@@ -499,7 +508,7 @@ export function registerIntegrationsRoutes(app: Express) {
       res.json({ ok: true, invoiceId });
     } catch (e) {
       logger.error("Zoho push income error", { err: String(e), incomeId, tenantId });
-      res.status(500).json({ error: String(e) });
+      res.status(500).json(jsonInternalError());
     }
   });
 }

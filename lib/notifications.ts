@@ -24,6 +24,11 @@ import { logger } from "../server/logger.js";
 
 const REASON_MAX_LENGTH = 200;
 
+function logPhoneLast4(phoneLike: string | null | undefined): string {
+  const d = String(phoneLike ?? "").replace(/\D/g, "");
+  return d.length >= 4 ? `…${d.slice(-4)}` : "****";
+}
+
 export type ExtractedExpenseForNotification = {
   amount?: number;
   vendorName?: string | null;
@@ -137,7 +142,7 @@ export async function notifyFinanceForApproval(
     try {
       await sendWith24hRouting(c.phone, msg, templateConfig, traceId, tenantId, { critical: true });
     } catch (err) {
-      logger.error("Failed to notify finance", { traceId, phone: c.phone, err: String(err) });
+      logger.error("Failed to notify finance", { traceId, phoneLast4: logPhoneLast4(c.phone), err: String(err) });
     }
   }
 }

@@ -46,7 +46,7 @@ export default function AdminFinJoeRoleRequests({ tenantId }: { tenantId?: strin
   const { data: requests = [], isLoading } = useQuery<RoleRequest[]>({
     queryKey: ["/api/admin/finjoe/role-requests", statusFilter, tenantId],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/finjoe/role-requests?${qs}`);
+      const res = await fetch(`/api/admin/finjoe/role-requests?${qs}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },

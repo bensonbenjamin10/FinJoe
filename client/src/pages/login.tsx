@@ -57,14 +57,10 @@ export default function Login() {
   const loginMutation = useMutation({
     mutationFn: async (data: LoginFormData) => {
       const response = await apiRequest("POST", "/api/auth/login", data);
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Login failed");
-      }
       return response.json();
     },
-    onSuccess: (user) => {
-      queryClient.setQueryData(["/api/auth/me"], user);
+    onSuccess: async (user) => {
+      await queryClient.refetchQueries({ queryKey: ["/api/auth/me"] });
       toast({
         title: "Login successful",
         description: `Welcome back, ${user.name}!`,

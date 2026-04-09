@@ -134,7 +134,7 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
     queryKey: settingsQueryKey,
     queryFn: async () => {
       const url = tenantId ? `/api/admin/finjoe/settings?tenantId=${tenantId}` : "/api/admin/finjoe/settings";
-      const res = await fetch(url);
+      const res = await fetch(url, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       const data = await res.json();
       return data;
@@ -146,7 +146,7 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
     queryKey: providerQueryKey,
     queryFn: async () => {
       const url = tenantId ? `/api/admin/finjoe/whatsapp-provider?tenantId=${tenantId}` : "/api/admin/finjoe/whatsapp-provider";
-      const res = await fetch(url);
+      const res = await fetch(url, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
@@ -159,7 +159,7 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
     queryKey: templateStatusesQueryKey,
     queryFn: async () => {
       const url = tenantId ? `/api/admin/finjoe/template-statuses?tenantId=${tenantId}` : "/api/admin/finjoe/template-statuses";
-      const res = await fetch(url);
+      const res = await fetch(url, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },

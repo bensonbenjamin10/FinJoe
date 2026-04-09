@@ -67,7 +67,7 @@ export default function AdminSuperUsers() {
   const { data: tenantList = [] } = useQuery<Tenant[]>({
     queryKey: ["/api/admin/tenants"],
     queryFn: async () => {
-      const res = await fetch("/api/admin/tenants");
+      const res = await fetch("/api/admin/tenants", { credentials: "include" });
       if (!res.ok) throw new Error("Failed");
       return res.json();
     },

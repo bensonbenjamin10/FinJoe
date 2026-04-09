@@ -38,7 +38,7 @@ export default function AdminReferrals() {
     queryKey: ["/api/admin/referrals", statusFilter !== "all" ? statusFilter : undefined],
     queryFn: async () => {
       const params = statusFilter !== "all" ? `?status=${statusFilter}` : "";
-      const response = await fetch(`/api/admin/referrals${params}`);
+      const response = await fetch(`/api/admin/referrals${params}`, { credentials: "include" });
       if (!response.ok) throw new Error("Failed to fetch");
       return response.json();
     },

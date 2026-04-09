@@ -8,6 +8,7 @@ import {
   finJoeMedia,
   finJoeOutboundIdempotency,
   tenants,
+  type FinJoeMessage,
 } from "../../shared/schema.js";
 import { eq, and, sql, desc } from "drizzle-orm";
 import { sendFinJoeWhatsApp, sendTypingIndicator, normalizePhone } from "./twilio.js";
@@ -162,11 +163,19 @@ async function getOrCreateContact(phone: string, tenantId: string) {
     )[0];
     if (fallback) {
       contact = fallback;
-      logger.info("Contact matched by fallback (last 10 digits)", { from: phone, normalized, matchedContact: contact.phone });
+      logger.info("Contact matched by fallback (last 10 digits)", {
+        fromNumberLast4: phoneLastDigits(phone),
+        normalizedLast4: phoneLastDigits(normalized),
+        matchedContactLast4: phoneLastDigits(contact.phone),
+      });
     }
   }
   if (!contact) {
-    logger.info("Creating guest contact (no match)", { from: phone, normalized, tenantId });
+    logger.info("Creating guest contact (no match)", {
+      fromNumberLast4: phoneLastDigits(phone),
+      normalizedLast4: phoneLastDigits(normalized),
+      tenantId,
+    });
     const [inserted] = await db
       .insert(finJoeContacts)
       .values({
@@ -201,7 +210,7 @@ export async function handleWebhook(req: Request, res: Response) {
 
   logger.info("Webhook request received", {
     hasBody: !!req.body,
-    from: params.From,
+    fromNumberLast4: phoneLastDigits(params.From || ""),
     messageSid: params.MessageSid,
   });
 
@@ -219,7 +228,7 @@ export async function handleWebhook(req: Request, res: Response) {
 
   if (!isValid) {
     logger.warn("Webhook signature validation failed", {
-      from: params.From,
+      fromNumberLast4: phoneLastDigits(params.From || ""),
       tenantId,
       hasCredentials: !!credentials,
       webhookUrl,
@@ -261,7 +270,7 @@ export async function handleWebhook(req: Request, res: Response) {
     fromNumberLast4: phoneLastDigits(from),
   });
 
-  logger.info("Webhook received", { traceId, from, bodyLength: body?.length ?? 0, numMedia });
+  logger.info("Webhook received", { traceId, fromNumberLast4: phoneLastDigits(from), bodyLength: body?.length ?? 0, numMedia });
 
   // Idempotency: skip if already processed
   const [existing] = await db
@@ -283,16 +292,28 @@ export async function handleWebhook(req: Request, res: Response) {
     const conversation = await getOrCreateConversation(contact.phone, tenantId);
     logger.info("Contact and conversation resolved", { traceId, contactId: contact.id, conversationId: conversation.id, role: contact.role });
 
-    // Insert incoming message
-    const [msg] = await db
-      .insert(finJoeMessages)
-      .values({
-        conversationId: conversation.id,
-        direction: "in",
-        body: body || null,
-        messageSid,
-      })
-      .returning();
+    // Insert incoming message (unique on message_sid — catch race with duplicate webhook delivery)
+    let msg: FinJoeMessage;
+    try {
+      const [inserted] = await db
+        .insert(finJoeMessages)
+        .values({
+          conversationId: conversation.id,
+          direction: "in",
+          body: body || null,
+          messageSid,
+        })
+        .returning();
+      msg = inserted!;
+    } catch (e: unknown) {
+      const code = typeof e === "object" && e !== null && "code" in e ? String((e as { code: string }).code) : "";
+      if (code === "23505") {
+        logger.info("Duplicate message skipped (unique message_sid race)", { traceId });
+        res.status(200).type("text/xml").send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+        return;
+      }
+      throw e;
+    }
 
     if (!msg) throw new Error("Failed to insert message");
 
@@ -379,42 +400,56 @@ export async function handleWebhook(req: Request, res: Response) {
           if (primaryReservation && (primaryReservation.state === "new" || primaryReservation.state === "retry")) {
             await markOutboundSendFailed(primaryReservation.rowId, sendErr).catch(() => {});
           }
-          logger.error("Primary WhatsApp reply failed", { traceId, conversationId: conversation.id, contactPhone: contact.phone, ...serializeError(sendErr) });
+          logger.error("Primary WhatsApp reply failed", {
+            traceId,
+            conversationId: conversation.id,
+            contactPhoneLast4: phoneLastDigits(contact.phone),
+            ...serializeError(sendErr),
+          });
 
           outboundBody = FALLBACK_REPLY;
           try {
             sendResult = await sendFinJoeWhatsApp(contact.phone, FALLBACK_REPLY, traceId, tenantId, { maxAttempts: 2 });
-            logger.warn("Fallback reply delivered after primary failure", { traceId, conversationId: conversation.id, contactPhone: contact.phone });
+            logger.warn("Fallback reply delivered after primary failure", {
+              traceId,
+              conversationId: conversation.id,
+              contactPhoneLast4: phoneLastDigits(contact.phone),
+            });
           } catch (fallbackErr) {
             logger.error("Fallback WhatsApp reply also failed", {
               traceId,
               conversationId: conversation.id,
-              contactPhone: contact.phone,
+              contactPhoneLast4: phoneLastDigits(contact.phone),
               ...serializeError(fallbackErr),
             });
           }
         }
       }
-      if (!sendResult) {
-        logger.error("No outbound message SID after all attempts", { traceId, conversationId: conversation.id, contactPhone: contact.phone });
+      if (shouldSend && !sendResult) {
+        logger.error("No outbound message SID after all attempts", {
+          traceId,
+          conversationId: conversation.id,
+          contactPhoneLast4: phoneLastDigits(contact.phone),
+        });
       }
 
       logger.info("Webhook completed", { traceId, conversationId: conversation.id });
 
-      // Store outbound message (with messageSid when available for proof of transactions)
-      await db.insert(finJoeMessages).values({
-        conversationId: conversation.id,
-        direction: "out",
-        body: outboundBody,
-        messageSid: (sendResult as { sid?: string } | null)?.sid ?? undefined,
-      });
+      // Record outbound only when this invocation actually sent (avoids ghost rows when another worker holds in_flight)
+      if (shouldSend) {
+        await db.insert(finJoeMessages).values({
+          conversationId: conversation.id,
+          direction: "out",
+          body: outboundBody,
+          messageSid: (sendResult as { sid?: string } | null)?.sid ?? undefined,
+        });
 
-      // Update lastMessageAt so 24h window stays open
-      const now = new Date();
-      await db
-        .update(finJoeConversations)
-        .set({ lastMessageAt: now, updatedAt: now })
-        .where(eq(finJoeConversations.id, conversation.id));
+        const now = new Date();
+        await db
+          .update(finJoeConversations)
+          .set({ lastMessageAt: now, updatedAt: now })
+          .where(eq(finJoeConversations.id, conversation.id));
+      }
     });
 
     res.status(200).type("text/xml").send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');

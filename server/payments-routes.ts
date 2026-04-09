@@ -12,6 +12,7 @@ import {
   razorpayCreateOrder,
 } from "./razorpay-api.js";
 import { RazorpayCaptureAdapter } from "../lib/invoicing/infra/razorpay-capture-adapter.js";
+import { isProductionApi, jsonInternalError } from "./client-safe-error.js";
 
 function requireLogin(req: Request, res: Response, next: NextFunction) {
   if (!req.isAuthenticated()) {
@@ -111,7 +112,13 @@ export function registerPaymentRoutes(app: Express) {
       res.status(201).json({ orderId: razorpayOrderId });
     } catch (e) {
       logger.error("create-order error", { requestId: (req as Express.Request & { requestId?: string }).requestId, err: String(e) });
-      res.status(500).json({ error: e instanceof Error ? e.message : "Failed to create order" });
+      res
+        .status(500)
+        .json(
+          isProductionApi
+            ? jsonInternalError()
+            : { error: e instanceof Error ? e.message : "Failed to create order" },
+        );
     }
   });
 
