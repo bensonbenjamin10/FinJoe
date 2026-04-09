@@ -259,8 +259,7 @@ export default function AdminCostCenters({
               <AlertTitle>Could not load {costCenterLabelPlural.toLowerCase()}</AlertTitle>
               <AlertDescription>
                 {error instanceof Error ? error.message : "Something went wrong."} If this mentions a missing database
-                column, run <code className="text-xs">npm run db:migrate</code> on the server (includes{" "}
-                <code className="text-xs">0008_cost_center_billing_gst</code>).
+                column, ask your administrator to apply pending database migrations on the server.
               </AlertDescription>
             </Alert>
           ) : list.length === 0 ? (

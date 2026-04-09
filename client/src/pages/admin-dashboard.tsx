@@ -427,7 +427,7 @@ export default function AdminDashboard() {
             />
           </div>
 
-          {/* AI Insights (CFO-style: narrative + structured bullets) */}
+          {/* FinJoe Observation & Suggestions (CFO-style narrative + structured bullets) */}
           {(insightsLoading ||
             insights?.insights ||
             insights?.insight?.narrative) && (
@@ -435,17 +435,17 @@ export default function AdminDashboard() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Sparkles className="h-5 w-5" />
-                  AI Insights
+                  FinJoe Observation & Suggestions
                 </CardTitle>
                 <CardDescription>
-                  CFO-style interpretation of analytics and MIS (configure GEMINI_API_KEY; optional GEMINI_ANALYSIS_MODEL)
+                  Plain-language takeaways from your analytics and MIS, with highlights and suggested actions.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 {insightsLoading ? (
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    <span className="text-sm">Generating insights...</span>
+                    <span className="text-sm">Preparing observations...</span>
                   </div>
                 ) : insights?.insight?.narrative || insights?.insights ? (
                   <>
@@ -484,7 +484,10 @@ export default function AdminDashboard() {
                     ) : null}
                   </>
                 ) : (
-                  <p className="text-sm text-muted-foreground">AI insights require GEMINI_API_KEY to be configured.</p>
+                  <p className="text-sm text-muted-foreground">
+                    Observations aren&apos;t available right now. If this persists, ask your administrator to confirm
+                    FinJoe analysis is enabled for your organization.
+                  </p>
                 )}
               </CardContent>
             </Card>

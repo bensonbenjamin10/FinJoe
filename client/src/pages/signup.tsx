@@ -269,7 +269,8 @@ export default function Signup() {
             )}
             {showWhatsAppCta && !waMeUrl && (
               <p className="text-xs text-muted-foreground text-center">
-                Configure <code className="text-[10px]">FINJOE_DEMO_WHATSAPP_NUMBER</code> or Twilio WhatsApp env for the launch link.
+                The WhatsApp demo link isn&apos;t available in this environment yet. Ask your administrator to finish
+                WhatsApp setup for FinJoe.
               </p>
             )}
             {showWhatsAppCta && (

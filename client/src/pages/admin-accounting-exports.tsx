@@ -158,9 +158,8 @@ export default function AdminAccountingExports({ tenantId }: { tenantId: string 
           </CardTitle>
           <CardDescription>
             Connect Zoho Books (India: <code className="text-xs">zoho.in</code>) to pull chart of accounts and contacts,
-            and push expenses as bills. Set{" "}
-            <code className="text-xs">ZOHO_CLIENT_ID</code>, <code className="text-xs">ZOHO_CLIENT_SECRET</code>,{" "}
-            <code className="text-xs">ZOHO_REDIRECT_URI</code> on the server.
+            and push expenses as bills. Your administrator must register OAuth credentials and the redirect URL for Zoho
+            on the FinJoe server before connecting.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center">

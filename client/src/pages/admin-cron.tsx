@@ -223,7 +223,9 @@ export default function AdminCron() {
                         </span>
                       )}
                       {result.skipped && result.processed === undefined && (
-                        <span className="ml-2 text-muted-foreground">Skipped (no GEMINI_API_KEY or no expenses to process)</span>
+                        <span className="ml-2 text-muted-foreground">
+                          Skipped (embedding service not configured or no expenses to process)
+                        </span>
                       )}
                       {result.deactivated !== undefined && (
                         <span className="ml-2">Deactivated {result.deactivated} demo tenant(s)</span>

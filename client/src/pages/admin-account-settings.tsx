@@ -85,7 +85,8 @@ export default function AdminAccountSettings() {
               onChange={(e) => setForm((f) => ({ ...f, defaultResendFromEmail: e.target.value }))}
             />
             <p className="text-sm text-muted-foreground">
-              Fallback from address for emails when tenant has none. Requires RESEND_API_KEY and verified domain.
+              Fallback from address for emails when a tenant has none. Requires email delivery to be connected and a
+              verified sending domain.
             </p>
           </div>
           <div className="grid gap-2">

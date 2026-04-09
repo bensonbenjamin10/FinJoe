@@ -803,7 +803,8 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
               onChange={(e) => setChannelsForm((f) => ({ ...f, resendFromEmail: e.target.value }))}
             />
             <p className="text-sm text-muted-foreground">
-              Override default from address for emails. Requires RESEND_API_KEY and verified domain in Resend.
+              Override default from address for emails. Requires email delivery to be connected and a verified sending
+              domain in Resend.
             </p>
           </div>
           <div className="grid gap-2">
@@ -814,7 +815,8 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
               onChange={(e) => setChannelsForm((f) => ({ ...f, smsFrom: e.target.value }))}
             />
             <p className="text-sm text-muted-foreground">
-              Twilio number for SMS fallback when outside 24h window. Leave blank to use WhatsApp number or TWILIO_SMS_FROM env.
+              Twilio number for SMS fallback when outside the 24-hour window. Leave blank to use the WhatsApp number or
+              the default SMS sender from FinJoe server settings.
             </p>
           </div>
           <Button
