@@ -1,4 +1,4 @@
-import { useState, useId } from "react";
+import { useState, useId, useMemo } from "react";
 import { useSearchParams, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -362,12 +362,12 @@ export default function AdminDashboard() {
   const cfo = analytics?.cfoExtended;
   const granularityLabel = granularity === "day" ? "Daily" : granularity === "week" ? "Weekly" : "Monthly";
 
-  const expenseSpark = analytics?.timeSeries?.map((d) => d.expenses) ?? [];
-  const incomeSpark = analytics?.timeSeries?.map((d) => d.income) ?? [];
-  const cashflowSpark = analytics?.timeSeries?.map((d) => d.income - d.expenses) ?? [];
+  const expenseSpark = useMemo(() => analytics?.timeSeries?.map((d) => d.expenses) ?? [], [analytics?.timeSeries]);
+  const incomeSpark = useMemo(() => analytics?.timeSeries?.map((d) => d.income) ?? [], [analytics?.timeSeries]);
+  const cashflowSpark = useMemo(() => analytics?.timeSeries?.map((d) => d.income - d.expenses) ?? [], [analytics?.timeSeries]);
 
-  const categoryTotal = analytics?.expensesByCategory?.reduce((s, c) => s + c.amount, 0) ?? 0;
-  const topCategories = analytics?.expensesByCategory?.slice(0, 6) ?? [];
+  const topCategories = useMemo(() => analytics?.expensesByCategory?.slice(0, 6) ?? [], [analytics?.expensesByCategory]);
+  const categoryTotal = useMemo(() => topCategories.reduce((s, c) => s + c.amount, 0), [topCategories]);
 
   return (
     <div className="w-full py-6 space-y-6">
@@ -478,7 +478,7 @@ export default function AdminDashboard() {
       ) : analytics ? (
         <>
           {/* ── S2 · Financial Scoreboard ─────────────────────────── */}
-          <div className="grid gap-4 lg:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {/* Total Expenses */}
             <Card className="dash-section relative overflow-hidden group hover:shadow-md transition-shadow" style={{ animationDelay: "80ms" }}>
               <CardContent className="p-6">
@@ -599,7 +599,7 @@ export default function AdminDashboard() {
             <div className="dash-section flex items-center flex-wrap gap-x-5 gap-y-2 px-4 py-2.5 rounded-lg border bg-card text-sm" style={{ animationDelay: "260ms" }}>
               {myApprovals.length > 0 && (
                 <Link href={`/admin/my-approvals${tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : ""}`}>
-                  <span className="inline-flex items-center gap-1.5 font-medium text-primary hover:underline underline-offset-4 cursor-pointer">
+                  <span className="inline-flex items-center gap-1.5 font-medium text-primary hover:underline underline-offset-4 cursor-pointer py-1 -my-1">
                     <ClipboardCheck className="h-3.5 w-3.5" />
                     {myApprovals.length} awaiting your review
                     <ChevronRight className="h-3 w-3 text-muted-foreground" />
@@ -637,7 +637,7 @@ export default function AdminDashboard() {
           )}
 
           {/* ── S3 · FinJoe Intelligence Brief ───────────────────── */}
-          {(insightsLoading || insights?.insights || insights?.insight?.narrative) && (
+          {(insightsLoading || insights) && (
             <Card className="dash-section border-primary/20 bg-gradient-to-br from-primary/[0.03] to-transparent" style={{ animationDelay: "300ms" }}>
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg">
@@ -762,8 +762,8 @@ export default function AdminDashboard() {
                           );
                         }}
                       />
-                      <Area type="monotone" dataKey="expenses" stackId="1" stroke="#ef4444" fill="#ef4444" fillOpacity={0.35} />
-                      <Area type="monotone" dataKey="income" stackId="2" stroke="#10b981" fill="#10b981" fillOpacity={0.35} />
+                      <Area type="monotone" dataKey="expenses" stroke="#ef4444" fill="#ef4444" fillOpacity={0.35} />
+                      <Area type="monotone" dataKey="income" stroke="#10b981" fill="#10b981" fillOpacity={0.35} />
                     </AreaChart>
                   </ChartContainer>
                 </div>
@@ -786,7 +786,7 @@ export default function AdminDashboard() {
               <CardContent>
                 {topCategories.length > 0 ? (
                   <div className="flex flex-col sm:flex-row items-center gap-6">
-                    <div className="w-[200px] h-[200px] shrink-0">
+                    <div className="w-[200px] h-[200px] shrink-0 relative">
                       <ChartContainer
                         config={Object.fromEntries(
                           topCategories.map((c, i) => [c.name, { color: CHART_COLORS[i % CHART_COLORS.length] }])
@@ -810,26 +810,12 @@ export default function AdminDashboard() {
                             ))}
                           </Pie>
                           <Tooltip formatter={(v: number) => formatCurrency(v)} />
-                          <text
-                            x="50%"
-                            y="48%"
-                            textAnchor="middle"
-                            dominantBaseline="middle"
-                            className="fill-foreground text-xs font-medium"
-                          >
-                            Total
-                          </text>
-                          <text
-                            x="50%"
-                            y="56%"
-                            textAnchor="middle"
-                            dominantBaseline="middle"
-                            className="fill-foreground text-sm font-bold"
-                          >
-                            {formatCurrency(categoryTotal)}
-                          </text>
                         </PieChart>
                       </ChartContainer>
+                      <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                        <span className="text-xs font-medium text-muted-foreground">Total</span>
+                        <span className="text-sm font-bold text-foreground">{formatCurrency(categoryTotal)}</span>
+                      </div>
                     </div>
                     <div className="flex-1 w-full space-y-2.5">
                       {topCategories.map((cat, i) => {
@@ -842,7 +828,7 @@ export default function AdminDashboard() {
                             />
                             <span className="flex-1 truncate">{cat.name}</span>
                             <span className="tabular-nums text-xs text-muted-foreground shrink-0">{pct.toFixed(0)}%</span>
-                            <span className="tabular-nums text-xs font-medium shrink-0 w-24 text-right">{formatCurrency(cat.amount)}</span>
+                            <span className="tabular-nums text-xs font-medium shrink-0 text-right">{formatCurrency(cat.amount)}</span>
                           </div>
                         );
                       })}

@@ -158,11 +158,6 @@ export function AdminShell({ children }: AdminShellProps) {
       ? `/admin/my-approvals?tenantId=${encodeURIComponent(urlTenantId)}`
       : "/admin/my-approvals";
 
-  const approvalRulesHref =
-    isSuperAdmin && urlTenantId
-      ? `/admin/approval-rules?tenantId=${encodeURIComponent(urlTenantId)}`
-      : "/admin/approval-rules";
-
   const navItems = [
     { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/admin/reports", label: "Reports", icon: FileSpreadsheet },
