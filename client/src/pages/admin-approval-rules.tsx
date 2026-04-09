@@ -65,27 +65,58 @@ const CONDITION_FIELDS: { value: ConditionField; label: string }[] = [
   { value: "source", label: "Source" },
 ];
 
-const CONDITION_OPS: { value: ConditionOp; label: string }[] = [
+const NUMERIC_OPS: { value: ConditionOp; label: string }[] = [
   { value: "eq", label: "Equals" },
   { value: "neq", label: "Not equals" },
-  { value: "in", label: "In" },
-  { value: "not_in", label: "Not in" },
   { value: "gte", label: "Greater or equal" },
   { value: "lte", label: "Less or equal" },
   { value: "between", label: "Between" },
 ];
 
+const ENTITY_OPS: { value: ConditionOp; label: string }[] = [
+  { value: "eq", label: "Equals" },
+  { value: "neq", label: "Not equals" },
+  { value: "in", label: "Any of" },
+  { value: "not_in", label: "None of" },
+];
+
+const ALL_OPS: { value: ConditionOp; label: string }[] = [
+  { value: "eq", label: "Equals" },
+  { value: "neq", label: "Not equals" },
+  { value: "in", label: "Any of" },
+  { value: "not_in", label: "None of" },
+  { value: "gte", label: "Greater or equal" },
+  { value: "lte", label: "Less or equal" },
+  { value: "between", label: "Between" },
+];
+
+function opsForField(field: ConditionField) {
+  if (field === "amount") return NUMERIC_OPS;
+  if (field === "source") return ENTITY_OPS;
+  return ENTITY_OPS;
+}
+
 const APPROVER_TYPES: { value: ApproverType; label: string }[] = [
   { value: "role", label: "Role" },
-  { value: "user", label: "User" },
+  { value: "user", label: "Specific user" },
   { value: "cost_center_head", label: "Cost center head" },
   { value: "category_owner", label: "Category owner" },
 ];
 
+const AVAILABLE_ROLES = [
+  { value: "finance", label: "Finance" },
+  { value: "admin", label: "Admin" },
+  { value: "campus_coordinator", label: "Campus coordinator" },
+  { value: "head_office", label: "Head office" },
+];
+
 const APPROVAL_MODES: { value: ApprovalMode; label: string }[] = [
   { value: "any_one", label: "Any one" },
-  { value: "all", label: "All" },
+  { value: "all", label: "All must approve" },
 ];
+
+type LookupItem = { id: string; name: string };
+type UserItem = { id: string; name: string; email: string; role: string };
 
 function newKey() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -93,7 +124,7 @@ function newKey() {
 
 function conditionToFormRow(c: { field: string; op: string; value: unknown }): ConditionFormRow {
   const field = (CONDITION_FIELDS.some((f) => f.value === c.field) ? c.field : "amount") as ConditionField;
-  const op = (CONDITION_OPS.some((o) => o.value === c.op) ? c.op : "eq") as ConditionOp;
+  const op = (ALL_OPS.some((o) => o.value === c.op) ? c.op : "eq") as ConditionOp;
   if (op === "between" && Array.isArray(c.value) && c.value.length >= 2) {
     return {
       key: newKey(),
@@ -240,6 +271,62 @@ export default function AdminApprovalRules({ tenantId: tenantIdProp }: AdminAppr
     },
     enabled: !!tenantId,
   });
+
+  const { data: costCenters = [] } = useQuery<LookupItem[]>({
+    queryKey: ["/api/admin/cost-centers", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/cost-centers${qs}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!tenantId && builderOpen,
+  });
+
+  const { data: categories = [] } = useQuery<LookupItem[]>({
+    queryKey: ["/api/admin/expense-categories", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/expense-categories${qs}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!tenantId && builderOpen,
+  });
+
+  const { data: vendors = [] } = useQuery<LookupItem[]>({
+    queryKey: ["/api/admin/vendors", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/vendors${qs}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!tenantId && builderOpen,
+  });
+
+  const { data: tenantUsers = [] } = useQuery<UserItem[]>({
+    queryKey: ["/api/admin/tenant-users", tenantId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/tenant-users${qs}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!tenantId && builderOpen,
+  });
+
+  function lookupItemsForField(field: ConditionField): LookupItem[] {
+    if (field === "category_id") return categories;
+    if (field === "cost_center_id") return costCenters;
+    if (field === "vendor_id") return vendors;
+    return [];
+  }
+
+  function isEntityField(field: ConditionField): boolean {
+    return field === "category_id" || field === "cost_center_id" || field === "vendor_id";
+  }
+
+  function lookupName(field: ConditionField, id: string): string {
+    const items = lookupItemsForField(field);
+    return items.find((i) => i.id === id)?.name ?? id;
+  }
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["/api/admin/approval-rules"] });
@@ -469,7 +556,11 @@ export default function AdminApprovalRules({ tenantId: tenantIdProp }: AdminAppr
                 <p className="text-muted-foreground text-sm">No conditions — rule matches all expenses.</p>
               ) : (
                 <div className="space-y-3">
-                  {conditions.map((row, idx) => (
+                  {conditions.map((row, idx) => {
+                    const ops = opsForField(row.field);
+                    const entityItems = lookupItemsForField(row.field);
+                    const isEntity = isEntityField(row.field);
+                    return (
                     <div
                       key={row.key}
                       className="flex flex-col gap-2 rounded-md border p-3 sm:flex-row sm:flex-wrap sm:items-end"
@@ -478,13 +569,18 @@ export default function AdminApprovalRules({ tenantId: tenantIdProp }: AdminAppr
                         <Label className="text-xs">Field</Label>
                         <Select
                           value={row.field}
-                          onValueChange={(v) =>
+                          onValueChange={(v) => {
+                            const newField = v as ConditionField;
+                            const validOps = opsForField(newField);
+                            const opStillValid = validOps.some((o) => o.value === row.op);
                             setConditions((list) =>
                               list.map((r, i) =>
-                                i === idx ? { ...r, field: v as ConditionField } : r
+                                i === idx
+                                  ? { ...r, field: newField, op: opStillValid ? r.op : validOps[0].value, valueText: "", valueText2: "" }
+                                  : r
                               )
-                            )
-                          }
+                            );
+                          }}
                         >
                           <SelectTrigger>
                             <SelectValue />
@@ -512,7 +608,7 @@ export default function AdminApprovalRules({ tenantId: tenantIdProp }: AdminAppr
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {CONDITION_OPS.map((o) => (
+                            {ops.map((o) => (
                               <SelectItem key={o.value} value={o.value}>
                                 {o.label}
                               </SelectItem>
@@ -524,20 +620,57 @@ export default function AdminApprovalRules({ tenantId: tenantIdProp }: AdminAppr
                         <Label className="text-xs">
                           {showSecondValue(row) ? "From / min" : "Value"}
                         </Label>
-                        <Input
-                          type={numericField(row.field) && row.op !== "in" && row.op !== "not_in" ? "number" : "text"}
-                          value={row.valueText}
-                          onChange={(e) =>
-                            setConditions((list) =>
-                              list.map((r, i) => (i === idx ? { ...r, valueText: e.target.value } : r))
-                            )
-                          }
-                          placeholder={
-                            row.op === "in" || row.op === "not_in"
-                              ? "Comma-separated values"
-                              : undefined
-                          }
-                        />
+                        {isEntity && (row.op === "eq" || row.op === "neq") ? (
+                          <Select
+                            value={row.valueText}
+                            onValueChange={(v) =>
+                              setConditions((list) =>
+                                list.map((r, i) => (i === idx ? { ...r, valueText: v } : r))
+                              )
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {entityItems.map((item) => (
+                                <SelectItem key={item.id} value={item.id}>
+                                  {item.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : row.field === "source" ? (
+                          <Select
+                            value={row.valueText}
+                            onValueChange={(v) =>
+                              setConditions((list) =>
+                                list.map((r, i) => (i === idx ? { ...r, valueText: v } : r))
+                              )
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="finjoe">FinJoe (WhatsApp)</SelectItem>
+                              <SelectItem value="web">Web dashboard</SelectItem>
+                              <SelectItem value="recurring_template">Recurring template</SelectItem>
+                              <SelectItem value="import">Import</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input
+                            type={numericField(row.field) ? "number" : "text"}
+                            value={row.valueText}
+                            onChange={(e) =>
+                              setConditions((list) =>
+                                list.map((r, i) => (i === idx ? { ...r, valueText: e.target.value } : r))
+                              )
+                            }
+                            placeholder={numericField(row.field) ? "Amount in paise" : undefined}
+                          />
+                        )}
                       </div>
                       {showSecondValue(row) && (
                         <div className="min-w-0 flex-1 space-y-1">
@@ -563,7 +696,8 @@ export default function AdminApprovalRules({ tenantId: tenantIdProp }: AdminAppr
                         Remove
                       </Button>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -612,22 +746,54 @@ export default function AdminApprovalRules({ tenantId: tenantIdProp }: AdminAppr
                         </SelectContent>
                       </Select>
                     </div>
-                    {(row.approverType === "role" || row.approverType === "user") && (
+                    {row.approverType === "role" && (
                       <div className="min-w-0 flex-1 space-y-1">
-                        <Label className="text-xs">
-                          {row.approverType === "role" ? "Role name" : "User ID"}
-                        </Label>
-                        <Input
+                        <Label className="text-xs">Role</Label>
+                        <Select
                           value={row.approverValue}
-                          onChange={(e) =>
+                          onValueChange={(v) =>
                             setSteps((list) =>
                               list.map((r, i) =>
-                                i === idx ? { ...r, approverValue: e.target.value } : r
+                                i === idx ? { ...r, approverValue: v } : r
                               )
                             )
                           }
-                          placeholder={row.approverType === "role" ? "e.g. finance" : "User UUID"}
-                        />
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select role" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {AVAILABLE_ROLES.map((r) => (
+                              <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    {row.approverType === "user" && (
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <Label className="text-xs">User</Label>
+                        <Select
+                          value={row.approverValue}
+                          onValueChange={(v) =>
+                            setSteps((list) =>
+                              list.map((r, i) =>
+                                i === idx ? { ...r, approverValue: v } : r
+                              )
+                            )
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select user" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {tenantUsers.filter((u) => u.id).map((u) => (
+                              <SelectItem key={u.id} value={u.id}>
+                                {u.name} ({u.role})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </div>
                     )}
                     <div className="space-y-1 sm:w-[140px]">
