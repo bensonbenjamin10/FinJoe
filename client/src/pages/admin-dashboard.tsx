@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useId } from "react";
 import { useSearchParams, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -10,14 +10,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import {
   AreaChart,
   Area,
@@ -32,9 +24,9 @@ import {
   Tooltip,
 } from "recharts";
 import {
-  LayoutDashboard,
   Receipt,
   TrendingUp,
+  TrendingDown,
   Wallet,
   AlertCircle,
   Clock,
@@ -43,11 +35,12 @@ import {
   Loader2,
   AlertTriangle,
   Sparkles,
+  Building2,
+  ChevronRight,
 } from "lucide-react";
 import { format, isValid, subDays } from "date-fns";
 import { useAuth } from "@/hooks/use-auth";
 import { useCostCenterLabel } from "@/hooks/use-cost-center-label";
-import { StatCard } from "@/components/stat-card";
 import { QueryErrorState } from "@/components/query-error-state";
 import { ChartContainer } from "@/components/ui/chart";
 import { Calendar } from "@/components/ui/calendar";
@@ -84,6 +77,13 @@ function getDatePresets(): Array<{ value: DatePreset; label: string }> {
     { value: "all", label: "All time" },
     { value: "custom", label: "Custom..." },
   ];
+}
+
+function getGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
 }
 
 const CHART_COLORS = ["#0ea5e9", "#8b5cf6", "#f59e0b", "#ec4899", "#10b981", "#6366f1"];
@@ -164,6 +164,53 @@ function formatCurrency(n: number) {
   if (!Number.isFinite(n)) return "—";
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n);
 }
+
+/* ── Inline sparkline (SVG) ──────────────────────────────────────────── */
+
+function MiniSparkline({ data, color, className }: { data: number[]; color: string; className?: string }) {
+  const gradId = useId().replace(/:/g, "");
+  if (!data.length || data.length < 2) return null;
+  const max = Math.max(...data);
+  const min = Math.min(...data);
+  const range = max - min || 1;
+  const h = 36;
+  const w = 100;
+  const step = w / Math.max(data.length - 1, 1);
+  const points = data.map((v, i) => {
+    const x = i * step;
+    const y = h - ((v - min) / range) * (h - 4) - 2;
+    return `${x},${y}`;
+  });
+  const fillPoints = [...points, `${w},${h}`, `0,${h}`].join(" ");
+
+  return (
+    <svg width={w} height={h} className={cn("shrink-0", className)} aria-hidden>
+      <defs>
+        <linearGradient id={`spk-${gradId}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity={0.25} />
+          <stop offset="100%" stopColor={color} stopOpacity={0.02} />
+        </linearGradient>
+      </defs>
+      <polygon points={fillPoints} fill={`url(#spk-${gradId})`} />
+      <polyline
+        points={points.join(" ")}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/* ── Skeleton placeholder ────────────────────────────────────────────── */
+
+function Skel({ className }: { className?: string }) {
+  return <div className={cn("animate-pulse rounded-md bg-muted/60", className)} />;
+}
+
+/* ══════════════════════════════════════════════════════════════════════ */
 
 export default function AdminDashboard() {
   const { user } = useAuth();
@@ -294,6 +341,8 @@ export default function AdminDashboard() {
     enabled: !!tenantId,
   });
 
+  /* ── No tenant selected ──────────────────────────────────────────── */
+
   if (!tenantId) {
     return (
       <div className="w-full py-8">
@@ -310,21 +359,32 @@ export default function AdminDashboard() {
 
   const kpis = analytics?.kpis;
   const comparison = analytics?.comparison;
+  const cfo = analytics?.cfoExtended;
+  const granularityLabel = granularity === "day" ? "Daily" : granularity === "week" ? "Weekly" : "Monthly";
+
+  const expenseSpark = analytics?.timeSeries?.map((d) => d.expenses) ?? [];
+  const incomeSpark = analytics?.timeSeries?.map((d) => d.income) ?? [];
+  const cashflowSpark = analytics?.timeSeries?.map((d) => d.income - d.expenses) ?? [];
+
+  const categoryTotal = analytics?.expensesByCategory?.reduce((s, c) => s + c.amount, 0) ?? 0;
+  const topCategories = analytics?.expensesByCategory?.slice(0, 6) ?? [];
 
   return (
-    <div className="w-full py-8 space-y-8">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+    <div className="w-full py-6 space-y-6">
+
+      {/* ── S1 · Hero Bar ──────────────────────────────────────────── */}
+      <div className="dash-section flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <LayoutDashboard className="h-7 w-7" />
-            Analytics Dashboard
+          <h1 className="font-display text-[1.65rem] font-bold tracking-tight leading-tight">
+            {getGreeting()}, {user?.name?.split(" ")[0] ?? "there"}
           </h1>
-          <p className="text-muted-foreground mt-1">
-            Key metrics and predictions to support decision-making.
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {format(today, "EEEE, MMMM d, yyyy")}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {datePreset === "custom" ? (
+
+        <div className="flex flex-wrap items-center gap-2">
+          {datePreset === "custom" && (
             <Popover>
               <PopoverTrigger asChild>
                 <Button
@@ -334,15 +394,9 @@ export default function AdminDashboard() {
                   <CalendarIcon className="mr-2 h-4 w-4" />
                   {customRange?.from ? (
                     customRange.to ? (
-                      <>
-                        {format(customRange.from, "MMM d, yyyy")} – {format(customRange.to, "MMM d, yyyy")}
-                      </>
-                    ) : (
-                      format(customRange.from, "MMM d, yyyy")
-                    )
-                  ) : (
-                    "Pick date range"
-                  )}
+                      <>{format(customRange.from, "MMM d, yyyy")} – {format(customRange.to, "MMM d, yyyy")}</>
+                    ) : format(customRange.from, "MMM d, yyyy")
+                  ) : "Pick date range"}
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-auto p-0" align="start">
@@ -355,20 +409,15 @@ export default function AdminDashboard() {
                 />
               </PopoverContent>
             </Popover>
-          ) : null}
-          <Select
-            value={datePreset}
-            onValueChange={(v) => setDatePreset(v as DatePreset)}
-          >
+          )}
+          <Select value={datePreset} onValueChange={(v) => setDatePreset(v as DatePreset)}>
             <SelectTrigger className="w-[180px]">
               <CalendarIcon className="h-4 w-4 mr-2" />
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {getDatePresets().map((p) => (
-                <SelectItem key={p.value} value={p.value}>
-                  {p.label}
-                </SelectItem>
+                <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -380,18 +429,46 @@ export default function AdminDashboard() {
               <SelectItem value="all">All {costCenterLabel}s</SelectItem>
               <SelectItem value="__corporate__">Corporate Office</SelectItem>
               {costCenters.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
-                  {c.name}
-                </SelectItem>
+                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
       </div>
 
+      {/* ── Loading skeleton ───────────────────────────────────────── */}
       {analyticsLoading ? (
-        <div className="flex items-center justify-center py-16">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <div className="space-y-6">
+          <div className="grid gap-4 lg:grid-cols-3">
+            {[0, 1, 2].map((i) => (
+              <Card key={i} className="overflow-hidden">
+                <CardContent className="p-6 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <Skel className="h-4 w-28" />
+                    <Skel className="h-4 w-4 rounded" />
+                  </div>
+                  <Skel className="h-8 w-40" />
+                  <div className="flex items-center gap-2">
+                    <Skel className="h-3 w-16" />
+                    <Skel className="h-3 w-24" />
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+          <Card>
+            <CardContent className="p-6 space-y-3">
+              <Skel className="h-5 w-52" />
+              <Skel className="h-4 w-full" />
+              <Skel className="h-4 w-4/5" />
+              <Skel className="h-4 w-3/5" />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-6">
+              <Skel className="h-[340px] w-full rounded-lg" />
+            </CardContent>
+          </Card>
         </div>
       ) : analyticsError ? (
         <QueryErrorState
@@ -400,107 +477,225 @@ export default function AdminDashboard() {
         />
       ) : analytics ? (
         <>
-          {/* Row 1: KPI cards */}
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            <StatCard
-              icon={Receipt}
-              value={formatCurrency(kpis.totalExpenses)}
-              label="Total Expenses"
-              trend={comparison?.expenseTrend}
-              comparison="vs previous period"
-            />
-            <StatCard
-              icon={TrendingUp}
-              value={formatCurrency(kpis.totalIncome)}
-              label="Total Income"
-              trend={comparison?.incomeTrend}
-              comparison="vs previous period"
-            />
-            <StatCard
-              icon={Wallet}
-              value={formatCurrency(kpis.netCashflow)}
-              label="Net Cashflow"
-              comparison={kpis.netCashflow >= 0 ? "Surplus" : "Deficit"}
-            />
-            <Link href={`/admin/my-approvals${tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : ""}`}>
-              <StatCard
-                icon={ClipboardCheck}
-                value={String(myApprovals.length)}
-                label="My Approvals"
-              />
-            </Link>
-            <StatCard
-              icon={Clock}
-              value={String(kpis.pendingApprovals)}
-              label="Org Pending Approvals"
-            />
-            <StatCard
-              icon={AlertCircle}
-              value={String(kpis.pendingRoleRequests)}
-              label="Pending Role Requests"
-            />
-            <StatCard
-              icon={AlertTriangle}
-              value={String(kpis.pettyCashAtRisk)}
-              label="Petty Cash at Risk"
-            />
+          {/* ── S2 · Financial Scoreboard ─────────────────────────── */}
+          <div className="grid gap-4 lg:grid-cols-3">
+            {/* Total Expenses */}
+            <Card className="dash-section relative overflow-hidden group hover:shadow-md transition-shadow" style={{ animationDelay: "80ms" }}>
+              <CardContent className="p-6">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-sm font-medium text-muted-foreground">Total Expenses</span>
+                      <Receipt className="h-3.5 w-3.5 text-muted-foreground/40" />
+                    </div>
+                    <div className="text-3xl font-bold tracking-tight tabular-nums">
+                      {formatCurrency(kpis!.totalExpenses)}
+                    </div>
+                    {comparison && (
+                      <div className="flex items-center gap-1.5 mt-2">
+                        <span className={cn(
+                          "inline-flex items-center gap-0.5 text-xs font-semibold px-1.5 py-0.5 rounded-full",
+                          comparison.expenseTrend > 0
+                            ? "text-red-700 bg-red-50 dark:text-red-400 dark:bg-red-950/40"
+                            : comparison.expenseTrend < 0
+                              ? "text-emerald-700 bg-emerald-50 dark:text-emerald-400 dark:bg-emerald-950/40"
+                              : "text-muted-foreground bg-muted"
+                        )}>
+                          {comparison.expenseTrend > 0
+                            ? <TrendingUp className="h-3 w-3" />
+                            : comparison.expenseTrend < 0
+                              ? <TrendingDown className="h-3 w-3" />
+                              : null}
+                          {comparison.expenseTrend > 0 ? "+" : ""}{comparison.expenseTrend.toFixed(1)}%
+                        </span>
+                        <span className="text-xs text-muted-foreground">vs prev</span>
+                      </div>
+                    )}
+                  </div>
+                  <MiniSparkline data={expenseSpark} color="#ef4444" className="mt-2 opacity-70 group-hover:opacity-100 transition-opacity" />
+                </div>
+              </CardContent>
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-rose-500/60 via-rose-500/20 to-transparent" />
+            </Card>
+
+            {/* Total Income */}
+            <Card className="dash-section relative overflow-hidden group hover:shadow-md transition-shadow" style={{ animationDelay: "140ms" }}>
+              <CardContent className="p-6">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-sm font-medium text-muted-foreground">Total Income</span>
+                      <TrendingUp className="h-3.5 w-3.5 text-muted-foreground/40" />
+                    </div>
+                    <div className="text-3xl font-bold tracking-tight tabular-nums">
+                      {formatCurrency(kpis!.totalIncome)}
+                    </div>
+                    {comparison && (
+                      <div className="flex items-center gap-1.5 mt-2">
+                        <span className={cn(
+                          "inline-flex items-center gap-0.5 text-xs font-semibold px-1.5 py-0.5 rounded-full",
+                          comparison.incomeTrend > 0
+                            ? "text-emerald-700 bg-emerald-50 dark:text-emerald-400 dark:bg-emerald-950/40"
+                            : comparison.incomeTrend < 0
+                              ? "text-red-700 bg-red-50 dark:text-red-400 dark:bg-red-950/40"
+                              : "text-muted-foreground bg-muted"
+                        )}>
+                          {comparison.incomeTrend > 0
+                            ? <TrendingUp className="h-3 w-3" />
+                            : comparison.incomeTrend < 0
+                              ? <TrendingDown className="h-3 w-3" />
+                              : null}
+                          {comparison.incomeTrend > 0 ? "+" : ""}{comparison.incomeTrend.toFixed(1)}%
+                        </span>
+                        <span className="text-xs text-muted-foreground">vs prev</span>
+                      </div>
+                    )}
+                  </div>
+                  <MiniSparkline data={incomeSpark} color="#10b981" className="mt-2 opacity-70 group-hover:opacity-100 transition-opacity" />
+                </div>
+              </CardContent>
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-emerald-500/60 via-emerald-500/20 to-transparent" />
+            </Card>
+
+            {/* Net Cashflow */}
+            <Card className="dash-section relative overflow-hidden group hover:shadow-md transition-shadow" style={{ animationDelay: "200ms" }}>
+              <CardContent className="p-6">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-sm font-medium text-muted-foreground">Net Cashflow</span>
+                      <Wallet className="h-3.5 w-3.5 text-muted-foreground/40" />
+                    </div>
+                    <div className="text-3xl font-bold tracking-tight tabular-nums">
+                      {formatCurrency(kpis!.netCashflow)}
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-2">
+                      <span className={cn(
+                        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold",
+                        kpis!.netCashflow >= 0
+                          ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400"
+                          : "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-400"
+                      )}>
+                        {kpis!.netCashflow >= 0 ? "Surplus" : "Deficit"}
+                      </span>
+                    </div>
+                  </div>
+                  <MiniSparkline
+                    data={cashflowSpark}
+                    color={kpis!.netCashflow >= 0 ? "#0ea5e9" : "#f59e0b"}
+                    className="mt-2 opacity-70 group-hover:opacity-100 transition-opacity"
+                  />
+                </div>
+              </CardContent>
+              <div className={cn(
+                "absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r to-transparent",
+                kpis!.netCashflow >= 0 ? "from-sky-500/60 via-sky-500/20" : "from-amber-500/60 via-amber-500/20"
+              )} />
+            </Card>
           </div>
 
-          {/* FinJoe Observation & Suggestions (CFO-style narrative + structured bullets) */}
-          {(insightsLoading ||
-            insights?.insights ||
-            insights?.insight?.narrative) && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Sparkles className="h-5 w-5" />
-                  FinJoe Observation & Suggestions
+          {/* ── Action Items Strip ────────────────────────────────── */}
+          {(myApprovals.length > 0 || kpis!.pendingApprovals > 0 || kpis!.pendingRoleRequests > 0 || kpis!.pettyCashAtRisk > 0) && (
+            <div className="dash-section flex items-center flex-wrap gap-x-5 gap-y-2 px-4 py-2.5 rounded-lg border bg-card text-sm" style={{ animationDelay: "260ms" }}>
+              {myApprovals.length > 0 && (
+                <Link href={`/admin/my-approvals${tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : ""}`}>
+                  <span className="inline-flex items-center gap-1.5 font-medium text-primary hover:underline underline-offset-4 cursor-pointer">
+                    <ClipboardCheck className="h-3.5 w-3.5" />
+                    {myApprovals.length} awaiting your review
+                    <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                  </span>
+                </Link>
+              )}
+              {myApprovals.length > 0 && (kpis!.pendingApprovals > 0 || kpis!.pendingRoleRequests > 0 || kpis!.pettyCashAtRisk > 0) && (
+                <div className="h-4 w-px bg-border" />
+              )}
+              {kpis!.pendingApprovals > 0 && (
+                <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                  <Clock className="h-3.5 w-3.5" />
+                  <span className="font-medium text-foreground tabular-nums">{kpis!.pendingApprovals}</span> org approvals pending
+                </span>
+              )}
+              {kpis!.pendingRoleRequests > 0 && (
+                <>
+                  <div className="h-4 w-px bg-border" />
+                  <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                    <AlertCircle className="h-3.5 w-3.5 text-amber-500" />
+                    <span className="font-medium text-foreground tabular-nums">{kpis!.pendingRoleRequests}</span> role requests
+                  </span>
+                </>
+              )}
+              {kpis!.pettyCashAtRisk > 0 && (
+                <>
+                  <div className="h-4 w-px bg-border" />
+                  <span className="inline-flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    <span className="font-medium tabular-nums">{kpis!.pettyCashAtRisk}</span> petty cash at risk
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ── S3 · FinJoe Intelligence Brief ───────────────────── */}
+          {(insightsLoading || insights?.insights || insights?.insight?.narrative) && (
+            <Card className="dash-section border-primary/20 bg-gradient-to-br from-primary/[0.03] to-transparent" style={{ animationDelay: "300ms" }}>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <div className="flex items-center justify-center h-7 w-7 rounded-lg bg-primary/10">
+                    <Sparkles className="h-4 w-4 text-primary" />
+                  </div>
+                  FinJoe Intelligence Brief
                 </CardTitle>
-                <CardDescription>
-                  Plain-language takeaways from your analytics and MIS, with highlights and suggested actions.
-                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 {insightsLoading ? (
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    <span className="text-sm">Preparing observations...</span>
+                    <span className="text-sm">Analyzing your financial data...</span>
                   </div>
                 ) : insights?.insight?.narrative || insights?.insights ? (
                   <>
                     <p className="text-sm leading-relaxed">
                       {insights.insight?.narrative ?? insights.insights}
                     </p>
-                    {insights.insight?.keyPoints && insights.insight.keyPoints.length > 0 ? (
+                    {insights.insight?.keyPoints && insights.insight.keyPoints.length > 0 && (
                       <div>
-                        <p className="text-xs font-medium text-muted-foreground mb-2">Highlights</p>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Key Highlights</p>
                         <ul className="text-sm list-disc pl-5 space-y-1">
                           {insights.insight.keyPoints.map((k, i) => (
                             <li key={i}>{k}</li>
                           ))}
                         </ul>
                       </div>
-                    ) : null}
-                    {insights.insight?.risks && insights.insight.risks.length > 0 ? (
-                      <div>
-                        <p className="text-xs font-medium text-muted-foreground mb-2">Risks / watch</p>
-                        <ul className="text-sm list-disc pl-5 space-y-1">
-                          {insights.insight.risks.map((k, i) => (
-                            <li key={i}>{k}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
-                    {insights.insight?.suggestedActions && insights.insight.suggestedActions.length > 0 ? (
-                      <div>
-                        <p className="text-xs font-medium text-muted-foreground mb-2">Suggested actions</p>
-                        <ul className="text-sm list-disc pl-5 space-y-1">
-                          {insights.insight.suggestedActions.map((k, i) => (
-                            <li key={i}>{k}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
+                    )}
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      {insights.insight?.risks && insights.insight.risks.length > 0 && (
+                        <div className="rounded-lg border border-amber-200/50 dark:border-amber-800/50 bg-amber-50/50 dark:bg-amber-950/20 p-3">
+                          <p className="text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400 mb-2">Risks</p>
+                          <ul className="text-sm space-y-1.5">
+                            {insights.insight.risks.map((k, i) => (
+                              <li key={i} className="flex items-start gap-1.5">
+                                <span className="text-amber-500 mt-0.5 shrink-0">•</span>
+                                <span>{k}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {insights.insight?.suggestedActions && insights.insight.suggestedActions.length > 0 && (
+                        <div className="rounded-lg border border-emerald-200/50 dark:border-emerald-800/50 bg-emerald-50/50 dark:bg-emerald-950/20 p-3">
+                          <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400 mb-2">Suggested Actions</p>
+                          <ul className="text-sm space-y-1.5">
+                            {insights.insight.suggestedActions.map((k, i) => (
+                              <li key={i} className="flex items-start gap-1.5">
+                                <span className="text-emerald-500 mt-0.5 shrink-0">•</span>
+                                <span>{k}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
                   </>
                 ) : (
                   <p className="text-sm text-muted-foreground">
@@ -512,106 +707,169 @@ export default function AdminDashboard() {
             </Card>
           )}
 
-          {/* Row 2: Trend charts */}
-          <div className="grid gap-4 md:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Expense vs Income</CardTitle>
-                <CardDescription>Daily breakdown over the selected period</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {analytics.timeSeries.length > 0 ? (
-                  <div className="h-[300px]">
-                    <ChartContainer
-                      config={{
-                        expenses: { label: "Expenses", color: "#ef4444" },
-                        income: { label: "Income", color: "#10b981" },
-                      }}
-                      className="h-full w-full aspect-auto"
-                    >
-                      <AreaChart data={analytics.timeSeries}>
-                        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                        <XAxis dataKey="date" tickFormatter={(v) => format(new Date(v), "MMM d")} />
-                        <YAxis tickFormatter={(v) => v >= 1000 ? `${v / 1000}k` : v} />
-                        <Tooltip
-                          content={({ active, payload }) => {
-                            if (!active || !payload?.length) return null;
-                            const p = payload[0].payload;
-                            const d = new Date(p.date);
-                            if (!isValid(d)) return <div className="rounded-lg border bg-background p-2 shadow-sm">{p.date ?? "—"}</div>;
-                            return (
-                              <div className="rounded-lg border bg-background p-2 shadow-sm">
-                                <div className="text-xs text-muted-foreground">{format(d, "PPP")}</div>
-                                <div className="font-medium mt-1">{formatCurrency(p.expenses)} expenses</div>
-                                <div className="font-medium">{formatCurrency(p.income)} income</div>
+          {/* ── S4 · Cash Flow Trend (full width) ────────────────── */}
+          <Card className="dash-section" style={{ animationDelay: "380ms" }}>
+            <CardHeader>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <CardTitle>Cash Flow Trend</CardTitle>
+                  <CardDescription>{granularityLabel} breakdown over the selected period</CardDescription>
+                </div>
+                <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-[#ef4444]" />
+                    Expenses
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-[#10b981]" />
+                    Income
+                  </span>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {analytics.timeSeries.length > 0 ? (
+                <div className="h-[340px]">
+                  <ChartContainer
+                    config={{
+                      expenses: { label: "Expenses", color: "#ef4444" },
+                      income: { label: "Income", color: "#10b981" },
+                    }}
+                    className="h-full w-full aspect-auto"
+                  >
+                    <AreaChart data={analytics.timeSeries}>
+                      <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                      <XAxis dataKey="date" tickFormatter={(v) => format(new Date(v), "MMM d")} />
+                      <YAxis tickFormatter={(v) => v >= 1000 ? `${v / 1000}k` : v} />
+                      <Tooltip
+                        content={({ active, payload }) => {
+                          if (!active || !payload?.length) return null;
+                          const p = payload[0].payload;
+                          const d = new Date(p.date);
+                          if (!isValid(d)) return <div className="rounded-lg border bg-background p-2 shadow-sm">{p.date ?? "—"}</div>;
+                          return (
+                            <div className="rounded-lg border bg-background p-2 shadow-sm">
+                              <div className="text-xs text-muted-foreground">{format(d, "PPP")}</div>
+                              <div className="flex items-center gap-1.5 mt-1">
+                                <span className="h-1.5 w-1.5 rounded-full bg-[#ef4444]" />
+                                <span className="font-medium">{formatCurrency(p.expenses)}</span>
                               </div>
-                            );
-                          }}
-                        />
-                        <Area type="monotone" dataKey="expenses" stackId="1" stroke="#ef4444" fill="#ef4444" fillOpacity={0.4} />
-                        <Area type="monotone" dataKey="income" stackId="2" stroke="#10b981" fill="#10b981" fillOpacity={0.4} />
-                      </AreaChart>
-                    </ChartContainer>
-                  </div>
-                ) : (
-                  <div className="h-[300px] flex items-center justify-center text-muted-foreground">
-                    No data for this period
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                              <div className="flex items-center gap-1.5">
+                                <span className="h-1.5 w-1.5 rounded-full bg-[#10b981]" />
+                                <span className="font-medium">{formatCurrency(p.income)}</span>
+                              </div>
+                            </div>
+                          );
+                        }}
+                      />
+                      <Area type="monotone" dataKey="expenses" stackId="1" stroke="#ef4444" fill="#ef4444" fillOpacity={0.35} />
+                      <Area type="monotone" dataKey="income" stackId="2" stroke="#10b981" fill="#10b981" fillOpacity={0.35} />
+                    </AreaChart>
+                  </ChartContainer>
+                </div>
+              ) : (
+                <div className="h-[340px] flex items-center justify-center text-muted-foreground">
+                  No data for this period
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
-            <Card>
+          {/* ── S5 · Expense Intelligence Grid ───────────────────── */}
+          <div className="grid gap-4 lg:grid-cols-2">
+            {/* Donut + integrated legend */}
+            <Card className="dash-section" style={{ animationDelay: "440ms" }}>
               <CardHeader>
-                <CardTitle>Expenses by Category</CardTitle>
-                <CardDescription>Top categories by amount</CardDescription>
+                <CardTitle>Expense Breakdown</CardTitle>
+                <CardDescription>Category distribution</CardDescription>
               </CardHeader>
               <CardContent>
-                {analytics.expensesByCategory.length > 0 ? (
-                  <div className="h-[300px]">
-                    <ChartContainer
-                      config={Object.fromEntries(
-                        analytics.expensesByCategory.slice(0, 6).map((c, i) => [c.name, { color: CHART_COLORS[i % CHART_COLORS.length] }])
-                      )}
-                      className="h-full w-full aspect-auto"
-                    >
-                      <PieChart>
-                        <Pie
-                          data={analytics.expensesByCategory.slice(0, 6)}
-                          dataKey="amount"
-                          nameKey="name"
-                          cx="50%"
-                          cy="50%"
-                          outerRadius={80}
-                          label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                        >
-                          {analytics.expensesByCategory.slice(0, 6).map((_, i) => (
-                            <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip formatter={(v: number) => formatCurrency(v)} />
-                      </PieChart>
-                    </ChartContainer>
+                {topCategories.length > 0 ? (
+                  <div className="flex flex-col sm:flex-row items-center gap-6">
+                    <div className="w-[200px] h-[200px] shrink-0">
+                      <ChartContainer
+                        config={Object.fromEntries(
+                          topCategories.map((c, i) => [c.name, { color: CHART_COLORS[i % CHART_COLORS.length] }])
+                        )}
+                        className="h-full w-full aspect-auto"
+                      >
+                        <PieChart>
+                          <Pie
+                            data={topCategories}
+                            dataKey="amount"
+                            nameKey="name"
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={55}
+                            outerRadius={85}
+                            paddingAngle={2}
+                            strokeWidth={0}
+                          >
+                            {topCategories.map((_, i) => (
+                              <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <Tooltip formatter={(v: number) => formatCurrency(v)} />
+                          <text
+                            x="50%"
+                            y="48%"
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                            className="fill-foreground text-xs font-medium"
+                          >
+                            Total
+                          </text>
+                          <text
+                            x="50%"
+                            y="56%"
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                            className="fill-foreground text-sm font-bold"
+                          >
+                            {formatCurrency(categoryTotal)}
+                          </text>
+                        </PieChart>
+                      </ChartContainer>
+                    </div>
+                    <div className="flex-1 w-full space-y-2.5">
+                      {topCategories.map((cat, i) => {
+                        const pct = categoryTotal > 0 ? (cat.amount / categoryTotal) * 100 : 0;
+                        return (
+                          <div key={`${cat.name}-${i}`} className="flex items-center gap-2.5 text-sm">
+                            <div
+                              className="h-2.5 w-2.5 rounded-full shrink-0"
+                              style={{ background: CHART_COLORS[i % CHART_COLORS.length] }}
+                            />
+                            <span className="flex-1 truncate">{cat.name}</span>
+                            <span className="tabular-nums text-xs text-muted-foreground shrink-0">{pct.toFixed(0)}%</span>
+                            <span className="tabular-nums text-xs font-medium shrink-0 w-24 text-right">{formatCurrency(cat.amount)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 ) : (
-                  <div className="h-[300px] flex items-center justify-center text-muted-foreground">
+                  <div className="h-[200px] flex items-center justify-center text-muted-foreground">
                     No expense data
                   </div>
                 )}
+                <Button variant="outline" size="sm" className="mt-5 w-full" asChild>
+                  <Link href={tenantId ? `/admin/expenses?tenantId=${tenantId}` : "/admin/expenses"}>
+                    View all expenses
+                  </Link>
+                </Button>
               </CardContent>
             </Card>
-          </div>
 
-          {/* Row 3: Expense by cost center + Top expenses */}
-          <div className="grid gap-4 md:grid-cols-2">
-            <Card>
+            {/* Cost Center Bar */}
+            <Card className="dash-section" style={{ animationDelay: "500ms" }}>
               <CardHeader>
                 <CardTitle>Expenses by {costCenterLabel}</CardTitle>
                 <CardDescription>Breakdown by cost center</CardDescription>
               </CardHeader>
               <CardContent>
                 {analytics.expensesByCostCenter.length > 0 ? (
-                  <div className="h-[280px]">
+                  <div className="h-[300px]">
                     <ChartContainer
                       config={Object.fromEntries(
                         analytics.expensesByCostCenter.map((c, i) => [c.name, { color: CHART_COLORS[i % CHART_COLORS.length] }])
@@ -623,208 +881,211 @@ export default function AdminDashboard() {
                         <XAxis type="number" tickFormatter={(v) => v >= 1000 ? `${v / 1000}k` : v} />
                         <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 11 }} />
                         <Tooltip formatter={(v: number) => formatCurrency(v)} />
-                        <Bar dataKey="amount" fill="#0ea5e9" radius={[0, 4, 4, 0]} />
+                        <Bar dataKey="amount" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]} />
                       </BarChart>
                     </ChartContainer>
                   </div>
                 ) : (
-                  <div className="h-[280px] flex items-center justify-center text-muted-foreground">
+                  <div className="h-[300px] flex items-center justify-center text-muted-foreground">
                     No data
                   </div>
                 )}
               </CardContent>
             </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Top Expenses by Category</CardTitle>
-                <CardDescription>Drill-down to expense list</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {analytics.expensesByCategory.length > 0 ? (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Category</TableHead>
-                        <TableHead className="text-right">Amount</TableHead>
-                        <TableHead className="text-right">Count</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {analytics.expensesByCategory.slice(0, 8).map((row, i) => (
-                        <TableRow key={`${row.name}-${i}`}>
-                          <TableCell>{row.name}</TableCell>
-                          <TableCell className="text-right font-medium">{formatCurrency(row.amount)}</TableCell>
-                          <TableCell className="text-right text-muted-foreground">{row.count}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                ) : (
-                  <div className="py-8 text-center text-muted-foreground">No expense data</div>
-                )}
-                <Button variant="outline" size="sm" className="mt-4 w-full" asChild>
-                  <Link href={tenantId ? `/admin/expenses?tenantId=${tenantId}` : "/admin/expenses"}>
-                    View all expenses
-                  </Link>
-                </Button>
-              </CardContent>
-            </Card>
           </div>
 
-          {/* Row 4: Predictions */}
-          <div className="grid gap-4 md:grid-cols-2">
-            <Card>
+          {/* ── S6 · Forecast & Risk ─────────────────────────────── */}
+          <div className="grid gap-4 lg:grid-cols-2">
+            {/* Cash Flow Forecast */}
+            <Card className="dash-section" style={{ animationDelay: "560ms" }}>
               <CardHeader>
                 <CardTitle>Cash Flow Forecast</CardTitle>
-                <CardDescription>30-day projected net cash flow from today (income minus expenses)</CardDescription>
+                <CardDescription>30-day projected net cash flow</CardDescription>
               </CardHeader>
               <CardContent>
                 {predictionsLoading ? (
-                  <div className="grid grid-cols-2 gap-3 mb-4">
-                    <div className="rounded-lg border p-3">
-                      <div className="text-xs text-muted-foreground">Projected Shortfall (7d)</div>
-                      <div className="text-sm font-semibold text-muted-foreground">—</div>
+                  <>
+                    <div className="grid grid-cols-2 gap-3 mb-4">
+                      <div className="rounded-lg border p-3"><Skel className="h-3 w-20 mb-1.5" /><Skel className="h-5 w-24" /></div>
+                      <div className="rounded-lg border p-3"><Skel className="h-3 w-20 mb-1.5" /><Skel className="h-5 w-24" /></div>
                     </div>
-                    <div className="rounded-lg border p-3">
-                      <div className="text-xs text-muted-foreground">Projected Shortfall (30d)</div>
-                      <div className="text-sm font-semibold text-muted-foreground">—</div>
-                    </div>
-                  </div>
+                    <Skel className="h-[260px] w-full rounded-lg" />
+                  </>
                 ) : predictionsError ? (
-                  <div className="grid grid-cols-2 gap-3 mb-4">
-                    <div className="rounded-lg border p-3">
-                      <div className="text-xs text-muted-foreground">Projected Shortfall (7d)</div>
-                      <div className="text-sm font-semibold text-muted-foreground">—</div>
-                    </div>
-                    <div className="rounded-lg border p-3">
-                      <div className="text-xs text-muted-foreground">Projected Shortfall (30d)</div>
-                      <div className="text-sm font-semibold text-muted-foreground">—</div>
-                    </div>
+                  <div className="h-[320px] flex flex-col items-center justify-center gap-4">
+                    <p className="text-muted-foreground text-sm">Failed to load forecast.</p>
+                    <Button variant="outline" size="sm" onClick={() => refetchPredictions()}>Retry</Button>
                   </div>
                 ) : predictions ? (
                   <>
                     <div className="grid grid-cols-2 gap-3 mb-4">
                       <div className="rounded-lg border p-3">
-                        <div className="text-xs text-muted-foreground">Projected Shortfall (7d)</div>
-                        <div className="text-sm font-semibold">
+                        <div className="text-xs text-muted-foreground">Shortfall (7d)</div>
+                        <div className="text-sm font-semibold tabular-nums mt-0.5">
                           {predictions.cashRequiredNextWeek != null ? formatCurrency(predictions.cashRequiredNextWeek) : "—"}
                         </div>
                       </div>
                       <div className="rounded-lg border p-3">
-                        <div className="text-xs text-muted-foreground">Projected Shortfall (30d)</div>
-                        <div className="text-sm font-semibold">
+                        <div className="text-xs text-muted-foreground">Shortfall (30d)</div>
+                        <div className="text-sm font-semibold tabular-nums mt-0.5">
                           {predictions.cashRequiredHorizon != null ? formatCurrency(predictions.cashRequiredHorizon) : "—"}
                         </div>
                       </div>
                     </div>
-                    {predictions.cashRequiredNextWeek === 0 && predictions.cashRequiredHorizon === 0 ? (
+                    {predictions.cashRequiredNextWeek === 0 && predictions.cashRequiredHorizon === 0 && (
                       <p className="text-xs text-emerald-600 dark:text-emerald-400 mb-4">
-                        No shortfall projected — forecast income exceeds expenses over this period.
+                        No shortfall projected — income exceeds expenses.
                       </p>
-                    ) : null}
+                    )}
+                    {predictions.cashflowForecast && predictions.cashflowForecast.length > 0 ? (
+                      <div>
+                        <div className="h-[260px]">
+                          <ChartContainer
+                            config={{ netPosition: { label: "Net Position", color: "#0ea5e9" } }}
+                            className="h-full w-full aspect-auto"
+                          >
+                            <AreaChart data={predictions.cashflowForecast}>
+                              <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                              <XAxis dataKey="date" tickFormatter={(v) => format(new Date(v), "MMM d")} />
+                              <YAxis tickFormatter={(v) => v >= 1000 ? `${v / 1000}k` : v} />
+                              <Tooltip
+                                content={({ active, payload }) => {
+                                  if (!active || !payload?.length) return null;
+                                  const p = payload[0].payload;
+                                  const d = new Date(p.date);
+                                  if (!isValid(d)) return <div className="rounded-lg border bg-background p-2 shadow-sm">{p.date ?? "—"}</div>;
+                                  return (
+                                    <div className="rounded-lg border bg-background p-2 shadow-sm">
+                                      <div className="text-xs text-muted-foreground">{format(d, "PPP")}</div>
+                                      <div className="font-medium mt-1">{formatCurrency(p.netPosition)} net</div>
+                                    </div>
+                                  );
+                                }}
+                              />
+                              <Area type="monotone" dataKey="netPosition" stroke="#0ea5e9" fill="#0ea5e9" fillOpacity={0.35} />
+                            </AreaChart>
+                          </ChartContainer>
+                        </div>
+                        <div className="mt-2 text-xs text-muted-foreground">
+                          Range: {formatCurrency(predictions.forecastRange?.min ?? 0)} – {formatCurrency(predictions.forecastRange?.max ?? 0)} · Confidence: {(predictions.confidence ?? "medium").toUpperCase()}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="h-[260px] flex items-center justify-center text-muted-foreground">
+                        Insufficient data for forecast
+                      </div>
+                    )}
                   </>
                 ) : null}
-                {predictionsLoading ? (
-                  <div className="h-[280px] flex items-center justify-center">
-                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                  </div>
-                ) : predictionsError ? (
-                  <div className="h-[280px] flex flex-col items-center justify-center gap-4">
-                    <p className="text-muted-foreground text-sm">Failed to load forecast. Please try again.</p>
-                    <Button variant="outline" size="sm" onClick={() => refetchPredictions()}>
-                      Retry
-                    </Button>
-                  </div>
-                ) : predictions?.cashflowForecast && predictions.cashflowForecast.length > 0 ? (
-                  <div className="h-[280px]">
-                    <ChartContainer
-                      config={{ netPosition: { label: "Net Position", color: "#0ea5e9" } }}
-                      className="h-full w-full aspect-auto"
-                    >
-                      <AreaChart data={predictions.cashflowForecast}>
-                        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                        <XAxis dataKey="date" tickFormatter={(v) => format(new Date(v), "MMM d")} />
-                        <YAxis tickFormatter={(v) => v >= 1000 ? `${v / 1000}k` : v} />
-                        <Tooltip
-                          content={({ active, payload }) => {
-                            if (!active || !payload?.length) return null;
-                            const p = payload[0].payload;
-                            const d = new Date(p.date);
-                            if (!isValid(d)) return <div className="rounded-lg border bg-background p-2 shadow-sm">{p.date ?? "—"}</div>;
-                            return (
-                              <div className="rounded-lg border bg-background p-2 shadow-sm">
-                                <div className="text-xs text-muted-foreground">{format(d, "PPP")}</div>
-                                <div className="font-medium mt-1">{formatCurrency(p.netPosition)} net</div>
-                              </div>
-                            );
-                          }}
-                        />
-                        <Area type="monotone" dataKey="netPosition" stroke="#0ea5e9" fill="#0ea5e9" fillOpacity={0.4} />
-                      </AreaChart>
-                    </ChartContainer>
-                    <div className="mt-3 text-xs text-muted-foreground">
-                      Range: {formatCurrency(predictions?.forecastRange?.min ?? 0)} to {formatCurrency(predictions?.forecastRange?.max ?? 0)}. Confidence: {(predictions?.confidence ?? "medium").toUpperCase()}.
-                    </div>
-                  </div>
-                ) : (
-                  <div className="h-[280px] flex items-center justify-center text-muted-foreground">
-                    Insufficient data for forecast
-                  </div>
-                )}
               </CardContent>
             </Card>
 
-            <Card>
+            {/* Alerts & Risk Signals */}
+            <Card className="dash-section" style={{ animationDelay: "620ms" }}>
               <CardHeader>
-                <CardTitle>Alerts</CardTitle>
-                <CardDescription>Items requiring attention</CardDescription>
+                <CardTitle>Risk & Alerts</CardTitle>
+                <CardDescription>Signals requiring attention</CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-5">
+                {/* Prediction alerts */}
                 {predictionsLoading ? (
-                  <div className="py-8 flex items-center justify-center">
-                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  <div className="py-6 flex items-center justify-center">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                   </div>
                 ) : predictionsError ? (
-                  <div className="py-8 flex flex-col items-center justify-center gap-4">
-                    <p className="text-muted-foreground text-sm">Failed to load alerts. Please try again.</p>
-                    <Button variant="outline" size="sm" onClick={() => refetchPredictions()}>
-                      Retry
-                    </Button>
+                  <div className="py-6 flex flex-col items-center justify-center gap-3">
+                    <p className="text-muted-foreground text-sm">Failed to load alerts.</p>
+                    <Button variant="outline" size="sm" onClick={() => refetchPredictions()}>Retry</Button>
                   </div>
-                ) : predictions?.alerts && predictions.alerts.length > 0 ? (
-                  <ul className="space-y-2">
-                    {predictions.alerts.map((a, i) => (
-                      <li key={i} className="flex items-start gap-2 p-2 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
-                        <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-500 shrink-0 mt-0.5" />
-                        <span className="text-sm">{a.message}</span>
-                      </li>
-                    ))}
-                  </ul>
                 ) : (
-                  <div className="py-8 text-center text-muted-foreground">No alerts at this time</div>
+                  <>
+                    {predictions?.alerts && predictions.alerts.length > 0 ? (
+                      <ul className="space-y-2">
+                        {predictions.alerts.map((a, i) => (
+                          <li key={i} className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200/70 dark:border-amber-800/50">
+                            <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-500 shrink-0 mt-0.5" />
+                            <span className="text-sm">{a.message}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-sm text-muted-foreground py-2">No active alerts</p>
+                    )}
+
+                    {/* Key drivers */}
+                    {predictions?.driverFactors && predictions.driverFactors.length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Key Drivers</p>
+                        <ul className="text-xs text-muted-foreground space-y-1">
+                          {predictions.driverFactors.slice(0, 4).map((d, idx) => (
+                            <li key={`${d}-${idx}`} className="flex items-start gap-1.5">
+                              <span className="text-muted-foreground/60 mt-px shrink-0">–</span>
+                              <span>{d}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </>
                 )}
-                {predictions?.driverFactors && predictions.driverFactors.length > 0 ? (
-                  <div className="mt-4">
-                    <p className="text-xs font-medium text-muted-foreground mb-2">Key drivers</p>
-                    <ul className="text-xs text-muted-foreground space-y-1">
-                      {predictions.driverFactors.slice(0, 4).map((d, idx) => (
-                        <li key={`${d}-${idx}`}>- {d}</li>
+
+                {/* Vendor concentration (from cfoExtended) */}
+                {cfo && cfo.topVendors && cfo.topVendors.length > 0 && (
+                  <div className="rounded-lg border p-3 space-y-2">
+                    <div className="flex items-center gap-1.5">
+                      <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Vendor Concentration</span>
+                    </div>
+                    <div className="text-xs text-muted-foreground mb-1">
+                      Top 3 categories: {cfo.top3CategorySharePct.toFixed(0)}% of spend ·
+                      {" "}{cfo.expenseCategoryHhi > 2500 ? "High" : cfo.expenseCategoryHhi > 1500 ? "Moderate" : "Diversified"} concentration
+                    </div>
+                    <div className="space-y-1">
+                      {cfo.topVendors.slice(0, 3).map((v, i) => (
+                        <div key={i} className="flex items-center justify-between text-xs">
+                          <span className="truncate mr-3">{v.name}</span>
+                          <div className="flex items-center gap-2 shrink-0 tabular-nums">
+                            <span className="text-muted-foreground">{v.sharePct.toFixed(1)}%</span>
+                            <span className="font-medium">{formatCurrency(v.amount)}</span>
+                          </div>
+                        </div>
                       ))}
-                    </ul>
+                    </div>
                   </div>
-                ) : null}
-                {predictions?.accuracyTelemetry ? (
-                  <div className="mt-3 text-xs text-muted-foreground">
-                    Backtest ({predictions.accuracyTelemetry.backtestDays}d) MAPE:
-                    {" "}
+                )}
+
+                {/* Approval aging (from cfoExtended) */}
+                {cfo?.pendingApprovalAging && cfo.pendingApprovalAging.count > 0 && (
+                  <div className="rounded-lg border p-3">
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Approval Aging</span>
+                    </div>
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="text-lg font-semibold tabular-nums">
+                        {cfo.pendingApprovalAging.avgDays != null ? `${cfo.pendingApprovalAging.avgDays.toFixed(1)}d` : "—"}
+                      </span>
+                      <span className="text-xs text-muted-foreground">avg wait</span>
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
+                      <div>{cfo.pendingApprovalAging.count} pending · {cfo.pendingApprovalAging.countOver7Days} overdue (&gt;7d)</div>
+                      {cfo.pendingApprovalAging.maxDays != null && (
+                        <div>Oldest: {cfo.pendingApprovalAging.maxDays}d</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Accuracy telemetry */}
+                {predictions?.accuracyTelemetry && (
+                  <div className="text-xs text-muted-foreground pt-1 border-t">
+                    Backtest ({predictions.accuracyTelemetry.backtestDays}d) MAPE:{" "}
                     {predictions.accuracyTelemetry.overallMape7d != null
                       ? `${predictions.accuracyTelemetry.overallMape7d}% overall`
-                      : "insufficient history"}
-                    {" "}
+                      : "insufficient history"}{" "}
                     ({predictions.accuracyTelemetry.method})
                   </div>
-                ) : null}
+                )}
               </CardContent>
             </Card>
           </div>

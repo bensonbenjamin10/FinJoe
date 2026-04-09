@@ -252,6 +252,22 @@
   }
 }
 
+/* Dashboard staggered reveal */
+@keyframes dash-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.dash-section {
+  animation: dash-fade-up 0.45s ease-out both;
+}
+
 /* Splash / brand loader */
 @keyframes splash-progress {
   0% {
