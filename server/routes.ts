@@ -3150,25 +3150,29 @@ export async function registerRoutes(app: Express) {
       const refresh = req.query.refresh === "true";
 
       if (!refresh) {
-        const [cached] = await db
-          .select()
-          .from(cfoInsightSnapshots)
-          .where(and(eq(cfoInsightSnapshots.tenantId, tid), eq(cfoInsightSnapshots.periodKey, periodKey)))
-          .orderBy(desc(cfoInsightSnapshots.createdAt))
-          .limit(1);
+        try {
+          const [cached] = await db
+            .select()
+            .from(cfoInsightSnapshots)
+            .where(and(eq(cfoInsightSnapshots.tenantId, tid), eq(cfoInsightSnapshots.periodKey, periodKey)))
+            .orderBy(desc(cfoInsightSnapshots.createdAt))
+            .limit(1);
 
-        if (cached) {
-          const ageMs = Date.now() - new Date(cached.createdAt).getTime();
-          const ageMinutes = Math.round(ageMs / 60_000);
-          const insightData = cached.insightJson as Record<string, unknown> | null;
-          return res.json({
-            insights: insightData?.narrative ?? null,
-            insight: insightData ?? null,
-            facts: cached.factsJson,
-            healthTests: cached.healthTestsJson ?? null,
-            snapshotAge: ageMinutes,
-            snapshotId: cached.id,
-          });
+          if (cached) {
+            const ageMs = Date.now() - new Date(cached.createdAt).getTime();
+            const ageMinutes = Math.round(ageMs / 60_000);
+            const insightData = cached.insightJson as Record<string, unknown> | null;
+            return res.json({
+              insights: insightData?.narrative ?? null,
+              insight: insightData ?? null,
+              facts: cached.factsJson,
+              healthTests: cached.healthTestsJson ?? null,
+              snapshotAge: ageMinutes,
+              snapshotId: cached.id,
+            });
+          }
+        } catch (cacheErr) {
+          logger.warn("Snapshot cache lookup failed, falling through to live generation", { err: String(cacheErr) });
         }
       }
 
@@ -3195,18 +3199,22 @@ export async function registerRoutes(app: Express) {
 
       const factsData = { cfoExtended: data.cfoExtended, mis: misSlice } as Record<string, unknown>;
 
-      await db.insert(cfoInsightSnapshots).values({
-        tenantId: tid,
-        periodKey,
-        periodStart: startDate,
-        periodEnd: endDate,
-        factsJson: factsData,
-        insightJson: structured
-          ? { narrative: structured.narrative, keyPoints: structured.keyPoints, risks: structured.risks, suggestedActions: structured.suggestedActions }
-          : undefined,
-        healthTestsJson: healthReport as unknown as Record<string, unknown>,
-        model: structured?.model ?? null,
-      });
+      try {
+        await db.insert(cfoInsightSnapshots).values({
+          tenantId: tid,
+          periodKey,
+          periodStart: startDate,
+          periodEnd: endDate,
+          factsJson: factsData,
+          insightJson: structured
+            ? { narrative: structured.narrative, keyPoints: structured.keyPoints, risks: structured.risks, suggestedActions: structured.suggestedActions }
+            : undefined,
+          healthTestsJson: healthReport as unknown as Record<string, unknown>,
+          model: structured?.model ?? null,
+        });
+      } catch (persistErr) {
+        logger.warn("Snapshot persist failed (non-fatal)", { err: String(persistErr) });
+      }
 
       res.json({
         insights: structured?.narrative ?? null,
@@ -3281,18 +3289,22 @@ export async function registerRoutes(app: Express) {
       const factsData = { cfoExtended: data.cfoExtended, mis: misSlice } as Record<string, unknown>;
       const periodKey = buildPeriodKey(startDate, endDate, costCenterId as string | undefined);
 
-      await db.insert(cfoInsightSnapshots).values({
-        tenantId: tid,
-        periodKey,
-        periodStart: startDate,
-        periodEnd: endDate,
-        factsJson: factsData,
-        insightJson: structured
-          ? { narrative: structured.narrative, keyPoints: structured.keyPoints, risks: structured.risks, suggestedActions: structured.suggestedActions }
-          : undefined,
-        healthTestsJson: healthReport as unknown as Record<string, unknown>,
-        model: structured?.model ?? null,
-      });
+      try {
+        await db.insert(cfoInsightSnapshots).values({
+          tenantId: tid,
+          periodKey,
+          periodStart: startDate,
+          periodEnd: endDate,
+          factsJson: factsData,
+          insightJson: structured
+            ? { narrative: structured.narrative, keyPoints: structured.keyPoints, risks: structured.risks, suggestedActions: structured.suggestedActions }
+            : undefined,
+          healthTestsJson: healthReport as unknown as Record<string, unknown>,
+          model: structured?.model ?? null,
+        });
+      } catch (persistErr) {
+        logger.warn("Stream snapshot persist failed (non-fatal)", { err: String(persistErr) });
+      }
 
       send({
         step: 5,
@@ -3337,24 +3349,28 @@ export async function registerRoutes(app: Express) {
 
       let factsPayload: CfoInsightPayload | null = null;
 
-      const [cached] = await db
-        .select()
-        .from(cfoInsightSnapshots)
-        .where(and(eq(cfoInsightSnapshots.tenantId, tid), eq(cfoInsightSnapshots.periodKey, periodKey)))
-        .orderBy(desc(cfoInsightSnapshots.createdAt))
-        .limit(1);
+      try {
+        const [cached] = await db
+          .select()
+          .from(cfoInsightSnapshots)
+          .where(and(eq(cfoInsightSnapshots.tenantId, tid), eq(cfoInsightSnapshots.periodKey, periodKey)))
+          .orderBy(desc(cfoInsightSnapshots.createdAt))
+          .limit(1);
 
-      if (cached) {
-        const facts = cached.factsJson as Record<string, unknown>;
-        factsPayload = {
-          period: { startDate, endDate },
-          kpis: (facts as any).kpis ?? { totalExpenses: 0, totalIncome: 0, netCashflow: 0, pendingApprovals: 0, pettyCashAtRisk: 0 },
-          comparison: (facts as any).comparison ?? { expenseTrendPct: 0, incomeTrendPct: 0, prevTotalExpenses: 0, prevTotalIncome: 0 },
-          topExpenseCategories: (facts as any).topExpenseCategories ?? [],
-          topCostCenters: (facts as any).topCostCenters ?? [],
-          cfoExtended: (facts as any).cfoExtended ?? { expenseCategoryHhi: 0, top3CategorySharePct: 0, top3CostCenterSharePct: 0, topVendors: [], pendingApprovalAging: { count: 0, avgDays: null, medianDays: null, countOver7Days: 0, maxDays: null } },
-          mis: (facts as any).mis ?? null,
-        } as CfoInsightPayload;
+        if (cached) {
+          const facts = cached.factsJson as Record<string, unknown>;
+          factsPayload = {
+            period: { startDate, endDate },
+            kpis: (facts as any).kpis ?? { totalExpenses: 0, totalIncome: 0, netCashflow: 0, pendingApprovals: 0, pettyCashAtRisk: 0 },
+            comparison: (facts as any).comparison ?? { expenseTrendPct: 0, incomeTrendPct: 0, prevTotalExpenses: 0, prevTotalIncome: 0 },
+            topExpenseCategories: (facts as any).topExpenseCategories ?? [],
+            topCostCenters: (facts as any).topCostCenters ?? [],
+            cfoExtended: (facts as any).cfoExtended ?? { expenseCategoryHhi: 0, top3CategorySharePct: 0, top3CostCenterSharePct: 0, topVendors: [], pendingApprovalAging: { count: 0, avgDays: null, medianDays: null, countOver7Days: 0, maxDays: null } },
+            mis: (facts as any).mis ?? null,
+          } as CfoInsightPayload;
+        }
+      } catch (cacheErr) {
+        logger.warn("Q&A snapshot lookup failed, will aggregate fresh", { err: String(cacheErr) });
       }
 
       if (!factsPayload) {
@@ -3422,22 +3438,42 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.query?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const [row] = await db
-        .select({
-          id: cfoInsightSnapshots.id,
-          periodStart: cfoInsightSnapshots.periodStart,
-          periodEnd: cfoInsightSnapshots.periodEnd,
-          factsJson: cfoInsightSnapshots.factsJson,
-          insightJson: cfoInsightSnapshots.insightJson,
-          healthTestsJson: cfoInsightSnapshots.healthTestsJson,
-          model: cfoInsightSnapshots.model,
-          createdAt: cfoInsightSnapshots.createdAt,
-        })
-        .from(cfoInsightSnapshots)
-        .where(eq(cfoInsightSnapshots.tenantId, tid))
-        .orderBy(desc(cfoInsightSnapshots.createdAt))
-        .limit(1);
-      res.json({ snapshot: row ?? null });
+      let row: Record<string, unknown> | null = null;
+      try {
+        const [result] = await db
+          .select({
+            id: cfoInsightSnapshots.id,
+            periodStart: cfoInsightSnapshots.periodStart,
+            periodEnd: cfoInsightSnapshots.periodEnd,
+            factsJson: cfoInsightSnapshots.factsJson,
+            insightJson: cfoInsightSnapshots.insightJson,
+            healthTestsJson: cfoInsightSnapshots.healthTestsJson,
+            model: cfoInsightSnapshots.model,
+            createdAt: cfoInsightSnapshots.createdAt,
+          })
+          .from(cfoInsightSnapshots)
+          .where(eq(cfoInsightSnapshots.tenantId, tid))
+          .orderBy(desc(cfoInsightSnapshots.createdAt))
+          .limit(1);
+        row = (result as Record<string, unknown>) ?? null;
+      } catch {
+        const [fallback] = await db
+          .select({
+            id: cfoInsightSnapshots.id,
+            periodStart: cfoInsightSnapshots.periodStart,
+            periodEnd: cfoInsightSnapshots.periodEnd,
+            factsJson: cfoInsightSnapshots.factsJson,
+            insightJson: cfoInsightSnapshots.insightJson,
+            model: cfoInsightSnapshots.model,
+            createdAt: cfoInsightSnapshots.createdAt,
+          })
+          .from(cfoInsightSnapshots)
+          .where(eq(cfoInsightSnapshots.tenantId, tid))
+          .orderBy(desc(cfoInsightSnapshots.createdAt))
+          .limit(1);
+        row = (fallback as Record<string, unknown>) ?? null;
+      }
+      res.json({ snapshot: row });
     } catch (e) {
       logger.error("CFO snapshot latest error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to fetch CFO snapshot" });
