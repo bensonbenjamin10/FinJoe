@@ -59,3 +59,68 @@ export type CfoStructuredInsightResult = {
   suggestedActions: string[];
   model: string;
 };
+
+// ── Financial Health Tests ──
+
+export type HealthTestScore = "pass" | "warn" | "fail";
+
+export type HealthTestResult = {
+  id: string;
+  name: string;
+  category: "liquidity" | "profitability" | "efficiency" | "concentration" | "governance" | "trend" | "cashflow" | "anomaly";
+  score: HealthTestScore;
+  value: number | null;
+  formattedValue: string;
+  benchmark: string;
+  interpretation: string;
+};
+
+export type FinancialHealthReport = {
+  overallScore: number;
+  grade: "A" | "B" | "C" | "D" | "F";
+  tests: HealthTestResult[];
+  summary?: string;
+  generatedAt: string;
+};
+
+// ── Ask FinJoe Q&A ──
+
+export type AnalyticsAnswer = {
+  answer: string;
+  dataPoints?: Array<{ label: string; value: number }>;
+  visualization?: "bar" | "pie" | "table" | null;
+  followUpSuggestions?: string[];
+};
+
+// ── SSE stream events ──
+
+export type InsightStreamStep = {
+  step: number;
+  totalSteps: number;
+  label: string;
+  status: "running" | "done" | "error";
+};
+
+export type InsightStreamResult = {
+  step: number;
+  totalSteps: number;
+  label: string;
+  status: "done";
+  data: {
+    insight: CfoStructuredInsightResult | null;
+    facts: Record<string, unknown>;
+    healthTests: FinancialHealthReport | null;
+    snapshotAge: number;
+  };
+};
+
+// ── Snapshot API response ──
+
+export type InsightsApiResponse = {
+  insights: string | null;
+  insight: CfoStructuredInsightResult | null;
+  facts: Record<string, unknown>;
+  healthTests?: FinancialHealthReport | null;
+  snapshotAge: number;
+  snapshotId?: string;
+};

@@ -57,6 +57,7 @@ import { getAnalytics, getPredictions } from "./analytics.js";
 import { generateCfoStructuredInsights } from "../lib/analytics-insights.js";
 import { buildCfoInsightPayload } from "./cfo-insight-builder.js";
 import { buildMisPeriodSlice } from "./mis-period-slice.js";
+import type { CfoInsightPayload } from "../lib/cfo-insight-types.js";
 import { getMISReport, getMISCellTransactions } from "./mis-report.js";
 import { registerPaymentRoutes } from "./payments-routes.js";
 import { registerInvoicingRoutes } from "./invoicing-routes.js";
@@ -3121,6 +3122,13 @@ export async function registerRoutes(app: Express) {
     }
   });
 
+  // ── Intelligence Platform: snapshot-first insights ──
+
+  function buildPeriodKey(startDate: string, endDate: string, costCenterId?: string): string {
+    const key = `${startDate}:${endDate}`;
+    return costCenterId ? `${key}:${costCenterId}` : key;
+  }
+
   app.get("/api/admin/analytics/insights", requireTenantStaff, async (req, res) => {
     try {
       const tenantId = getTenantId(req);
@@ -3137,6 +3145,33 @@ export async function registerRoutes(app: Express) {
         return res.status(400).json({ error: "startDate and endDate must be YYYY-MM-DD" });
       }
       if (startDate > endDate) return res.status(400).json({ error: "startDate must be before or equal to endDate" });
+
+      const periodKey = buildPeriodKey(startDate, endDate, costCenterId as string | undefined);
+      const refresh = req.query.refresh === "true";
+
+      if (!refresh) {
+        const [cached] = await db
+          .select()
+          .from(cfoInsightSnapshots)
+          .where(and(eq(cfoInsightSnapshots.tenantId, tid), eq(cfoInsightSnapshots.periodKey, periodKey)))
+          .orderBy(desc(cfoInsightSnapshots.createdAt))
+          .limit(1);
+
+        if (cached) {
+          const ageMs = Date.now() - new Date(cached.createdAt).getTime();
+          const ageMinutes = Math.round(ageMs / 60_000);
+          const insightData = cached.insightJson as Record<string, unknown> | null;
+          return res.json({
+            insights: insightData?.narrative ?? null,
+            insight: insightData ?? null,
+            facts: cached.factsJson,
+            healthTests: cached.healthTestsJson ?? null,
+            snapshotAge: ageMinutes,
+            snapshotId: cached.id,
+          });
+        }
+      }
+
       const filters = {
         tenantId: tid,
         startDate,
@@ -3147,17 +3182,238 @@ export async function registerRoutes(app: Express) {
       const data = await getAnalytics(filters);
       const misSlice = await buildMisPeriodSlice(tid, startDate, endDate);
       const payload = buildCfoInsightPayload(startDate, endDate, data, misSlice);
+
+      const { runFinancialHealthTests } = await import("./financial-health-tests.js");
+      const healthReport = runFinancialHealthTests(payload);
+
       const structured = await generateCfoStructuredInsights(payload);
+
+      const { generateHealthTestSummary } = await import("../lib/analytics-insights.js");
+      if (healthReport && !healthReport.summary) {
+        healthReport.summary = (await generateHealthTestSummary(healthReport, payload)) ?? undefined;
+      }
+
+      const factsData = { cfoExtended: data.cfoExtended, mis: misSlice } as Record<string, unknown>;
+
+      await db.insert(cfoInsightSnapshots).values({
+        tenantId: tid,
+        periodKey,
+        periodStart: startDate,
+        periodEnd: endDate,
+        factsJson: factsData,
+        insightJson: structured
+          ? { narrative: structured.narrative, keyPoints: structured.keyPoints, risks: structured.risks, suggestedActions: structured.suggestedActions }
+          : undefined,
+        healthTestsJson: healthReport as unknown as Record<string, unknown>,
+        model: structured?.model ?? null,
+      });
+
       res.json({
         insights: structured?.narrative ?? null,
         insight: structured,
-        facts: { cfoExtended: data.cfoExtended, mis: misSlice },
+        facts: factsData,
+        healthTests: healthReport,
+        snapshotAge: 0,
       });
     } catch (e) {
       logger.error("Analytics insights error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Failed to generate insights" });
     }
   });
+
+  // ── SSE streaming insights refresh ──
+
+  app.get("/api/admin/analytics/insights/stream", requireTenantStaff, async (req, res) => {
+    const tenantId = getTenantId(req);
+    const user = req.user as Express.User;
+    if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+    const tid = tenantId ?? req.query?.tenantId;
+    if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+    const { startDate, endDate, costCenterId, granularity } = req.query;
+    if (!startDate || !endDate || typeof startDate !== "string" || typeof endDate !== "string") {
+      return res.status(400).json({ error: "startDate and endDate required" });
+    }
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
+      return res.status(400).json({ error: "Invalid date format" });
+    }
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+
+    const send = (data: Record<string, unknown>) => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const totalSteps = 5;
+
+    try {
+      send({ step: 1, totalSteps, label: "Aggregating financial data...", status: "running" });
+      const filters = {
+        tenantId: tid,
+        startDate,
+        endDate,
+        costCenterId: (costCenterId as string) ?? undefined,
+        granularity: (granularity as "day" | "week" | "month") ?? "day",
+      };
+      const data = await getAnalytics(filters);
+
+      send({ step: 2, totalSteps, label: "Building MIS period slice...", status: "running" });
+      const misSlice = await buildMisPeriodSlice(tid, startDate, endDate);
+      const payload = buildCfoInsightPayload(startDate, endDate, data, misSlice);
+
+      send({ step: 3, totalSteps, label: "Running financial health tests...", status: "running" });
+      const { runFinancialHealthTests } = await import("./financial-health-tests.js");
+      const healthReport = runFinancialHealthTests(payload);
+
+      send({ step: 4, totalSteps, label: "Generating intelligence brief...", status: "running" });
+      const structured = await generateCfoStructuredInsights(payload);
+
+      const { generateHealthTestSummary } = await import("../lib/analytics-insights.js");
+      if (healthReport && !healthReport.summary) {
+        healthReport.summary = (await generateHealthTestSummary(healthReport, payload)) ?? undefined;
+      }
+
+      const factsData = { cfoExtended: data.cfoExtended, mis: misSlice } as Record<string, unknown>;
+      const periodKey = buildPeriodKey(startDate, endDate, costCenterId as string | undefined);
+
+      await db.insert(cfoInsightSnapshots).values({
+        tenantId: tid,
+        periodKey,
+        periodStart: startDate,
+        periodEnd: endDate,
+        factsJson: factsData,
+        insightJson: structured
+          ? { narrative: structured.narrative, keyPoints: structured.keyPoints, risks: structured.risks, suggestedActions: structured.suggestedActions }
+          : undefined,
+        healthTestsJson: healthReport as unknown as Record<string, unknown>,
+        model: structured?.model ?? null,
+      });
+
+      send({
+        step: 5,
+        totalSteps,
+        label: "Analysis complete",
+        status: "done",
+        data: {
+          insights: structured?.narrative ?? null,
+          insight: structured,
+          facts: factsData,
+          healthTests: healthReport,
+          snapshotAge: 0,
+        },
+      });
+    } catch (e) {
+      logger.error("Insight stream error", { requestId: req.requestId, err: String(e) });
+      send({ step: -1, totalSteps, label: "Analysis failed", status: "error", error: "Failed to generate insights" });
+    }
+
+    res.end();
+  });
+
+  // ── Ask FinJoe Q&A endpoint ──
+
+  app.post("/api/admin/analytics/ask", requireTenantStaff, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.body?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+
+      const { question, context } = req.body ?? {};
+      if (!question || typeof question !== "string" || question.trim().length === 0) {
+        return res.status(400).json({ error: "question is required" });
+      }
+
+      const startDate = context?.startDate ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+      const endDate = context?.endDate ?? new Date().toISOString().slice(0, 10);
+      const costCenterId = context?.costCenterId;
+      const periodKey = buildPeriodKey(startDate, endDate, costCenterId);
+
+      let factsPayload: CfoInsightPayload | null = null;
+
+      const [cached] = await db
+        .select()
+        .from(cfoInsightSnapshots)
+        .where(and(eq(cfoInsightSnapshots.tenantId, tid), eq(cfoInsightSnapshots.periodKey, periodKey)))
+        .orderBy(desc(cfoInsightSnapshots.createdAt))
+        .limit(1);
+
+      if (cached) {
+        const facts = cached.factsJson as Record<string, unknown>;
+        factsPayload = {
+          period: { startDate, endDate },
+          kpis: (facts as any).kpis ?? { totalExpenses: 0, totalIncome: 0, netCashflow: 0, pendingApprovals: 0, pettyCashAtRisk: 0 },
+          comparison: (facts as any).comparison ?? { expenseTrendPct: 0, incomeTrendPct: 0, prevTotalExpenses: 0, prevTotalIncome: 0 },
+          topExpenseCategories: (facts as any).topExpenseCategories ?? [],
+          topCostCenters: (facts as any).topCostCenters ?? [],
+          cfoExtended: (facts as any).cfoExtended ?? { expenseCategoryHhi: 0, top3CategorySharePct: 0, top3CostCenterSharePct: 0, topVendors: [], pendingApprovalAging: { count: 0, avgDays: null, medianDays: null, countOver7Days: 0, maxDays: null } },
+          mis: (facts as any).mis ?? null,
+        } as CfoInsightPayload;
+      }
+
+      if (!factsPayload) {
+        const filters = {
+          tenantId: tid,
+          startDate,
+          endDate,
+          costCenterId,
+          granularity: "day" as const,
+        };
+        const data = await getAnalytics(filters);
+        const misSlice = await buildMisPeriodSlice(tid, startDate, endDate);
+        factsPayload = buildCfoInsightPayload(startDate, endDate, data, misSlice);
+      }
+
+      const { generateAnalyticsAnswer } = await import("../lib/analytics-insights.js");
+      const answer = await generateAnalyticsAnswer(question.trim(), factsPayload);
+
+      if (!answer) {
+        return res.json({ answer: "I wasn't able to generate an answer right now. Please try again or rephrase your question.", dataPoints: [], visualization: null, followUpSuggestions: [] });
+      }
+      res.json(answer);
+    } catch (e) {
+      logger.error("Ask FinJoe error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to process question" });
+    }
+  });
+
+  // ── Financial health check endpoint ──
+
+  app.get("/api/admin/analytics/health-check", requireTenantStaff, async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const user = req.user as Express.User;
+      if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
+      const tid = tenantId ?? req.query?.tenantId;
+      if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
+      const startDate = (req.query.startDate as string) ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+      const endDate = (req.query.endDate as string) ?? new Date().toISOString().slice(0, 10);
+
+      const filters = { tenantId: tid, startDate, endDate, granularity: "day" as const };
+      const data = await getAnalytics(filters);
+      const misSlice = await buildMisPeriodSlice(tid, startDate, endDate);
+      const payload = buildCfoInsightPayload(startDate, endDate, data, misSlice);
+
+      const { runFinancialHealthTests } = await import("./financial-health-tests.js");
+      const healthReport = runFinancialHealthTests(payload);
+
+      const { generateHealthTestSummary } = await import("../lib/analytics-insights.js");
+      healthReport.summary = (await generateHealthTestSummary(healthReport, payload)) ?? undefined;
+
+      res.json(healthReport);
+    } catch (e) {
+      logger.error("Health check error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to run health check" });
+    }
+  });
+
+  // ── Legacy CFO snapshot latest (kept for backward compat) ──
 
   app.get("/api/admin/analytics/cfo-snapshot/latest", requireTenantStaff, async (req, res) => {
     try {
@@ -3173,6 +3429,7 @@ export async function registerRoutes(app: Express) {
           periodEnd: cfoInsightSnapshots.periodEnd,
           factsJson: cfoInsightSnapshots.factsJson,
           insightJson: cfoInsightSnapshots.insightJson,
+          healthTestsJson: cfoInsightSnapshots.healthTestsJson,
           model: cfoInsightSnapshots.model,
           createdAt: cfoInsightSnapshots.createdAt,
         })

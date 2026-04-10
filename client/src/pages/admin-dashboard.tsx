@@ -34,10 +34,10 @@ import {
   ClipboardCheck,
   Loader2,
   AlertTriangle,
-  Sparkles,
   Building2,
   ChevronRight,
 } from "lucide-react";
+import { IntelligenceBrief } from "@/components/intelligence/IntelligenceBrief";
 import { format, isValid, subDays } from "date-fns";
 import { useAuth } from "@/hooks/use-auth";
 import { useCostCenterLabel } from "@/hooks/use-cost-center-label";
@@ -121,18 +121,6 @@ type AnalyticsData = {
       maxDays: number | null;
     };
   };
-};
-
-type CfoInsightsApiResponse = {
-  insights: string | null;
-  insight?: {
-    narrative: string;
-    keyPoints: string[];
-    risks: string[];
-    suggestedActions: string[];
-    model: string;
-  } | null;
-  facts?: unknown;
 };
 
 type PredictionsData = {
@@ -310,16 +298,6 @@ export default function AdminDashboard() {
       const params = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : "";
       const res = await fetch(`/api/admin/my-approvals${params}`, { credentials: "include" });
       if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: !!tenantId,
-  });
-
-  const { data: insights, isLoading: insightsLoading } = useQuery<CfoInsightsApiResponse>({
-    queryKey: ["/api/admin/analytics/insights", analyticsParams.toString()],
-    queryFn: async () => {
-      const res = await fetch(`/api/admin/analytics/insights?${analyticsParams.toString()}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
     enabled: !!tenantId,
@@ -636,75 +614,16 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {/* ── S3 · FinJoe Intelligence Brief ───────────────────── */}
-          {(insightsLoading || insights) && (
-            <Card className="dash-section border-primary/20 bg-gradient-to-br from-primary/[0.03] to-transparent" style={{ animationDelay: "300ms" }}>
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <div className="flex items-center justify-center h-7 w-7 rounded-lg bg-primary/10">
-                    <Sparkles className="h-4 w-4 text-primary" />
-                  </div>
-                  FinJoe Intelligence Brief
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {insightsLoading ? (
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    <span className="text-sm">Analyzing your financial data...</span>
-                  </div>
-                ) : insights?.insight?.narrative || insights?.insights ? (
-                  <>
-                    <p className="text-sm leading-relaxed">
-                      {insights.insight?.narrative ?? insights.insights}
-                    </p>
-                    {insights.insight?.keyPoints && insights.insight.keyPoints.length > 0 && (
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Key Highlights</p>
-                        <ul className="text-sm list-disc pl-5 space-y-1">
-                          {insights.insight.keyPoints.map((k, i) => (
-                            <li key={i}>{k}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      {insights.insight?.risks && insights.insight.risks.length > 0 && (
-                        <div className="rounded-lg border border-amber-200/50 dark:border-amber-800/50 bg-amber-50/50 dark:bg-amber-950/20 p-3">
-                          <p className="text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400 mb-2">Risks</p>
-                          <ul className="text-sm space-y-1.5">
-                            {insights.insight.risks.map((k, i) => (
-                              <li key={i} className="flex items-start gap-1.5">
-                                <span className="text-amber-500 mt-0.5 shrink-0">•</span>
-                                <span>{k}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                      {insights.insight?.suggestedActions && insights.insight.suggestedActions.length > 0 && (
-                        <div className="rounded-lg border border-emerald-200/50 dark:border-emerald-800/50 bg-emerald-50/50 dark:bg-emerald-950/20 p-3">
-                          <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400 mb-2">Suggested Actions</p>
-                          <ul className="text-sm space-y-1.5">
-                            {insights.insight.suggestedActions.map((k, i) => (
-                              <li key={i} className="flex items-start gap-1.5">
-                                <span className="text-emerald-500 mt-0.5 shrink-0">•</span>
-                                <span>{k}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-                  </>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    Observations aren&apos;t available right now. If this persists, ask your administrator to confirm
-                    FinJoe analysis is enabled for your organization.
-                  </p>
-                )}
-              </CardContent>
-            </Card>
+          {/* ── S3 · FinJoe Intelligence Platform ───────────────────── */}
+          {tenantId && (
+            <IntelligenceBrief
+              tenantId={tenantId}
+              startDate={startStr}
+              endDate={endStr}
+              costCenterId={costCenterFilter !== "all" ? costCenterFilter : undefined}
+              granularity={granularity}
+              className="dash-section"
+            />
           )}
 
           {/* ── S4 · Cash Flow Trend (full width) ────────────────── */}

@@ -45,6 +45,7 @@ import { FYSelector, getCurrentFY, isCurrentFY, getCurrentFYMonthIndex, getFYRan
 import { StatSparkCard } from "@/components/mis/stat-spark-card";
 import { MISTable, type MISRow } from "@/components/mis/mis-table";
 import { CellDrilldown } from "@/components/mis/cell-drilldown";
+import { IntelligenceBrief } from "@/components/intelligence/IntelligenceBrief";
 
 // ── Types matching backend (dynamic) ──
 
@@ -300,6 +301,22 @@ export default function AdminReports() {
           </Button>
         </div>
       </div>
+
+      {/* Intelligence Brief for FY period */}
+      {tenantId && view === "overview" && (() => {
+        const fyYear = parseInt(fy.slice(0, 4), 10);
+        const fyMonth = parseInt(fy.slice(5, 7), 10) || 4;
+        const fyStart = `${fyYear}-${String(fyMonth).padStart(2, "0")}-01`;
+        const fyEndDate = showYtd ? todayISO : `${fyYear + 1}-${String(fyMonth - 1 || 12).padStart(2, "0")}-${fyMonth === 1 ? "31" : fyMonth <= 4 ? "31" : "30"}`;
+        return (
+          <IntelligenceBrief
+            tenantId={tenantId}
+            startDate={fyStart}
+            endDate={fyEndDate}
+            granularity="month"
+          />
+        );
+      })()}
 
       {isLoading ? <LoadingSkeleton /> : report ? (
         <>

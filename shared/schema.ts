@@ -639,16 +639,18 @@ export const cronRuns = pgTable("cron_runs", {
   errorMessage: text("error_message"),
 });
 
-/** Persisted CFO insight runs (weekly cron) for dashboard history / digests */
+/** Persisted CFO insight runs (weekly cron + on-demand refresh) for dashboard history / digests */
 export const cfoInsightSnapshots = pgTable("cfo_insight_snapshots", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id")
     .notNull()
     .references(() => tenants.id, { onDelete: "cascade" }),
+  periodKey: varchar("period_key", { length: 64 }),
   periodStart: varchar("period_start", { length: 10 }).notNull(),
   periodEnd: varchar("period_end", { length: 10 }).notNull(),
   factsJson: jsonb("facts_json").$type<Record<string, unknown>>().notNull(),
   insightJson: jsonb("insight_json").$type<Record<string, unknown>>(),
+  healthTestsJson: jsonb("health_tests_json").$type<Record<string, unknown>>(),
   model: text("model"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

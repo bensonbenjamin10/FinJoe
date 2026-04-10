@@ -5,7 +5,7 @@
  */
 
 import { GoogleGenAI } from "@google/genai";
-import type { CfoInsightPayload, CfoStructuredInsightResult } from "./cfo-insight-types.js";
+import type { CfoInsightPayload, CfoStructuredInsightResult, AnalyticsAnswer, FinancialHealthReport } from "./cfo-insight-types.js";
 
 export type AnalyticsSummary = {
   totalExpenses: number;
@@ -323,6 +323,127 @@ ${payloadJson}`;
       ...parsed,
       model,
     };
+  } catch {
+    return null;
+  }
+}
+
+// ── Ask FinJoe Q&A ──
+
+const QA_RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    answer: {
+      type: "string",
+      description: "Clear, jargon-free answer in 2-5 sentences. Use ₹ (Indian) for amounts.",
+    },
+    dataPoints: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          label: { type: "string" },
+          value: { type: "number" },
+        },
+        required: ["label", "value"],
+      },
+      description: "Relevant data points for optional visualization (max 10).",
+    },
+    visualization: {
+      type: "string",
+      enum: ["bar", "pie", "table"],
+      description: "Suggested chart type if data points are provided. Omit if not relevant.",
+    },
+    followUpSuggestions: {
+      type: "array",
+      items: { type: "string" },
+      description: "2-3 follow-up questions the user might want to ask.",
+    },
+  },
+  required: ["answer"],
+} as const;
+
+export async function generateAnalyticsAnswer(
+  question: string,
+  facts: CfoInsightPayload,
+): Promise<AnalyticsAnswer | null> {
+  const gemini = getGemini();
+  if (!gemini) return null;
+
+  const model = getGeminiAnalysisModel();
+  const factsJson = JSON.stringify(facts);
+  if (factsJson.length > MAX_PREDICTION_CONTEXT_CHARS) return null;
+
+  const prompt = `You are a senior FP&A advisor for an Indian organization. Answer the user's question using ONLY the financial facts in the JSON below.
+
+Rules:
+- Use Indian Rupee (₹) formatting; numbers must match the JSON.
+- Do not invent figures, vendors, or dates not present in the data.
+- If the question cannot be answered from the data, say so clearly and suggest what data is needed.
+- Keep language simple — the reader may not be a finance expert.
+- If the question involves a breakdown (by category, cost center, vendor), provide dataPoints for charting.
+- Suggest 2-3 follow-up questions that would be natural next steps.
+
+USER_QUESTION:
+${question}
+
+FINANCIAL_FACTS_JSON:
+${factsJson}`;
+
+  try {
+    const response = await gemini.models.generateContent({
+      model,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseJsonSchema: QA_RESPONSE_SCHEMA as any,
+      },
+    });
+
+    const text = (response as { text?: string }).text ?? "";
+    if (!text.trim()) return null;
+    const parsed = JSON.parse(text) as AnalyticsAnswer;
+    return {
+      answer: String(parsed.answer ?? "").trim(),
+      dataPoints: Array.isArray(parsed.dataPoints) ? parsed.dataPoints : undefined,
+      visualization: parsed.visualization ?? null,
+      followUpSuggestions: Array.isArray(parsed.followUpSuggestions) ? parsed.followUpSuggestions : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ── Health Test Summary (Gemini interpretation) ──
+
+export async function generateHealthTestSummary(
+  report: FinancialHealthReport,
+  facts: CfoInsightPayload,
+): Promise<string | null> {
+  const gemini = getGemini();
+  if (!gemini) return null;
+
+  const model = getGeminiAnalysisModel();
+  const failTests = report.tests.filter((t) => t.score === "fail");
+  const warnTests = report.tests.filter((t) => t.score === "warn");
+
+  const prompt = `You are a financial health advisor explaining test results to a non-finance business leader.
+
+Overall score: ${report.overallScore}/100 (Grade: ${report.grade})
+Tests passed: ${report.tests.filter((t) => t.score === "pass").length}
+Tests warning: ${warnTests.length}${warnTests.length > 0 ? ` (${warnTests.map((t) => t.name).join(", ")})` : ""}
+Tests failed: ${failTests.length}${failTests.length > 0 ? ` (${failTests.map((t) => t.name).join(", ")})` : ""}
+
+Period: ${facts.period.startDate} to ${facts.period.endDate}
+Total Expenses: ₹${facts.kpis.totalExpenses.toLocaleString("en-IN")}
+Total Income: ₹${facts.kpis.totalIncome.toLocaleString("en-IN")}
+
+Write a 2-3 sentence summary explaining what this health score means for the business in plain language. Focus on the most critical issues (if any) and one positive highlight.`;
+
+  try {
+    const response = await gemini.models.generateContent({ model, contents: prompt });
+    const text = (response as { text?: string }).text ?? "";
+    return text.trim() || null;
   } catch {
     return null;
   }

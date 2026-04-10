@@ -1,5 +1,5 @@
 /**
- * Weekly CFO insight snapshots — persist facts + structured Gemini output per tenant.
+ * Weekly CFO insight snapshots — persist facts + structured Gemini output + health tests per tenant.
  * Invoked from GET /cron/cfo-insight-snapshots?secret=CRON_SECRET
  */
 
@@ -9,7 +9,8 @@ import { tenants, cfoInsightSnapshots } from "../shared/schema.js";
 import { getAnalytics } from "./analytics.js";
 import { buildMisPeriodSlice } from "./mis-period-slice.js";
 import { buildCfoInsightPayload } from "./cfo-insight-builder.js";
-import { generateCfoStructuredInsights } from "../lib/analytics-insights.js";
+import { generateCfoStructuredInsights, generateHealthTestSummary } from "../lib/analytics-insights.js";
+import { runFinancialHealthTests } from "./financial-health-tests.js";
 import { logger } from "./logger.js";
 
 export async function runCfoInsightSnapshots(): Promise<{
@@ -21,6 +22,7 @@ export async function runCfoInsightSnapshots(): Promise<{
   startDate.setDate(startDate.getDate() - 7);
   const startStr = startDate.toISOString().slice(0, 10);
   const endStr = endDate.toISOString().slice(0, 10);
+  const periodKey = `${startStr}:${endStr}`;
 
   const activeTenants = await db.select({ id: tenants.id }).from(tenants).where(eq(tenants.isActive, true));
 
@@ -37,9 +39,14 @@ export async function runCfoInsightSnapshots(): Promise<{
       const misSlice = await buildMisPeriodSlice(t.id, startStr, endStr);
       const payload = buildCfoInsightPayload(startStr, endStr, data, misSlice);
       const structured = await generateCfoStructuredInsights(payload);
+      const healthReport = runFinancialHealthTests(payload);
+      if (healthReport && !healthReport.summary) {
+        healthReport.summary = (await generateHealthTestSummary(healthReport, payload)) ?? undefined;
+      }
 
       await db.insert(cfoInsightSnapshots).values({
         tenantId: t.id,
+        periodKey,
         periodStart: startStr,
         periodEnd: endStr,
         factsJson: { cfoExtended: data.cfoExtended, mis: misSlice } as Record<string, unknown>,
@@ -51,6 +58,7 @@ export async function runCfoInsightSnapshots(): Promise<{
               suggestedActions: structured.suggestedActions,
             }
           : undefined,
+        healthTestsJson: healthReport as unknown as Record<string, unknown>,
         model: structured?.model ?? null,
       });
       snapshotsWritten++;
