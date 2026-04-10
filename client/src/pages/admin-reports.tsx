@@ -247,7 +247,7 @@ export default function AdminReports() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="dash-section flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           {view !== "overview" && (
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleViewChange("overview")}>
@@ -255,7 +255,7 @@ export default function AdminReports() {
             </Button>
           )}
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">
+            <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
               {view === "overview" ? "Reports & MIS" : view === "cashflow" ? "Cashflow Statement" : view === "pnl" ? "Profit & Loss" : view === "revenue" ? "Revenue Analysis" : "Expense Analysis"}
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">

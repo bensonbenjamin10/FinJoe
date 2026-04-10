@@ -47,8 +47,8 @@ export const KB_ARTICLES: KbArticle[] = [
     summary: "High-level cash, activity, and shortcuts—your first stop after sign-in.",
     steps: [
       {
-        body: "Open Dashboard from the sidebar. You’ll see summaries and entry points to expenses, income, and insights for your tenant.",
-        mockScreen: { variant: "dashboard", highlight: "main", caption: "KPI cards and lists summarize recent activity." },
+        body: "Open Dashboard from the sidebar. You’ll see a financial scoreboard, AI-powered insights, cash-flow trends, and expense breakdowns for your tenant.",
+        mockScreen: { variant: "dashboard", highlight: "main", caption: "KPI scoreboard, FinJoe Intelligence Brief, and trend charts give you a real-time financial overview." },
       },
       {
         body: "Use the sidebar to jump to Reports, FinJoe, or transaction areas without losing your place—Help stays at the bottom for guides.",
