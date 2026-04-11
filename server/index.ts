@@ -191,14 +191,6 @@ app.get("/cron/backup", async (req, res) => {
   }
 });
 
-// Ensure intelligence platform columns exist (bypasses Drizzle migrator hash issues)
-try {
-  await pool.query(`ALTER TABLE "cfo_insight_snapshots" ADD COLUMN IF NOT EXISTS "period_key" varchar(64)`);
-  await pool.query(`ALTER TABLE "cfo_insight_snapshots" ADD COLUMN IF NOT EXISTS "health_tests_json" jsonb`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS "cfo_insight_snapshots_tenant_period_key_idx" ON "cfo_insight_snapshots" ("tenant_id", "period_key", "created_at" DESC)`);
-} catch (e) {
-  logger.error("Intelligence platform column migration failed (non-fatal)", { err: String(e) });
-}
 
 app.use(express.json({ limit: "25mb" }));
 app.use(express.urlencoded({ extended: false }));
