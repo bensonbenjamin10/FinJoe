@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Sparkles, RefreshCw, Clock, AlertTriangle, ChevronDown, ChevronRight, Shield } from "lucide-react";
+import { Sparkles, RefreshCw, Clock, ChevronDown, ChevronRight, Shield, Check, AlertTriangle, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AnalysisProgress } from "./AnalysisProgress";
 import { AskFinJoe } from "./AskFinJoe";
@@ -266,62 +266,122 @@ export function IntelligenceBrief({
       </Card>
 
       {/* Financial Health Check Card */}
-      {healthTests && (
-        <Card className="dash-section border-border/60">
-          <CardHeader className="pb-3">
+      {healthTests && (() => {
+        const passCount = healthTests.tests.filter((t) => t.score === "pass").length;
+        const warnCount = healthTests.tests.filter((t) => t.score === "warn").length;
+        const failCount = healthTests.tests.filter((t) => t.score === "fail").length;
+        const scoreColor = healthTests.overallScore >= 70
+          ? "text-emerald-600 dark:text-emerald-400"
+          : healthTests.overallScore >= 40
+            ? "text-amber-600 dark:text-amber-400"
+            : "text-red-600 dark:text-red-400";
+        const scoreBg = healthTests.overallScore >= 70
+          ? "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200/60 dark:border-emerald-800/40"
+          : healthTests.overallScore >= 40
+            ? "bg-amber-50 dark:bg-amber-950/30 border-amber-200/60 dark:border-amber-800/40"
+            : "bg-red-50 dark:bg-red-950/30 border-red-200/60 dark:border-red-800/40";
+
+        return (
+          <Card className="dash-section border-border/60">
+            {/* ── Collapsed header ── */}
             <button
               onClick={() => setShowHealth(!showHealth)}
-              className="flex items-center justify-between w-full text-left"
+              className="w-full text-left"
             >
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <div className="flex items-center justify-center h-7 w-7 rounded-lg bg-primary/10">
-                  <Shield className="h-4 w-4 text-primary" />
+              <div className="flex items-center justify-between px-5 pt-4 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center justify-center h-7 w-7 rounded-lg bg-primary/10">
+                    <Shield className="h-4 w-4 text-primary" />
+                  </div>
+                  <span className="text-base font-semibold">Financial Health Check</span>
                 </div>
-                Financial Health Check
-              </CardTitle>
-              <div className="flex items-center gap-3">
-                <HealthScoreGauge
-                  score={healthTests.overallScore}
-                  grade={healthTests.grade}
-                  size={48}
-                  className="[&>div:last-child]:hidden"
-                />
-                {showHealth ? (
-                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                ) : (
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                )}
+
+                <div className="flex items-center gap-3">
+                  {/* Score pill */}
+                  <div className={cn("flex items-center gap-2 px-3 py-1 rounded-full border text-sm font-semibold", scoreBg, scoreColor)}>
+                    <span className="tabular-nums text-base font-bold">{healthTests.overallScore}</span>
+                    <span className="text-xs opacity-60 font-normal">/ 100</span>
+                    <span className="text-xs font-medium">· Grade {healthTests.grade}</span>
+                  </div>
+
+                  {/* Pass/warn/fail counts */}
+                  <div className="hidden sm:flex items-center gap-2.5 text-xs">
+                    <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
+                      <Check className="h-3 w-3" /> {passCount}
+                    </span>
+                    {warnCount > 0 && (
+                      <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400 font-medium">
+                        <AlertTriangle className="h-3 w-3" /> {warnCount}
+                      </span>
+                    )}
+                    {failCount > 0 && (
+                      <span className="flex items-center gap-1 text-red-600 dark:text-red-400 font-medium">
+                        <XCircle className="h-3 w-3" /> {failCount}
+                      </span>
+                    )}
+                  </div>
+
+                  {showHealth ? (
+                    <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                  )}
+                </div>
               </div>
+
+              {/* Summary bar always visible */}
+              {!showHealth && (
+                <div className="px-5 pb-3">
+                  <div className="flex gap-0.5 h-1.5 w-full rounded-full overflow-hidden">
+                    {passCount > 0 && <div className="bg-emerald-500 transition-all" style={{ width: `${(passCount / healthTests.tests.length) * 100}%` }} />}
+                    {warnCount > 0 && <div className="bg-amber-500 transition-all" style={{ width: `${(warnCount / healthTests.tests.length) * 100}%` }} />}
+                    {failCount > 0 && <div className="bg-red-500 transition-all" style={{ width: `${(failCount / healthTests.tests.length) * 100}%` }} />}
+                  </div>
+                  {healthTests.summary && (
+                    <p className="text-sm text-muted-foreground leading-relaxed mt-2.5">{healthTests.summary}</p>
+                  )}
+                </div>
+              )}
             </button>
-          </CardHeader>
-          {showHealth && (
-            <CardContent className="pt-0 space-y-4">
-              <div className="flex flex-col sm:flex-row gap-6 items-start">
-                <HealthScoreGauge
-                  score={healthTests.overallScore}
-                  grade={healthTests.grade}
-                  size={120}
-                />
-                <div className="flex-1">
-                  <HealthTestResults
-                    tests={healthTests.tests}
-                    summary={healthTests.summary}
+
+            {/* ── Expanded content ── */}
+            {showHealth && (
+              <div className="px-5 pb-5 space-y-5 animate-in slide-in-from-top-1 duration-200">
+                {/* Large speedometer gauge centered */}
+                <div className="flex justify-center">
+                  <HealthScoreGauge
+                    score={healthTests.overallScore}
+                    grade={healthTests.grade}
+                    size={280}
                   />
                 </div>
+
+                {/* 3-column stat row */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="rounded-xl border border-emerald-200/50 dark:border-emerald-800/40 bg-emerald-50/60 dark:bg-emerald-950/20 p-3 text-center">
+                    <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">{passCount}</p>
+                    <p className="text-xs font-medium text-emerald-700 dark:text-emerald-500 mt-0.5">Passed</p>
+                  </div>
+                  <div className="rounded-xl border border-amber-200/50 dark:border-amber-800/40 bg-amber-50/60 dark:bg-amber-950/20 p-3 text-center">
+                    <p className="text-2xl font-bold text-amber-600 dark:text-amber-400 tabular-nums">{warnCount}</p>
+                    <p className="text-xs font-medium text-amber-700 dark:text-amber-500 mt-0.5">Warnings</p>
+                  </div>
+                  <div className="rounded-xl border border-red-200/50 dark:border-red-800/40 bg-red-50/60 dark:bg-red-950/20 p-3 text-center">
+                    <p className="text-2xl font-bold text-red-600 dark:text-red-400 tabular-nums">{failCount}</p>
+                    <p className="text-xs font-medium text-red-700 dark:text-red-500 mt-0.5">Failed</p>
+                  </div>
+                </div>
+
+                {/* Detailed test results */}
+                <HealthTestResults
+                  tests={healthTests.tests}
+                  summary={healthTests.summary}
+                />
               </div>
-            </CardContent>
-          )}
-          {!showHealth && healthTests.summary && (
-            <CardContent className="pt-0">
-              <HealthTestResults
-                tests={healthTests.tests}
-                summary={healthTests.summary}
-                compact
-              />
-            </CardContent>
-          )}
-        </Card>
-      )}
+            )}
+          </Card>
+        );
+      })()}
     </div>
   );
 }
