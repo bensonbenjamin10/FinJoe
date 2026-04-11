@@ -200,14 +200,24 @@ function signDashboardToken(tenantId: string, exp: number): string {
 }
 
 function verifyDashboardToken(token: string): { tenantId: string } | null {
-  const parts = token.split(":");
-  if (parts.length !== 3) return null;
-  const [tenantId, expStr, sig] = parts;
+  // Token: "<tenantId>:<exp>:<sig>" — split from the right so tenantId can contain any chars except ":"
+  const lastColon = token.lastIndexOf(":");
+  if (lastColon === -1) return null;
+  const sig = token.slice(lastColon + 1);
+  const rest = token.slice(0, lastColon);
+  const midColon = rest.lastIndexOf(":");
+  if (midColon === -1) return null;
+  const tenantId = rest.slice(0, midColon);
+  const expStr = rest.slice(midColon + 1);
   const exp = parseInt(expStr, 10);
-  if (isNaN(exp) || Date.now() > exp) return null;
+  if (!tenantId || isNaN(exp) || Date.now() > exp) return null;
   const payload = `${tenantId}:${exp}`;
   const expected = crypto.createHmac("sha256", getDashboardSecret()).update(payload).digest("hex");
-  if (!crypto.timingSafeEqual(Buffer.from(sig, "hex"), Buffer.from(expected, "hex"))) return null;
+  try {
+    if (!crypto.timingSafeEqual(Buffer.from(sig, "hex"), Buffer.from(expected, "hex"))) return null;
+  } catch {
+    return null;
+  }
   return { tenantId };
 }
 

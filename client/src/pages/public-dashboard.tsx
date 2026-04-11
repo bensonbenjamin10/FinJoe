@@ -226,6 +226,7 @@ export default function PublicDashboard() {
       const res = await fetch("/api/public/dashboard/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ slug, pin }),
       });
       if (!res.ok) {
@@ -248,7 +249,9 @@ export default function PublicDashboard() {
   const checkQuery = useQuery({
     queryKey: ["dashboard-check", slug],
     queryFn: async () => {
-      const res = await fetch(`/api/public/dashboard/${slug}/check`);
+      const res = await fetch(`/api/public/dashboard/${slug}/check`, {
+        credentials: "include",
+      });
       if (res.status === 401) return { valid: false };
       if (!res.ok) return { valid: false };
       return res.json() as Promise<{ valid: boolean; tenantName?: string }>;
@@ -271,7 +274,9 @@ export default function PublicDashboard() {
   const dataQuery = useQuery<DashboardData>({
     queryKey: ["dashboard-data", slug],
     queryFn: async () => {
-      const res = await fetch(`/api/public/dashboard/${slug}/data`);
+      const res = await fetch(`/api/public/dashboard/${slug}/data`, {
+        credentials: "include",
+      });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || "Failed to load data");
