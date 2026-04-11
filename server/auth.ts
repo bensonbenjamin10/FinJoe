@@ -2,6 +2,7 @@ import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
 import bcrypt from "bcrypt";
 import crypto from "node:crypto";
+import { parse as parseCookies } from "cookie";
 import session from "express-session";
 import MemoryStore from "memorystore";
 import connectPgSimple from "connect-pg-simple";
@@ -193,25 +194,35 @@ function getDashboardSecret(): string {
   return process.env.SESSION_SECRET || "finjoe-dev-secret-change-in-production";
 }
 
+/**
+ * Token format: "<tenantId>.<exp>.<sig>"
+ *
+ * Dots are used as separators (not colons) because encodeURIComponent() does NOT
+ * encode dots, whereas it encodes colons as %3A. Using dots means the token
+ * survives res.cookie() → Set-Cookie → Cookie header round-trip without any
+ * encoding surprises, and no decoding step is needed on the read side.
+ *
+ * tenantId: UUID (hex + hyphens — no dots)
+ * exp:      millisecond timestamp (digits only — no dots)
+ * sig:      HMAC-SHA256 hex (hex chars only — no dots)
+ */
 function signDashboardToken(tenantId: string, exp: number): string {
-  const payload = `${tenantId}:${exp}`;
+  const payload = `${tenantId}.${exp}`;
   const sig = crypto.createHmac("sha256", getDashboardSecret()).update(payload).digest("hex");
-  return `${payload}:${sig}`;
+  return `${payload}.${sig}`;
 }
 
-function verifyDashboardToken(token: string): { tenantId: string } | null {
-  // Token: "<tenantId>:<exp>:<sig>" — split from the right so tenantId can contain any chars except ":"
-  const lastColon = token.lastIndexOf(":");
-  if (lastColon === -1) return null;
-  const sig = token.slice(lastColon + 1);
-  const rest = token.slice(0, lastColon);
-  const midColon = rest.lastIndexOf(":");
-  if (midColon === -1) return null;
-  const tenantId = rest.slice(0, midColon);
-  const expStr = rest.slice(midColon + 1);
+function verifyDashboardToken(rawToken: string): { tenantId: string } | null {
+  // Use cookie.parse() for reads, so the token is already decoded. Split on dots.
+  const parts = rawToken.split(".");
+  // Expected: ["<tenantId-part1>", ..., "<exp>", "<sig>"]
+  // tenantId is a UUID with 5 hyphen-separated groups: 8-4-4-4-12 hex chars = no dots
+  // So we always have exactly 3 dot-separated segments
+  if (parts.length !== 3) return null;
+  const [tenantId, expStr, sig] = parts;
   const exp = parseInt(expStr, 10);
   if (!tenantId || isNaN(exp) || Date.now() > exp) return null;
-  const payload = `${tenantId}:${exp}`;
+  const payload = `${tenantId}.${exp}`;
   const expected = crypto.createHmac("sha256", getDashboardSecret()).update(payload).digest("hex");
   try {
     if (!crypto.timingSafeEqual(Buffer.from(sig, "hex"), Buffer.from(expected, "hex"))) return null;
@@ -224,32 +235,30 @@ function verifyDashboardToken(token: string): { tenantId: string } | null {
 export function createDashboardSessionCookie(res: Response, tenantId: string): void {
   const exp = Date.now() + DASHBOARD_SESSION_TTL_MS;
   const token = signDashboardToken(tenantId, exp);
-  res.cookie(DASHBOARD_COOKIE_NAME, token, {
+  // encode: String disables Express's default encodeURIComponent so the token
+  // is stored exactly as-is. The token only contains UUID chars, digits, hex,
+  // and dots — all valid cookie octets per RFC 6265 — so no encoding is needed.
+  (res as any).cookie(DASHBOARD_COOKIE_NAME, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     maxAge: DASHBOARD_SESSION_TTL_MS,
+    encode: String,
   });
 }
 
-function parseCookieHeader(header: string | undefined, name: string): string | undefined {
-  if (!header) return undefined;
-  for (const part of header.split(";")) {
-    const [k, ...rest] = part.trim().split("=");
-    if (k.trim() === name) return rest.join("=").trim();
-  }
-  return undefined;
-}
-
 export function requireDashboardSession(req: Request, res: Response, next: NextFunction): void {
-  const token = parseCookieHeader(req.headers.cookie, DASHBOARD_COOKIE_NAME);
-  if (!token || typeof token !== "string") {
+  // cookie.parse() handles decoding (decodeURIComponent) automatically — the
+  // correct way to read cookies from the raw Cookie header.
+  const cookies = parseCookies(req.headers.cookie ?? "");
+  const token = cookies[DASHBOARD_COOKIE_NAME];
+  if (!token) {
     res.status(401).json({ error: "Dashboard session required" });
     return;
   }
   const parsed = verifyDashboardToken(token);
   if (!parsed) {
-    res.setHeader("Set-Cookie", `${DASHBOARD_COOKIE_NAME}=; Max-Age=0; Path=/`);
+    res.clearCookie(DASHBOARD_COOKIE_NAME);
     res.status(401).json({ error: "Dashboard session expired or invalid" });
     return;
   }
