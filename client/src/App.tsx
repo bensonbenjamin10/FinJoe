@@ -38,6 +38,7 @@ import AdminInvoicingCustomers from "@/pages/admin-invoicing-customers";
 import InvoicePay from "@/pages/invoice-pay";
 import PaymentCheckout from "@/pages/payment-checkout";
 import PaymentSuccess from "@/pages/payment-success";
+import PublicDashboard from "@/pages/public-dashboard";
 import { AdminShell } from "@/components/layout/AdminShell";
 import { ProtectedRoute } from "@/components/protected-route";
 import AdminKnowledgeBase from "@/pages/admin-knowledge-base";
@@ -232,6 +233,7 @@ function Router() {
         <Route path="/pay/:invoiceId" component={InvoicePay} />
         <Route path="/payment-checkout" component={PaymentCheckout} />
         <Route path="/payment-success" component={PaymentSuccess} />
+        <Route path="/dashboard/:slug" component={PublicDashboard} />
         <Route path="/admin">
           <Redirect to="/admin/dashboard" />
         </Route>

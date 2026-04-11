@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Settings, Loader2, Copy, AlertCircle, Mail, MessageSquare, RefreshCw, Plus, Send, ShieldCheck, Percent } from "lucide-react";
+import { Settings, Loader2, Copy, AlertCircle, Mail, MessageSquare, RefreshCw, Plus, Send, ShieldCheck, Percent, Lock, ExternalLink, Eye, EyeOff, CheckCircle2 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
@@ -57,6 +57,9 @@ type FinJoeSettings = {
   requireAuditFieldsAboveAmount?: number | null;
   askOptionalFields?: boolean;
   fyStartMonth?: number;
+  dashboardPinEnabled?: boolean;
+  dashboardPinSet?: boolean;
+  tenantSlug?: string | null;
 };
 
 type WhatsAppProvider = {
@@ -207,6 +210,10 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
   const [testSmsTo, setTestSmsTo] = useState("");
   const [testWhatsAppTo, setTestWhatsAppTo] = useState("");
   const [testWhatsAppTemplate, setTestWhatsAppTemplate] = useState<"re_engagement" | "expense_approval" | "expense_approved" | "expense_rejected">("re_engagement");
+  const [dashboardPin, setDashboardPin] = useState("");
+  const [dashboardPinConfirm, setDashboardPinConfirm] = useState("");
+  const [showDashboardPin, setShowDashboardPin] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   const updateSettingsMutation = useMutation({
     mutationFn: async (data: FinJoeSettings) => {
@@ -367,6 +374,25 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: settingsQueryKey });
       toast({ title: "Notification channels saved" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const saveDashboardPinMutation = useMutation({
+    mutationFn: async (data: { dashboardPin?: string; dashboardPinEnabled?: boolean }) => {
+      const body = tenantId ? { ...data, tenantId } : data;
+      const res = await apiRequest("PATCH", "/api/admin/finjoe/settings", body);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to save");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: settingsQueryKey });
+      setDashboardPin("");
+      setDashboardPinConfirm("");
+      toast({ title: "Dashboard settings saved" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -911,6 +937,141 @@ export default function AdminFinJoeSettings({ tenantId: tenantIdProp }: { tenant
                 </div>
               </div>
             </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ── Shareable Dashboard ── */}
+      <Card>
+        <CardHeader className="p-6">
+          <CardTitle className="font-display flex items-center gap-2">
+            <Lock className="h-4 w-4" />
+            Shareable Dashboard
+          </CardTitle>
+          <CardDescription className="text-base">
+            Generate a PIN-protected link you can share with P&amp;L leaders or business owners. They open the link, enter the PIN once, and see a clean read-only financial overview — no login required.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6 p-6">
+          {/* Enable / disable toggle */}
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="font-medium">Enable shareable dashboard</Label>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                {settings?.dashboardPinEnabled
+                  ? "Dashboard is live. Anyone with the link and PIN can view it."
+                  : "Dashboard is disabled. The link will show an error."}
+              </p>
+            </div>
+            <Switch
+              checked={settings?.dashboardPinEnabled ?? false}
+              onCheckedChange={(checked) => saveDashboardPinMutation.mutate({ dashboardPinEnabled: checked })}
+              disabled={saveDashboardPinMutation.isPending || !settings?.dashboardPinSet}
+            />
+          </div>
+
+          {!settings?.dashboardPinSet && (
+            <div className="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">
+              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>Set a PIN below to enable the dashboard. The dashboard will not be accessible without a PIN.</span>
+            </div>
+          )}
+
+          {/* Shareable link */}
+          {settings?.tenantSlug && (
+            <div className="space-y-2">
+              <Label className="font-medium">Dashboard link</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  readOnly
+                  value={`${window.location.origin}/dashboard/${settings.tenantSlug}`}
+                  className="font-mono text-sm bg-muted"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={() => {
+                    navigator.clipboard.writeText(`${window.location.origin}/dashboard/${settings.tenantSlug}`);
+                    setLinkCopied(true);
+                    setTimeout(() => setLinkCopied(false), 2000);
+                  }}
+                >
+                  {linkCopied ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  asChild
+                >
+                  <a href={`/dashboard/${settings.tenantSlug}`} target="_blank" rel="noopener noreferrer">
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">Share this link with P&amp;L leaders. They'll be prompted for the PIN on first access.</p>
+            </div>
+          )}
+
+          {/* Set / change PIN */}
+          <div className="space-y-3 rounded-lg border p-4">
+            <Label className="font-medium">{settings?.dashboardPinSet ? "Change dashboard PIN" : "Set dashboard PIN"}</Label>
+            <p className="text-sm text-muted-foreground">
+              {settings?.dashboardPinSet
+                ? "Enter a new PIN to replace the existing one. Must be 4–8 digits."
+                : "Set a numeric PIN (4–8 digits) that viewers will use to access the dashboard."}
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">New PIN</Label>
+                <div className="relative">
+                  <Input
+                    type={showDashboardPin ? "text" : "password"}
+                    inputMode="numeric"
+                    placeholder="e.g. 123456"
+                    maxLength={8}
+                    value={dashboardPin}
+                    onChange={(e) => setDashboardPin(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    onClick={() => setShowDashboardPin((v) => !v)}
+                    tabIndex={-1}
+                  >
+                    {showDashboardPin ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Confirm PIN</Label>
+                <Input
+                  type={showDashboardPin ? "text" : "password"}
+                  inputMode="numeric"
+                  placeholder="Repeat PIN"
+                  maxLength={8}
+                  value={dashboardPinConfirm}
+                  onChange={(e) => setDashboardPinConfirm(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                />
+              </div>
+            </div>
+            {dashboardPin && dashboardPinConfirm && dashboardPin !== dashboardPinConfirm && (
+              <p className="text-sm text-destructive flex items-center gap-1">
+                <AlertCircle className="h-3.5 w-3.5" /> PINs do not match
+              </p>
+            )}
+            <Button
+              onClick={() => saveDashboardPinMutation.mutate({ dashboardPin })}
+              disabled={
+                saveDashboardPinMutation.isPending ||
+                dashboardPin.length < 4 ||
+                dashboardPin !== dashboardPinConfirm
+              }
+            >
+              {saveDashboardPinMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <ShieldCheck className="h-4 w-4 mr-2" />}
+              {settings?.dashboardPinSet ? "Update PIN" : "Set PIN & Enable"}
+            </Button>
           </div>
         </CardContent>
       </Card>

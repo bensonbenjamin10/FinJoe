@@ -1,5 +1,6 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import crypto from "node:crypto";
+import bcrypt from "bcrypt";
 import multer from "multer";
 import passport from "passport";
 import { eq, and, desc, or, sql, inArray, isNull, isNotNull, gte, lte, aliasedTable, count } from "drizzle-orm";
@@ -8,7 +9,7 @@ import { parseBankStatementCsv, isValidDateString, type ParsedExpenseRow, type P
 import { runBankStatementImportAnalyze, shiftDate, textsOverlap } from "../lib/bank-import-analyze.js";
 import { analyzeDataJoeDocument } from "../lib/data-joe-orchestrator.js";
 import { executeDataJoeImport } from "../lib/data-joe-execute.js";
-import { hashPassword, requireAdmin, requireTenantStaff, requireApprover, requireSuperAdmin, getTenantId } from "./auth.js";
+import { hashPassword, requireAdmin, requireTenantStaff, requireApprover, requireSuperAdmin, getTenantId, createDashboardSessionCookie, requireDashboardSession } from "./auth.js";
 import { logger } from "./logger.js";
 import {
   tenants,
@@ -869,6 +870,130 @@ export async function registerRoutes(app: Express) {
     } catch (e) {
       logger.error("support-inquiry error", { requestId: req.requestId, err: String(e) });
       res.status(500).json({ error: "Could not send message" });
+    }
+  });
+
+  // ── Shareable dashboard: public PIN-gated endpoints ──
+
+  const DASHBOARD_VERIFY_WINDOW_MS = 15 * 60_000;
+  const DASHBOARD_VERIFY_MAX_PER_WINDOW = 5;
+  const dashboardVerifyHitsByIp = new Map<string, number[]>();
+
+  function rateLimitDashboardVerify(req: Request, res: Response, next: NextFunction) {
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    const now = Date.now();
+    const arr = (dashboardVerifyHitsByIp.get(ip) ?? []).filter((t) => now - t < DASHBOARD_VERIFY_WINDOW_MS);
+    if (arr.length >= DASHBOARD_VERIFY_MAX_PER_WINDOW) {
+      res.setHeader("Retry-After", "60");
+      return res.status(429).json({ error: "Too many attempts. Please wait 15 minutes." });
+    }
+    arr.push(now);
+    dashboardVerifyHitsByIp.set(ip, arr);
+    next();
+  }
+
+  /** Public: verify PIN for a tenant's shared dashboard; sets a short-lived signed cookie on success. */
+  app.post("/api/public/dashboard/verify", rateLimitDashboardVerify, async (req, res) => {
+    try {
+      const { slug, pin } = req.body ?? {};
+      if (!slug || typeof slug !== "string") return res.status(400).json({ error: "slug required" });
+      if (!pin || typeof pin !== "string") return res.status(400).json({ error: "pin required" });
+      const [tenant] = await db.select({ id: tenants.id, name: tenants.name, isActive: tenants.isActive })
+        .from(tenants).where(eq(tenants.slug, slug.toLowerCase())).limit(1);
+      if (!tenant || !tenant.isActive) return res.status(404).json({ error: "Dashboard not found" });
+      const [settings] = await db
+        .select({ dashboardPinHash: finjoeSettings.dashboardPinHash, dashboardPinEnabled: finjoeSettings.dashboardPinEnabled })
+        .from(finjoeSettings).where(eq(finjoeSettings.tenantId, tenant.id)).limit(1);
+      if (!settings?.dashboardPinEnabled || !settings.dashboardPinHash) {
+        return res.status(403).json({ error: "This dashboard is not enabled" });
+      }
+      const valid = await bcrypt.compare(pin, settings.dashboardPinHash);
+      if (!valid) return res.status(401).json({ error: "Incorrect PIN" });
+      createDashboardSessionCookie(res, tenant.id);
+      res.json({ ok: true, tenantName: tenant.name });
+    } catch (e) {
+      logger.error("dashboard verify error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Verification failed" });
+    }
+  });
+
+  /** Public (PIN-gated): return curated analytics + MIS summary for the shared dashboard. */
+  app.get("/api/public/dashboard/:slug/data", requireDashboardSession, async (req, res) => {
+    try {
+      const slug = req.params.slug?.toLowerCase();
+      const dashboardTenantId: string = (req as any).dashboardTenantId;
+
+      const [tenant] = await db.select({ id: tenants.id, name: tenants.name, slug: tenants.slug, isActive: tenants.isActive })
+        .from(tenants).where(eq(tenants.slug, slug)).limit(1);
+      if (!tenant || !tenant.isActive) return res.status(404).json({ error: "Dashboard not found" });
+      if (tenant.id !== dashboardTenantId) return res.status(403).json({ error: "Forbidden" });
+
+      const [settings] = await db
+        .select({ dashboardPinEnabled: finjoeSettings.dashboardPinEnabled, fyStartMonth: finjoeSettings.fyStartMonth })
+        .from(finjoeSettings).where(eq(finjoeSettings.tenantId, tenant.id)).limit(1);
+      if (!settings?.dashboardPinEnabled) return res.status(403).json({ error: "Dashboard not enabled" });
+
+      const fyStartMonth = settings.fyStartMonth ?? 4;
+      const now = new Date();
+      const currentMonth = now.getMonth() + 1;
+      const currentYear = now.getFullYear();
+      const fyStartYear = currentMonth >= fyStartMonth ? currentYear : currentYear - 1;
+      const fy = `${fyStartYear}-${String(fyStartYear + 1).slice(-2)}`;
+
+      const misReport = await getMISReport(tenant.id, fy);
+
+      const pnl = misReport.pnl;
+      const cashflow = misReport.cashflow;
+
+      res.json({
+        tenantName: tenant.name,
+        fyLabel: misReport.fyLabel,
+        months: misReport.months,
+        kpis: {
+          totalRevenue: pnl.totalRevenue.fyTotal,
+          totalDirectExpenses: pnl.totalDirectExpenses.fyTotal,
+          totalIndirectExpenses: pnl.totalIndirectExpenses.fyTotal,
+          grossProfit: pnl.grossProfit.fyTotal,
+          ebitda: pnl.ebitda.fyTotal,
+          netCashFlow: cashflow.netCashFlow.fyTotal,
+          totalInflow: cashflow.totalIncome.fyTotal,
+          totalOutflow: cashflow.totalOutflow.fyTotal,
+        },
+        pnlSummary: {
+          revenueGroups: pnl.revenueGroups.map((r) => ({ label: r.label, fyTotal: r.fyTotal })),
+          totalRevenue: pnl.totalRevenue.fyTotal,
+          grossProfit: pnl.grossProfit.fyTotal,
+          ebitda: pnl.ebitda.fyTotal,
+          directExpenses: pnl.totalDirectExpenses.fyTotal,
+          indirectExpenses: pnl.totalIndirectExpenses.fyTotal,
+        },
+        cashflowTrend: misReport.months.map((month, i) => ({
+          month,
+          inflow: cashflow.totalIncome.values[i] ?? 0,
+          outflow: cashflow.totalOutflow.values[i] ?? 0,
+          net: cashflow.netCashFlow.values[i] ?? 0,
+        })),
+        lastUpdated: new Date().toISOString(),
+      });
+    } catch (e) {
+      logger.error("dashboard data error", { requestId: req.requestId, err: String(e) });
+      res.status(500).json({ error: "Failed to load dashboard data" });
+    }
+  });
+
+  /** Public: check if dashboard session is still valid (used by frontend on load). */
+  app.get("/api/public/dashboard/:slug/check", requireDashboardSession, async (req, res) => {
+    try {
+      const slug = req.params.slug?.toLowerCase();
+      const dashboardTenantId: string = (req as any).dashboardTenantId;
+      const [tenant] = await db.select({ id: tenants.id, name: tenants.name, isActive: tenants.isActive })
+        .from(tenants).where(eq(tenants.slug, slug)).limit(1);
+      if (!tenant || tenant.id !== dashboardTenantId || !tenant.isActive) {
+        return res.status(403).json({ valid: false });
+      }
+      res.json({ valid: true, tenantName: tenant.name });
+    } catch (e) {
+      res.status(500).json({ valid: false });
     }
   });
 
@@ -1785,7 +1910,8 @@ export async function registerRoutes(app: Express) {
       const tid = tenantId ?? req.query?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
       const [row] = await db.select().from(finjoeSettings).where(eq(finjoeSettings.tenantId, tid)).limit(1);
-      if (!row) return res.json(null);
+      const [tenant] = await db.select({ slug: tenants.slug }).from(tenants).where(eq(tenants.id, tid)).limit(1);
+      if (!row) return res.json({ tenantSlug: tenant?.slug ?? null });
       res.json({
         expenseApprovalTemplateSid: row.expenseApprovalTemplateSid,
         expenseApprovedTemplateSid: row.expenseApprovedTemplateSid,
@@ -1800,6 +1926,9 @@ export async function registerRoutes(app: Express) {
         requireAuditFieldsAboveAmount: row.requireAuditFieldsAboveAmount ?? null,
         askOptionalFields: row.askOptionalFields ?? false,
         fyStartMonth: row.fyStartMonth ?? 4,
+        dashboardPinEnabled: row.dashboardPinEnabled ?? false,
+        dashboardPinSet: !!row.dashboardPinHash,
+        tenantSlug: tenant?.slug ?? null,
       });
     } catch (e) {
       logger.error("FinJoe settings get error", { requestId: req.requestId, err: String(e) });
@@ -1814,7 +1943,7 @@ export async function registerRoutes(app: Express) {
       if (user.role !== "super_admin" && !tenantId) return res.status(403).json({ error: "Tenant context required" });
       const tid = tenantId ?? req.body?.tenantId;
       if (!tid || typeof tid !== "string") return res.status(400).json({ error: "tenantId required" });
-      const { expenseApprovalTemplateSid, expenseApprovedTemplateSid, expenseRejectedTemplateSid, reEngagementTemplateSid, notificationEmails, resendFromEmail, smsFrom, costCenterLabel, costCenterType, requireConfirmationBeforePost, requireAuditFieldsAboveAmount, askOptionalFields, fyStartMonth } = req.body;
+      const { expenseApprovalTemplateSid, expenseApprovedTemplateSid, expenseRejectedTemplateSid, reEngagementTemplateSid, notificationEmails, resendFromEmail, smsFrom, costCenterLabel, costCenterType, requireConfirmationBeforePost, requireAuditFieldsAboveAmount, askOptionalFields, fyStartMonth, dashboardPin, dashboardPinEnabled } = req.body;
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (expenseApprovalTemplateSid !== undefined) updates.expenseApprovalTemplateSid = expenseApprovalTemplateSid || null;
       if (expenseApprovedTemplateSid !== undefined) updates.expenseApprovedTemplateSid = expenseApprovedTemplateSid || null;
@@ -1831,6 +1960,13 @@ export async function registerRoutes(app: Express) {
       if (fyStartMonth !== undefined) {
         const m = parseInt(String(fyStartMonth), 10);
         if (m >= 1 && m <= 12) updates.fyStartMonth = m;
+      }
+      if (dashboardPin !== undefined && typeof dashboardPin === "string" && dashboardPin.length >= 4) {
+        updates.dashboardPinHash = await bcrypt.hash(dashboardPin, 10);
+        updates.dashboardPinEnabled = true;
+      }
+      if (dashboardPinEnabled !== undefined && dashboardPin === undefined) {
+        updates.dashboardPinEnabled = !!dashboardPinEnabled;
       }
       const [existing] = await db.select().from(finjoeSettings).where(eq(finjoeSettings.tenantId, tid)).limit(1);
       let result;

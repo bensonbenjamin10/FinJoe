@@ -1,6 +1,7 @@
 import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
 import bcrypt from "bcrypt";
+import crypto from "node:crypto";
 import session from "express-session";
 import MemoryStore from "memorystore";
 import connectPgSimple from "connect-pg-simple";
@@ -8,7 +9,7 @@ import { db, pool } from "./db.js";
 import { logger } from "./logger.js";
 import { users } from "../shared/schema.js";
 import { eq } from "drizzle-orm";
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 
 const PgSession = connectPgSimple(session);
 const Store = MemoryStore(session);
@@ -181,4 +182,67 @@ export function getTenantId(req: any): string | null {
     return typeof q === "string" ? q : null;
   }
   return user.tenantId ?? null;
+}
+
+// ── Shareable dashboard session (PIN-gated, no user account required) ──
+
+const DASHBOARD_SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
+const DASHBOARD_COOKIE_NAME = "fj_dashboard";
+
+function getDashboardSecret(): string {
+  return process.env.SESSION_SECRET || "finjoe-dev-secret-change-in-production";
+}
+
+function signDashboardToken(tenantId: string, exp: number): string {
+  const payload = `${tenantId}:${exp}`;
+  const sig = crypto.createHmac("sha256", getDashboardSecret()).update(payload).digest("hex");
+  return `${payload}:${sig}`;
+}
+
+function verifyDashboardToken(token: string): { tenantId: string } | null {
+  const parts = token.split(":");
+  if (parts.length !== 3) return null;
+  const [tenantId, expStr, sig] = parts;
+  const exp = parseInt(expStr, 10);
+  if (isNaN(exp) || Date.now() > exp) return null;
+  const payload = `${tenantId}:${exp}`;
+  const expected = crypto.createHmac("sha256", getDashboardSecret()).update(payload).digest("hex");
+  if (!crypto.timingSafeEqual(Buffer.from(sig, "hex"), Buffer.from(expected, "hex"))) return null;
+  return { tenantId };
+}
+
+export function createDashboardSessionCookie(res: Response, tenantId: string): void {
+  const exp = Date.now() + DASHBOARD_SESSION_TTL_MS;
+  const token = signDashboardToken(tenantId, exp);
+  res.cookie(DASHBOARD_COOKIE_NAME, token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: DASHBOARD_SESSION_TTL_MS,
+  });
+}
+
+function parseCookieHeader(header: string | undefined, name: string): string | undefined {
+  if (!header) return undefined;
+  for (const part of header.split(";")) {
+    const [k, ...rest] = part.trim().split("=");
+    if (k.trim() === name) return rest.join("=").trim();
+  }
+  return undefined;
+}
+
+export function requireDashboardSession(req: Request, res: Response, next: NextFunction): void {
+  const token = parseCookieHeader(req.headers.cookie, DASHBOARD_COOKIE_NAME);
+  if (!token || typeof token !== "string") {
+    res.status(401).json({ error: "Dashboard session required" });
+    return;
+  }
+  const parsed = verifyDashboardToken(token);
+  if (!parsed) {
+    res.setHeader("Set-Cookie", `${DASHBOARD_COOKIE_NAME}=; Max-Age=0; Path=/`);
+    res.status(401).json({ error: "Dashboard session expired or invalid" });
+    return;
+  }
+  (req as any).dashboardTenantId = parsed.tenantId;
+  next();
 }

@@ -412,6 +412,8 @@ export const finjoeSettings = pgTable("finjoe_settings", {
   requireAuditFieldsAboveAmount: integer("require_audit_fields_above_amount"),
   askOptionalFields: boolean("ask_optional_fields").default(false),
   fyStartMonth: integer("fy_start_month").notNull().default(4),
+  dashboardPinHash: text("dashboard_pin_hash"),
+  dashboardPinEnabled: boolean("dashboard_pin_enabled").default(false),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 

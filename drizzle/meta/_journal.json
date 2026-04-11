@@ -141,6 +141,13 @@
       "when": 1744281600000,
       "tag": "0019_intelligence_platform",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1744400000000,
+      "tag": "0020_dashboard_pin",
+      "breakpoints": true
     }
   ]
 }
